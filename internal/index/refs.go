@@ -19,29 +19,8 @@ func (b *builder) indexReferences(pkgs []*packages.Package) {
 
 func (b *builder) indexPackageReferences(p *packages.Package, pi *PkgInfo) {
 	srcMod := pi.ModuleArea
-
 	recordUse := func(id *ast.Ident, fromFunc string) {
-		obj := p.TypesInfo.Uses[id]
-		if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) {
-			return
-		}
-		target, ok := b.idx.Symbols[symbolID(obj)]
-		if !ok {
-			return
-		}
-		pos := p.Fset.Position(id.Pos())
-		b.idx.XRefs[target.ID] = append(b.idx.XRefs[target.ID], XRef{
-			TargetID:   target.ID,
-			FromPkg:    p.PkgPath,
-			FromMod:    srcMod,
-			FromFuncID: fromFunc,
-			File:       relFile(b.absRoot, pos.Filename),
-			Line:       pos.Line,
-		})
-		if srcMod != "" && target.ModuleArea != "" && srcMod != target.ModuleArea {
-			addNested(b.modOut, srcMod, target.ModuleArea, target.Name)
-			addNested(b.modIn, target.ModuleArea, srcMod, target.Name)
-		}
+		b.recordUse(p, srcMod, id, fromFunc)
 	}
 
 	for _, file := range p.Syntax {
@@ -53,14 +32,33 @@ func (b *builder) indexPackageReferences(p *packages.Package, pi *PkgInfo) {
 			case *ast.FuncDecl:
 				b.indexFuncBody(p, pi, d, recordUse)
 			case *ast.GenDecl:
-				ast.Inspect(d, func(node ast.Node) bool {
-					if id, ok := node.(*ast.Ident); ok {
-						recordUse(id, "")
-					}
-					return true
-				})
+				inspectIdents(d, func(id *ast.Ident) { recordUse(id, "") })
 			}
 		}
+	}
+}
+
+func (b *builder) recordUse(p *packages.Package, srcMod string, id *ast.Ident, fromFunc string) {
+	obj := p.TypesInfo.Uses[id]
+	if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) {
+		return
+	}
+	target, ok := b.idx.Symbols[symbolID(obj)]
+	if !ok {
+		return
+	}
+	pos := p.Fset.Position(id.Pos())
+	b.idx.XRefs[target.ID] = append(b.idx.XRefs[target.ID], XRef{
+		TargetID:   target.ID,
+		FromPkg:    p.PkgPath,
+		FromMod:    srcMod,
+		FromFuncID: fromFunc,
+		File:       relFile(b.absRoot, pos.Filename),
+		Line:       pos.Line,
+	})
+	if srcMod != "" && target.ModuleArea != "" && srcMod != target.ModuleArea {
+		addNested(b.modOut, srcMod, target.ModuleArea, target.Name)
+		addNested(b.modIn, target.ModuleArea, srcMod, target.Name)
 	}
 }
 
@@ -75,12 +73,7 @@ func (b *builder) indexFuncBody(
 		callerID = symbolID(obj)
 	}
 	if d.Type != nil {
-		ast.Inspect(d.Type, func(node ast.Node) bool {
-			if id, ok := node.(*ast.Ident); ok {
-				recordUse(id, callerID)
-			}
-			return true
-		})
+		inspectIdents(d.Type, func(id *ast.Ident) { recordUse(id, callerID) })
 	}
 	if d.Body == nil {
 		return
@@ -89,38 +82,50 @@ func (b *builder) indexFuncBody(
 	ast.Inspect(d.Body, func(node ast.Node) bool {
 		switch x := node.(type) {
 		case *ast.GoStmt:
-			pi.Goroutines++
-			if pi.ModuleArea != "" {
-				b.module(pi.ModuleArea).Goroutines++
-			}
+			b.countGoroutine(pi)
 		case *ast.SelectorExpr:
 			if x.Sel.Name == "Ports" {
-				pi.PortsCalls++
-				if pi.ModuleArea != "" {
-					b.module(pi.ModuleArea).PortsCalls++
-				}
+				b.countPorts(pi)
 			}
 		case *ast.Ident:
 			recordUse(x, callerID)
 		case *ast.CallExpr:
-			if callerID == "" {
-				break
-			}
-			id := calledIdent(x.Fun)
-			if id == nil {
-				break
-			}
-			fn, ok := p.TypesInfo.Uses[id].(*types.Func)
-			if !ok || fn.Pkg() == nil || !b.inModule(fn.Pkg().Path()) {
-				break
-			}
-			calleeID := symbolID(fn)
-			if _, exists := b.idx.Symbols[calleeID]; !exists {
-				break
-			}
-			addPair(b.callees, callerID, calleeID)
-			addPair(b.callers, calleeID, callerID)
+			b.recordCall(p, callerID, x)
 		}
 		return true
 	})
+}
+
+func (b *builder) recordCall(p *packages.Package, callerID string, call *ast.CallExpr) {
+	if callerID == "" {
+		return
+	}
+	id := calledIdent(call.Fun)
+	if id == nil {
+		return
+	}
+	fn, ok := p.TypesInfo.Uses[id].(*types.Func)
+	if !ok || fn.Pkg() == nil || !b.inModule(fn.Pkg().Path()) {
+		return
+	}
+	calleeID := symbolID(fn)
+	if b.idx.Symbols[calleeID] == nil {
+		return
+	}
+	addPair(b.callees, callerID, calleeID)
+	addPair(b.callers, calleeID, callerID)
+}
+
+func (b *builder) countGoroutine(pi *PkgInfo) {
+	pi.Goroutines++
+	if pi.ModuleArea != "" {
+		b.module(pi.ModuleArea).Goroutines++
+	}
+}
+
+func (b *builder) countPorts(pi *PkgInfo) {
+	pi.PortsCalls++
+	if pi.ModuleArea != "" {
+		b.module(pi.ModuleArea).PortsCalls++
+	}
 }

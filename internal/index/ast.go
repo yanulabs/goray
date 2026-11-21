@@ -11,14 +11,25 @@ import (
 	"strings"
 )
 
-// moduleArea maps modules/<name>[/...] to <name> and reports whether the
-// package is the module's root package.
+// moduleArea groups a package into an architectural module. The explicit
+// modules/<name> convention wins; otherwise standard Go layout directories
+// (cmd/<name>, internal/<name>, pkg/<name>) or the first path segment are
+// used. The root package is the shallowest package in the group.
 func moduleArea(relPkg string) (name string, root bool) {
+	if relPkg == "." {
+		return "root", true
+	}
 	parts := strings.Split(relPkg, "/")
 	if len(parts) >= 2 && parts[0] == "modules" {
 		return parts[1], len(parts) == 2
 	}
-	return "", false
+	switch parts[0] {
+	case "cmd", "internal", "pkg":
+		if len(parts) >= 2 {
+			return parts[0] + "/" + parts[1], len(parts) == 2
+		}
+	}
+	return parts[0], len(parts) == 1
 }
 
 func isModuleRoot(relPkg string) bool {
@@ -74,6 +85,15 @@ func calledIdent(expr ast.Expr) *ast.Ident {
 			return nil
 		}
 	}
+}
+
+func inspectIdents(node ast.Node, visit func(*ast.Ident)) {
+	ast.Inspect(node, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			visit(id)
+		}
+		return true
+	})
 }
 
 func cyclomatic(body *ast.BlockStmt) int {

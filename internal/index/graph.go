@@ -21,81 +21,90 @@ type Fan struct {
 	FanIn  int    `json:"fan_in"`
 }
 
+type graphStep struct {
+	neighbors func(string) []string
+	edge      func(cur, next string) Edge
+}
+
 // CallGraph walks callers/callees breadth-first from rootID.
 func (idx *Index) CallGraph(rootID, direction string, depth, limit int) Graph {
-	seen := map[string]int{rootID: 0}
-	queue := []string{rootID}
-	edges := make([]Edge, 0)
+	steps := make([]graphStep, 0, 2)
+	if direction == "callees" || direction == "both" {
+		steps = append(steps, graphStep{
+			neighbors: func(id string) []string { return idx.Callees[id] },
+			edge:      func(cur, next string) Edge { return Edge{From: cur, To: next} },
+		})
+	}
+	if direction == "callers" || direction == "both" {
+		steps = append(steps, graphStep{
+			neighbors: func(id string) []string { return idx.Callers[id] },
+			edge:      func(cur, next string) Edge { return Edge{From: next, To: cur} },
+		})
+	}
+	return walkGraph(rootID, depth, limit, steps)
+}
 
-	for len(queue) > 0 && len(seen) < limit {
+// DependencyGraph walks package imports or reverse imports from rootPkg.
+func (idx *Index) DependencyGraph(rootPkg, direction string, depth int) Graph {
+	steps := make([]graphStep, 0, 2)
+	if direction == "out" || direction == "both" {
+		steps = append(steps, graphStep{
+			neighbors: func(pkg string) []string {
+				if info := idx.Packages[pkg]; info != nil {
+					return info.Imports
+				}
+				return nil
+			},
+			edge: func(cur, next string) Edge {
+				return Edge{From: idx.RelPath(cur), To: idx.RelPath(next)}
+			},
+		})
+	}
+	if direction == "in" || direction == "both" {
+		steps = append(steps, graphStep{
+			neighbors: func(pkg string) []string { return idx.RevImports[pkg] },
+			edge: func(cur, next string) Edge {
+				return Edge{From: idx.RelPath(next), To: idx.RelPath(cur)}
+			},
+		})
+	}
+	graph := walkGraph(rootPkg, depth, 0, steps)
+	graph.Root = idx.RelPath(rootPkg)
+	return graph
+}
+
+func walkGraph(root string, depth, limit int, steps []graphStep) Graph {
+	seen := map[string]int{root: 0}
+	queue := []string{root}
+	edges := make([]Edge, 0)
+	seenEdges := map[Edge]struct{}{}
+
+	for len(queue) > 0 && (limit <= 0 || len(seen) < limit) {
 		cur := queue[0]
 		queue = queue[1:]
 		d := seen[cur]
 		if d >= depth {
 			continue
 		}
-
-		if direction == "callees" || direction == "both" {
-			for _, next := range idx.Callees[cur] {
-				edges = append(edges, Edge{From: cur, To: next})
-				if _, exists := seen[next]; !exists && len(seen) < limit {
+		for _, step := range steps {
+			for _, next := range step.neighbors(cur) {
+				edges = appendEdge(edges, seenEdges, step.edge(cur, next))
+				if _, exists := seen[next]; !exists && (limit <= 0 || len(seen) < limit) {
 					seen[next] = d + 1
 					queue = append(queue, next)
 				}
 			}
 		}
-		if direction == "callers" || direction == "both" {
-			for _, prev := range idx.Callers[cur] {
-				edges = append(edges, Edge{From: prev, To: cur})
-				if _, exists := seen[prev]; !exists && len(seen) < limit {
-					seen[prev] = d + 1
-					queue = append(queue, prev)
-				}
-			}
-		}
 	}
-	return Graph{Root: rootID, Nodes: len(seen), Edges: edges}
+	return Graph{Root: root, Nodes: len(seen), Edges: edges}
 }
 
-// DependencyGraph walks package imports or reverse imports from rootPkg.
-func (idx *Index) DependencyGraph(rootPkg, direction string, depth int) Graph {
-	seen := map[string]int{rootPkg: 0}
-	queue := []string{rootPkg}
-	edges := make([]Edge, 0)
-	edge := func(from, to string) Edge {
-		return Edge{From: idx.RelPath(from), To: idx.RelPath(to)}
+func appendEdge(edges []Edge, seen map[Edge]struct{}, edge Edge) []Edge {
+	if _, ok := seen[edge]; ok {
+		return edges
 	}
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		d := seen[cur]
-		if d >= depth {
-			continue
-		}
-
-		if direction == "out" || direction == "both" {
-			if info, ok := idx.Packages[cur]; ok {
-				for _, next := range info.Imports {
-					edges = append(edges, edge(cur, next))
-					if _, exists := seen[next]; !exists {
-						seen[next] = d + 1
-						queue = append(queue, next)
-					}
-				}
-			}
-		}
-		if direction == "in" || direction == "both" {
-			for _, prev := range idx.RevImports[cur] {
-				edges = append(edges, edge(prev, cur))
-				if _, exists := seen[prev]; !exists {
-					seen[prev] = d + 1
-					queue = append(queue, prev)
-				}
-			}
-		}
-	}
-	return Graph{Root: idx.RelPath(rootPkg), Nodes: len(seen), Edges: edges}
+	seen[edge] = struct{}{}
+	return append(edges, edge)
 }
 
 // FanStats ranks packages by fan-out, then fan-in.

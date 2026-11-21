@@ -127,3 +127,10 @@ func toJSON(v any) string {
 	}
 	return string(data)
 }
+
+func nonNil[T any](items []T) []T {
+	if items == nil {
+		return []T{}
+	}
+	return items
+}

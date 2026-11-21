@@ -107,7 +107,7 @@ func (t *toolset) references() mcp.Tool {
 				"symbol":    sym,
 				"total":     len(all),
 				"truncated": truncated,
-				"refs":      refs,
+				"refs":      nonNil(refs),
 			}), false
 		}),
 	}
@@ -149,12 +149,12 @@ func (t *toolset) implementations() mcp.Tool {
 			if sym.Kind == "interface" {
 				return toJSON(map[string]any{
 					"interface":       sym,
-					"implementations": idx.IfaceImpls[sym.ID],
+					"implementations": nonNil(idx.IfaceImpls[sym.ID]),
 				}), false
 			}
 			return toJSON(map[string]any{
 				"type":       sym,
-				"interfaces": idx.TypeImpls[sym.ID],
+				"interfaces": nonNil(idx.TypeImpls[sym.ID]),
 			}), false
 		}),
 	}

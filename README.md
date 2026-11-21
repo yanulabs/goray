@@ -35,7 +35,9 @@ code if you want a fresh snapshot; queries use the last successful snapshot.
 | `-export-md <file>` | Write the architecture map as Markdown and exit |
 | `-log-level off\|error\|info` | stderr log level (default `info`, or `GO_MCP_LOG_LEVEL`) |
 
-Module-level metrics group packages under `modules/<name>`.
+Module-level metrics use `modules/<name>` when present; otherwise standard
+layout directories (`cmd/<name>`, `internal/<name>`, `pkg/<name>`) or the
+first path segment form the module group. Root packages are grouped as `root`.
 
 ## Tools
 

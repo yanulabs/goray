@@ -13,7 +13,7 @@ import (
 func (t *toolset) codebaseMap() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_codebase_map",
-		Description: "High-level architecture map: module scorecard, cross-module dependency graph, symbol coupling, and bloated files.",
+		Description: "High-level architecture map: module scorecard (explicit modules or standard layout groups), cross-module dependency graph, symbol coupling, and bloated files.",
 		InputSchema: object(map[string]any{
 			"format": propEnum("Output format (default: markdown)", "markdown", "json", "dot"),
 		}),
@@ -35,7 +35,7 @@ func (t *toolset) moduleOverview() mcp.Tool {
 		Name:        "get_module_overview",
 		Description: "Deep dive on one module: subpackages, incoming/outgoing symbol dependencies, .Ports() calls, large files, and exported root API.",
 		InputSchema: object(map[string]any{
-			"module": propString("Module name (e.g. payments, bookinggw)"),
+			"module": propString("Module name (e.g. payments, internal/index)"),
 		}, "module"),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
 			name := strArg(args, "module", "")
@@ -106,7 +106,7 @@ func codebaseData(idx *index.Index) map[string]any {
 		complex = complex[:20]
 	}
 
-	large := idx.LargeFiles
+	large := nonNil(idx.LargeFiles)
 	if len(large) > 25 {
 		large = large[:25]
 	}
