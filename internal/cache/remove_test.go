@@ -189,7 +189,12 @@ func TestRemoveDBLockProtection(t *testing.T) {
 func TestPruneOrphanWorktreesOnly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cacheRoot := filepath.Join(home, "Library", "Caches", "goray")
+	t.Setenv("XDG_CACHE_HOME", "")
+	cacheBase, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheRoot := filepath.Join(cacheBase, "goray")
 
 	aliveRoot := filepath.Join(home, "alive")
 	if err := os.MkdirAll(aliveRoot, 0o755); err != nil {
