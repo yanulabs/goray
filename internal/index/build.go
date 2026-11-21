@@ -66,12 +66,16 @@ func Build(rootDir string) (*Index, error) {
 			TypeImpls:        map[string][]ImplMatch{},
 			IfaceMethods:     map[string]bool{},
 			Modules:          map[string]*ModSummary{},
+			TestCovered:      map[string]bool{},
+			UntrackedFiles:   map[string]bool{},
 		},
 	}
 
 	b.indexPackages(pkgs)
 	b.indexReferences(pkgs)
+	b.collectImportedInterfaces(pkgs)
 	b.matchInterfaces()
+	b.computeTestCoverage()
 	b.finish()
 	b.buildSummary(pkgs)
 	if hasTestFiles(b.idx.Packages) {
@@ -126,8 +130,9 @@ type builder struct {
 	modOut     map[string]map[string]map[string]struct{}
 	modIn      map[string]map[string]map[string]struct{}
 
-	concrete []concreteType
-	ifaces   []ifaceType
+	concrete      []concreteType
+	ifaces        []ifaceType
+	visibleIfaces []ifaceType
 }
 
 func hasTestFiles(packagesByPath map[string]*PkgInfo) bool {
@@ -245,7 +250,6 @@ func (b *builder) indexPackages(pkgs []*packages.Package) {
 		if area != "" {
 			m := b.module(area)
 			m.Packages++
-			m.ProdLOC += pi.ProdLOC
 			m.TestLOC += pi.TestLOC
 		}
 
@@ -254,24 +258,47 @@ func (b *builder) indexPackages(pkgs []*packages.Package) {
 }
 
 func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
+	var mod *ModSummary
+	if pi.ModuleArea != "" {
+		mod = b.module(pi.ModuleArea)
+	}
 	for _, path := range p.GoFiles {
 		src, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		loc := countLines(src)
-		if isGenerated(filepath.Base(path), src) {
+		rel := relFile(b.absRoot, path)
+		generated := isGenerated(filepath.Base(path), src)
+		untracked := b.idx.UntrackedFiles[rel]
+		pi.Files++
+		if mod != nil {
+			mod.Files++
+		}
+		if untracked {
+			pi.UntrackedFiles++
+			if mod != nil {
+				mod.UntrackedFiles++
+			}
+		}
+		if generated {
+			pi.GeneratedFiles++
+			if mod != nil {
+				mod.GeneratedFiles++
+			}
 			continue
 		}
+		loc := countLines(src)
 		pi.ProdLOC += loc
+		if mod != nil {
+			mod.ProdLOC += loc
+		}
 		if loc < largeFileLOC {
 			continue
 		}
-		metric := FileMetric{Path: relFile(b.absRoot, path), LOC: loc}
+		metric := FileMetric{Path: rel, LOC: loc, Generated: generated, Untracked: untracked}
 		b.idx.LargeFiles = append(b.idx.LargeFiles, metric)
-		if pi.ModuleArea != "" {
-			m := b.module(pi.ModuleArea)
-			m.LargeFiles = append(m.LargeFiles, metric)
+		if mod != nil {
+			mod.LargeFiles = append(mod.LargeFiles, metric)
 		}
 	}
 
@@ -339,8 +366,12 @@ func (b *builder) finish() {
 		return b.idx.LargeFiles[i].Path < b.idx.LargeFiles[j].Path
 	})
 	for _, m := range b.idx.Modules {
+		m.AllUntracked = m.Files > 0 && m.UntrackedFiles == m.Files
 		sort.Slice(m.LargeFiles, func(i, j int) bool {
-			return m.LargeFiles[i].LOC > m.LargeFiles[j].LOC
+			if m.LargeFiles[i].LOC != m.LargeFiles[j].LOC {
+				return m.LargeFiles[i].LOC > m.LargeFiles[j].LOC
+			}
+			return m.LargeFiles[i].Path < m.LargeFiles[j].Path
 		})
 	}
 }

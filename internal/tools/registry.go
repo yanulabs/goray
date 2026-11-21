@@ -140,6 +140,22 @@ func propEnum(desc string, values ...string) map[string]any {
 	return map[string]any{"type": "string", "enum": values, "description": desc}
 }
 
+func strListArg(args map[string]any, key string) []string {
+	switch value := args[key].(type) {
+	case []string:
+		return value
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func strArg(args map[string]any, key, fallback string) string {
 	if v, ok := args[key].(string); ok && v != "" {
 		return v
