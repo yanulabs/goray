@@ -43,6 +43,8 @@ func Build(rootDir string) (*Index, error) {
 		return nil, fmt.Errorf("cannot determine module path for %s", absRoot)
 	}
 
+	untracked := detectUntracked(absRoot)
+
 	b := &builder{
 		modPath:    modPath,
 		absRoot:    absRoot,
@@ -67,7 +69,7 @@ func Build(rootDir string) (*Index, error) {
 			IfaceMethods:     map[string]bool{},
 			Modules:          map[string]*ModSummary{},
 			TestCovered:      map[string]bool{},
-			UntrackedFiles:   map[string]bool{},
+			UntrackedFiles:   untracked,
 		},
 	}
 

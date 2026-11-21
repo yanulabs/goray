@@ -4,6 +4,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
@@ -68,10 +69,25 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 	return list
 }
 
+func indexingPayload(err error) (string, bool, bool) {
+	var building *index.IndexingError
+	if errors.As(err, &building) {
+		return render.JSON(map[string]any{
+			"index_state":     "indexing",
+			"elapsed_seconds": building.ElapsedSeconds(),
+			"message":         "index is still building; retry shortly",
+		}), false, true
+	}
+	return "", false, false
+}
+
 func (t *toolset) indexed(run func(*index.Index, map[string]any) (string, bool)) func(context.Context, map[string]any) (string, bool) {
 	return func(ctx context.Context, args map[string]any) (string, bool) {
 		idx, err := t.src.Wait(ctx)
 		if err != nil {
+			if text, failed, ok := indexingPayload(err); ok {
+				return text, failed
+			}
 			return err.Error(), true
 		}
 		return run(idx, args)
@@ -82,6 +98,9 @@ func (t *toolset) indexedCtx(run func(context.Context, *index.Index, map[string]
 	return func(ctx context.Context, args map[string]any) (string, bool) {
 		idx, err := t.src.Wait(ctx)
 		if err != nil {
+			if text, failed, ok := indexingPayload(err); ok {
+				return text, failed
+			}
 			return err.Error(), true
 		}
 		return run(ctx, idx, args)

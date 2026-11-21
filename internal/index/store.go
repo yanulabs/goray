@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -21,6 +22,24 @@ const (
 	debounceDelay = 400 * time.Millisecond
 	freshnessWait = 2 * time.Second
 )
+
+// indexWaitGrace bounds how long a tool call waits for the initial index. It
+// is a variable so tests can exercise the cold-start path without waiting 8s.
+var indexWaitGrace = 8 * time.Second
+
+// IndexingError signals that the initial build did not finish within the
+// bounded grace period. Tools translate it into a structured indexing payload.
+type IndexingError struct {
+	Elapsed time.Duration
+	State   State
+}
+
+func (e *IndexingError) Error() string {
+	return fmt.Sprintf("index is still building after %s (state: %s)", e.Elapsed.Round(time.Millisecond), e.State)
+}
+
+// ElapsedSeconds is the JSON-friendly elapsed time reported to MCP clients.
+func (e *IndexingError) ElapsedSeconds() float64 { return e.Elapsed.Seconds() }
 
 // Status describes the indexer's current state.
 type Status struct {
@@ -215,15 +234,30 @@ func (s *Store) Rebuild() error {
 	return err
 }
 
-// Wait returns the latest snapshot, waiting briefly for an in-flight rebuild.
+// Wait returns the latest snapshot, waiting up to indexWaitGrace for the
+// initial build and briefly for in-flight rebuilds. A cold start that exceeds
+// the grace period returns *IndexingError so callers can respond immediately.
 func (s *Store) Wait(ctx context.Context) (*Index, error) {
+	start := time.Now()
+	waitCtx, cancel := context.WithTimeout(ctx, indexWaitGrace)
+	defer cancel()
+	indexingErr := func(err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return &IndexingError{Elapsed: time.Since(start), State: s.State()}
+		}
+		return err
+	}
+
 	select {
 	case <-s.ready:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-waitCtx.Done():
+		return nil, indexingErr(waitCtx.Err())
 	}
-	if err := s.waitSettled(ctx); err != nil {
-		return nil, err
+	if err := s.waitSettled(waitCtx); err != nil {
+		return nil, indexingErr(err)
 	}
 
 	s.mu.RLock()

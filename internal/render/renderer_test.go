@@ -56,7 +56,7 @@ func TestRegistryRendering(t *testing.T) {
 		"example.com/app",
 		"| `api` |",
 		"api -->|1 sym| db",
-		"`Open`",
+		"Open",
 		"big.go",
 	} {
 		if !strings.Contains(md, want) {

@@ -19,34 +19,74 @@ func newMarkdown() markdown {
 func (m markdown) RenderCodebaseMap(idx *index.Index) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Architecture Map: `%s`\n\n", idx.ModulePath)
-	fmt.Fprintf(&b, "- **Packages:** %d | **Modules:** %d | **Symbols:** %d\n\n",
-		len(idx.Packages), len(idx.Modules), len(idx.Symbols))
+	fmt.Fprintf(&b, "- **Packages:** %d | **Modules:** %d | **Symbols:** %d | **Generated files:** %d | **Untracked files:** %d\n\n",
+		len(idx.Packages), len(idx.Modules), len(idx.Symbols), generatedFileCount(idx), untrackedFileCount(idx))
 
 	b.WriteString("## Module Scorecard\n\n")
-	b.WriteString("| Module | Pkgs | Prod LOC | Test LOC | Root Exp | Out | In | `.Ports()` | Go |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Module | Pkgs | Files | Generated | Untracked | LOC | Fan-in | Fan-out |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, mod := range idx.ModulesByLOC() {
-		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d | %d | %d |\n",
-			mod.Name, mod.Packages, mod.ProdLOC, mod.TestLOC, mod.RootExported,
-			len(mod.OutModules), len(mod.InModules), mod.PortsCalls, mod.Goroutines)
+		label := mod.Name
+		if mod.AllUntracked {
+			label += " [untracked]"
+		}
+		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d | %d |\n",
+			label, mod.Packages, mod.Files, mod.GeneratedFiles, mod.UntrackedFiles,
+			mod.ProdLOC, len(mod.InModules), len(mod.OutModules))
 	}
 
 	b.WriteString("\n## Cross-Module Graph\n\n")
 	b.WriteString(m.mermaid.moduleGraph(idx))
-	b.WriteString("\n## Cross-Module Symbol Coupling\n\n| Source | Target | Symbols |\n|---|---|---|\n")
-	for _, name := range idx.SortedModuleNames() {
-		mod := idx.Modules[name]
-		for _, dst := range sortedMapKeys(mod.OutModules) {
-			fmt.Fprintf(&b, "| `%s` | `%s` | `%s` |\n", mod.Name, dst, strings.Join(mod.OutModules[dst], "`, `"))
+
+	b.WriteString("\n## Cross-Module Dependencies\n\n")
+	edges := moduleEdges(idx)
+	if len(edges) == 0 {
+		b.WriteString("- None\n")
+	} else {
+		for _, edge := range edges {
+			fmt.Fprintf(&b, "- `%s` -> `%s`: %s\n", edge.From, edge.To, strings.Join(edge.Symbols, ", "))
 		}
 	}
 
-	if len(idx.LargeFiles) > 0 {
-		b.WriteString("\n## Bloated Production Files (>=400 LOC)\n\n| LOC | File |\n|---:|---|\n")
-		for _, file := range limit(idx.LargeFiles, 25) {
-			fmt.Fprintf(&b, "| %d | `%s` |\n", file.LOC, file.Path)
+	b.WriteString("\n## Cross-Module Cycles\n\n")
+	cycles := idx.ModuleCycles()
+	if len(cycles) == 0 {
+		b.WriteString("- None\n")
+	} else {
+		for _, cycle := range cycles {
+			fmt.Fprintf(&b, "- `%s`\n", strings.Join(cycle, " -> "))
 		}
 	}
+
+	large := make([]index.FileMetric, 0, len(idx.LargeFiles))
+	for _, file := range idx.LargeFiles {
+		if !file.Generated {
+			large = append(large, file)
+		}
+	}
+	if len(large) > 0 {
+		b.WriteString("\n## Large Files (non-generated, max 10)\n\n| LOC | File |\n|---:|---|\n")
+		for _, file := range limit(large, 10) {
+			label := file.Path
+			if file.Untracked {
+				label += " [untracked]"
+			}
+			fmt.Fprintf(&b, "| %d | `%s` |\n", file.LOC, label)
+		}
+	}
+
+	b.WriteString("\n## Top Hotspots (non-generated, max 10)\n\n")
+	hotspots := codebaseHotspots(idx, 10)
+	if len(hotspots) == 0 {
+		b.WriteString("- None\n")
+	} else {
+		b.WriteString("| Risk | Name | Module | File | LOC | Complexity | Fan-in |\n|---:|---|---|---|---:|---:|---:|\n")
+		for _, h := range hotspots {
+			fmt.Fprintf(&b, "| %d | `%s` | `%s` | `%s` | %d | %d | %d |\n",
+				h.RiskScore, h.Name, h.Module, h.displayFile(), h.LOC, h.Complexity, h.FanIn)
+		}
+	}
+	b.WriteString("\nUse `get_hotspots` and `get_module_overview` for deeper drill-down.\n")
 	return b.String()
 }
 
