@@ -83,8 +83,6 @@ ON CONFLICT(id) DO UPDATE SET
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-
-	c.maybeGC(ctx)
 	return nil
 }
 

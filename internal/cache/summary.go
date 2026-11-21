@@ -17,26 +17,6 @@ import (
 	"github.com/yanulabs/goray/internal/index"
 )
 
-const stateExpr = `CASE
-    WHEN w.is_eligible = 0 THEN 'not_eligible'
-    WHEN EXISTS (SELECT 1 FROM summary_cache c WHERE c.content_hash = w.content_hash AND c.prompt_version = ?) THEN 'synced'
-    WHEN EXISTS (
-        SELECT 1 FROM symbol_history h
-        JOIN summary_cache c ON c.content_hash = h.last_content_hash AND c.prompt_version = h.prompt_version
-        WHERE h.symbol_id = w.id AND h.prompt_version = ? AND c.self_hash = w.self_hash
-    ) THEN 'soft_stale'
-    WHEN w.self_hash <> '' AND w.kind IN ('func','method','type') AND EXISTS (
-        SELECT 1 FROM summary_cache c
-        WHERE c.self_hash = w.self_hash AND c.prompt_version = ? AND c.kind = w.kind
-    ) THEN 'soft_stale'
-    WHEN EXISTS (
-        SELECT 1 FROM symbol_history h
-        JOIN summary_cache c ON c.content_hash = h.last_content_hash AND c.prompt_version = h.prompt_version
-        WHERE h.symbol_id = w.id AND h.prompt_version = ?
-    ) THEN 'hard_stale'
-    ELSE 'missing'
-END`
-
 type Dependency struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`
@@ -70,7 +50,7 @@ type SummaryContext struct {
 // StateOf classifies one working symbol.
 func (c *Cache) StateOf(ctx context.Context, id string) (SyncState, error) {
 	var state string
-	err := c.db.QueryRowContext(ctx, "SELECT "+stateExpr+" FROM working_symbols w WHERE w.id = ?",
+	err := c.db.QueryRowContext(ctx, "SELECT "+c.stateExpr()+" FROM working_symbols w WHERE w.id = ?",
 		PromptVersion, PromptVersion, PromptVersion, PromptVersion, id).Scan(&state)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("symbol not found: %s", id)
@@ -90,7 +70,7 @@ func (c *Cache) ListStale(ctx context.Context, filter StaleFilter) ([]StaleSymbo
 
 	query := "SELECT id, kind, module_name, pkg_path, file_path, state, self_hash, dep_hash, content_hash, loc, complexity, fan_in FROM (" +
 		"SELECT w.id, w.kind, w.module_name, w.pkg_path, w.file_path, w.self_hash, w.dep_hash, w.content_hash, w.loc, w.complexity, w.fan_in, " +
-		stateExpr + " AS state FROM working_symbols w WHERE w.is_eligible = 1"
+		c.stateExpr() + " AS state FROM working_symbols w WHERE w.is_eligible = 1"
 	args := []any{PromptVersion, PromptVersion, PromptVersion, PromptVersion}
 	if filter.Kind != "" {
 		query += " AND w.kind = ?"
@@ -140,7 +120,7 @@ func (c *Cache) ListStale(ctx context.Context, filter StaleFilter) ([]StaleSymbo
 
 // Coverage aggregates sync states by module and kind.
 func (c *Cache) Coverage(ctx context.Context, module string) (Coverage, error) {
-	query := "SELECT w.kind, w.module_name, w.is_eligible, " + stateExpr + " AS state FROM working_symbols w"
+	query := "SELECT w.kind, w.module_name, w.is_eligible, " + c.stateExpr() + " AS state FROM working_symbols w"
 	args := []any{PromptVersion, PromptVersion, PromptVersion, PromptVersion}
 	if module != "" {
 		query += " WHERE w.module_name = ?"
@@ -320,7 +300,7 @@ func (c *Cache) Enrich(ctx context.Context, id string) (json.RawMessage, SyncSta
 func (c *Cache) staleReason(ctx context.Context, sym *WorkingSymbol, state SyncState) (string, bool) {
 	var lastSelf, lastDep string
 	err := c.db.QueryRowContext(ctx,
-		"SELECT last_self_hash, last_dep_hash FROM symbol_history WHERE symbol_id = ? AND prompt_version = ?",
+		"SELECT last_self_hash, last_dep_hash FROM "+c.summaryTable("symbol_history")+" WHERE symbol_id = ? AND prompt_version = ?",
 		sym.ID, PromptVersion).Scan(&lastSelf, &lastDep)
 	if err != nil {
 		if state == StateSoftStale {
@@ -461,7 +441,7 @@ func (c *Cache) classify(ctx context.Context, sym *WorkingSymbol) SyncState {
 		return StateNotEligible
 	}
 	var state string
-	err := c.db.QueryRowContext(ctx, "SELECT "+stateExpr+" FROM working_symbols w WHERE w.id = ?",
+	err := c.db.QueryRowContext(ctx, "SELECT "+c.stateExpr()+" FROM working_symbols w WHERE w.id = ?",
 		PromptVersion, PromptVersion, PromptVersion, PromptVersion, sym.ID).Scan(&state)
 	if err != nil {
 		return StateMissing
@@ -477,8 +457,8 @@ func (c *Cache) cachedForState(ctx context.Context, sym *WorkingSymbol, state Sy
 	case StateSoftStale:
 		raw, hash, err := c.querySummary(ctx,
 			`WHERE prompt_version = ? AND content_hash = (
-                SELECT h.last_content_hash FROM symbol_history h
-                JOIN summary_cache c2 ON c2.content_hash = h.last_content_hash AND c2.prompt_version = h.prompt_version
+                SELECT h.last_content_hash FROM `+c.summaryTable("symbol_history")+` h
+                JOIN `+c.summaryTable("summary_cache")+` c2 ON c2.content_hash = h.last_content_hash AND c2.prompt_version = h.prompt_version
                 WHERE h.symbol_id = ? AND h.prompt_version = ? AND c2.self_hash = ?
             ) ORDER BY created_at DESC LIMIT 1`,
 			PromptVersion, sym.ID, PromptVersion, sym.SelfHash)
@@ -494,7 +474,7 @@ func (c *Cache) cachedForState(ctx context.Context, sym *WorkingSymbol, state Sy
 	case StateHardStale:
 		return c.querySummary(ctx,
 			`WHERE prompt_version = ? AND content_hash = (
-                SELECT last_content_hash FROM symbol_history WHERE symbol_id = ? AND prompt_version = ?
+                SELECT last_content_hash FROM `+c.summaryTable("symbol_history")+` WHERE symbol_id = ? AND prompt_version = ?
             ) ORDER BY created_at DESC LIMIT 1`,
 			PromptVersion, sym.ID, PromptVersion)
 	default:
@@ -505,7 +485,7 @@ func (c *Cache) cachedForState(ctx context.Context, sym *WorkingSymbol, state Sy
 func (c *Cache) querySummary(ctx context.Context, where string, args ...any) (json.RawMessage, string, error) {
 	var hash, raw string
 	err := c.db.QueryRowContext(ctx,
-		"SELECT content_hash, summary_json FROM summary_cache "+where, args...).Scan(&hash, &raw)
+		"SELECT content_hash, summary_json FROM "+c.summaryTable("summary_cache")+" "+where, args...).Scan(&hash, &raw)
 	if err == sql.ErrNoRows {
 		return nil, "", nil
 	}
@@ -515,95 +495,87 @@ func (c *Cache) querySummary(ctx context.Context, where string, args ...any) (js
 	return json.RawMessage(raw), hash, nil
 }
 
-// UpsertSummaries validates and stores client-produced summaries.
+// UpsertSummaries validates and stores client-produced summaries. Reads of
+// working_symbols happen before the write transaction so the transaction only
+// ever modifies summary tables.
 func (c *Cache) UpsertSummaries(ctx context.Context, items []SummaryInput) ([]UpsertResult, error) {
-	results := make([]UpsertResult, 0, len(items))
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+	type preparedSummary struct {
+		index   int
+		sym     *WorkingSymbol
+		raw     []byte
+		modelID string
 	}
-	defer func() { _ = tx.Rollback() }()
+	results := make([]UpsertResult, len(items))
+	prepared := make([]preparedSummary, 0, len(items))
 
-	for _, item := range items {
-		result := UpsertResult{SymbolID: item.SymbolID, Status: "validation_error"}
-		sym, err := workingSymbolTx(ctx, tx, item.SymbolID)
+	for i, item := range items {
+		results[i] = UpsertResult{SymbolID: item.SymbolID, Status: "validation_error"}
+		sym, err := c.workingSymbol(ctx, item.SymbolID)
 		if err == sql.ErrNoRows {
-			result.Status = "not_found"
-			result.Error = "symbol not found in current working tree"
-			results = append(results, result)
+			results[i].Status = "not_found"
+			results[i].Error = "symbol not found in current working tree"
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
 		if !sym.Eligible {
-			result.Error = "symbol is not eligible for summarization"
-			results = append(results, result)
+			results[i].Error = "symbol is not eligible for summarization"
 			continue
 		}
 		if err := validateSummary(sym.Kind, item.Summary); err != nil {
-			result.Error = err.Error()
-			results = append(results, result)
+			results[i].Error = err.Error()
 			continue
 		}
 		if sym.SelfHash != item.ExpectedSelfHash || sym.DepHash != item.ExpectedDepHash {
-			result.Status = "hash_mismatch"
-			result.Error = "expected hashes do not match current working tree; fetch context again"
-			results = append(results, result)
+			results[i].Status = "hash_mismatch"
+			results[i].Error = "expected hashes do not match current working tree; fetch context again"
 			continue
 		}
 		raw, err := compactJSON(item.Summary)
 		if err != nil {
-			result.Error = err.Error()
-			results = append(results, result)
+			results[i].Error = err.Error()
 			continue
 		}
+		prepared = append(prepared, preparedSummary{index: i, sym: sym, raw: raw, modelID: item.ModelID})
+	}
+	if len(prepared) == 0 {
+		return results, nil
+	}
+
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, item := range prepared {
 		now := nowString()
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO summary_cache (content_hash, prompt_version, self_hash, dep_hash, kind, model_id, summary_json, created_at, last_accessed_at)
+INSERT INTO `+c.summaryTable("summary_cache")+` (content_hash, prompt_version, self_hash, dep_hash, kind, model_id, summary_json, created_at, last_accessed_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(content_hash, prompt_version) DO UPDATE SET last_accessed_at = excluded.last_accessed_at`,
-			sym.ContentHash, PromptVersion, sym.SelfHash, sym.DepHash, sym.Kind, item.ModelID, string(raw), now, now); err != nil {
+			item.sym.ContentHash, PromptVersion, item.sym.SelfHash, item.sym.DepHash, item.sym.Kind, item.modelID, string(item.raw), now, now); err != nil {
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO symbol_history (symbol_id, prompt_version, last_content_hash, last_self_hash, last_dep_hash, updated_at)
+INSERT INTO `+c.summaryTable("symbol_history")+` (symbol_id, prompt_version, last_content_hash, last_self_hash, last_dep_hash, updated_at)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol_id, prompt_version) DO UPDATE SET
     last_content_hash = excluded.last_content_hash,
     last_self_hash = excluded.last_self_hash,
     last_dep_hash = excluded.last_dep_hash,
     updated_at = excluded.updated_at`,
-			sym.ID, PromptVersion, sym.ContentHash, sym.SelfHash, sym.DepHash, now); err != nil {
+			item.sym.ID, PromptVersion, item.sym.ContentHash, item.sym.SelfHash, item.sym.DepHash, now); err != nil {
 			return nil, err
 		}
-		result.Status = "updated"
-		results = append(results, result)
+		results[item.index].Status = "updated"
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	c.maybeGC(ctx)
 	return results, nil
-}
-
-func workingSymbolTx(ctx context.Context, tx *sql.Tx, id string) (*WorkingSymbol, error) {
-	var sym WorkingSymbol
-	var exported, dead, eligible int
-	err := tx.QueryRowContext(ctx, `
-SELECT id, parent_id, kind, module_name, pkg_path, file_path, start_line, end_line,
-       loc, complexity, fan_in, is_exported, is_dead, is_eligible,
-       sig_hash, self_hash, dep_hash, content_hash
-FROM working_symbols WHERE id = ?`, id).Scan(
-		&sym.ID, &sym.ParentID, &sym.Kind, &sym.ModuleName, &sym.PkgPath, &sym.FilePath,
-		&sym.StartLine, &sym.EndLine, &sym.LOC, &sym.Complexity, &sym.FanIn,
-		&exported, &dead, &eligible, &sym.SigHash, &sym.SelfHash, &sym.DepHash, &sym.ContentHash)
-	if err != nil {
-		return nil, err
-	}
-	sym.Exported = exported == 1
-	sym.Dead = dead == 1
-	sym.Eligible = eligible == 1
-	return &sym, nil
 }
 
 type funcSummary struct {
@@ -775,7 +747,7 @@ func (c *Cache) Lookup(ctx context.Context, id string) (Cached, error) {
 	if hash != "" {
 		c.touch(hash)
 		if err := c.db.QueryRowContext(ctx,
-			"SELECT model_id FROM summary_cache WHERE content_hash = ? AND prompt_version = ?",
+			"SELECT model_id FROM "+c.summaryTable("summary_cache")+" WHERE content_hash = ? AND prompt_version = ?",
 			hash, PromptVersion).Scan(&out.ModelID); err != nil && err != sql.ErrNoRows {
 			return Cached{}, err
 		}

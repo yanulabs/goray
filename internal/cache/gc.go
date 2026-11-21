@@ -6,6 +6,7 @@ import (
 )
 
 // RunGC evicts unreferenced cache rows and prunes orphaned history pointers.
+// It writes only summary tables.
 func (c *Cache) RunGC(ctx context.Context, now time.Time, ttl time.Duration, capacity int) error {
 	c.gcMu.Lock()
 	defer c.gcMu.Unlock()
@@ -14,7 +15,7 @@ func (c *Cache) RunGC(ctx context.Context, now time.Time, ttl time.Duration, cap
 
 	rows, err := c.db.QueryContext(ctx, `
 SELECT c.content_hash, c.prompt_version, c.last_accessed_at
-FROM summary_cache c
+FROM `+c.summaryTable("summary_cache")+` c
 WHERE NOT EXISTS (SELECT 1 FROM working_symbols w WHERE w.content_hash = c.content_hash)
 ORDER BY c.last_accessed_at ASC`)
 	if err != nil {
@@ -58,7 +59,7 @@ ORDER BY c.last_accessed_at ASC`)
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, "DELETE FROM summary_cache WHERE content_hash = ? AND prompt_version = ?")
+	stmt, err := tx.PrepareContext(ctx, "DELETE FROM "+c.summaryTable("summary_cache")+" WHERE content_hash = ? AND prompt_version = ?")
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -72,11 +73,11 @@ ORDER BY c.last_accessed_at ASC`)
 	}
 	_ = stmt.Close()
 	if _, err := tx.ExecContext(ctx, `
-DELETE FROM symbol_history
+DELETE FROM `+c.summaryTable("symbol_history")+`
 WHERE NOT EXISTS (
-    SELECT 1 FROM summary_cache c
-    WHERE c.content_hash = symbol_history.last_content_hash
-      AND c.prompt_version = symbol_history.prompt_version
+    SELECT 1 FROM `+c.summaryTable("summary_cache")+` c
+    WHERE c.content_hash = `+c.summaryTable("symbol_history")+`.last_content_hash
+      AND c.prompt_version = `+c.summaryTable("symbol_history")+`.prompt_version
 )`); err != nil {
 		_ = tx.Rollback()
 		return err
@@ -84,8 +85,12 @@ WHERE NOT EXISTS (
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	_, _ = c.db.ExecContext(ctx, "PRAGMA incremental_vacuum(1000)")
-	_, _ = c.db.ExecContext(ctx, "PRAGMA optimize")
+	_, _ = c.db.ExecContext(ctx, "PRAGMA main.incremental_vacuum(1000)")
+	_, _ = c.db.ExecContext(ctx, "PRAGMA main.optimize")
+	if c.split {
+		_, _ = c.db.ExecContext(ctx, "PRAGMA summaries.incremental_vacuum(1000)")
+		_, _ = c.db.ExecContext(ctx, "PRAGMA summaries.optimize")
+	}
 	return nil
 }
 

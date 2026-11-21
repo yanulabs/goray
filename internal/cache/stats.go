@@ -15,6 +15,8 @@ type SummaryRow struct {
 // Stats is a readable snapshot of the populated cache.
 type Stats struct {
 	Path                   string         `json:"path"`
+	DBPath                 string         `json:"db_path"`
+	SummaryDBPath          string         `json:"summary_db_path"`
 	PromptVersion          string         `json:"prompt_version"`
 	SchemaVersion          int            `json:"schema_version"`
 	Tables                 map[string]int `json:"tables"`
@@ -34,6 +36,8 @@ type Stats struct {
 func (c *Cache) Stats(ctx context.Context) (Stats, error) {
 	stats := Stats{
 		Path:                   c.path,
+		DBPath:                 c.path,
+		SummaryDBPath:          c.summaryPath,
 		PromptVersion:          PromptVersion,
 		Tables:                 map[string]int{},
 		WorkingSymbolsByKind:   map[string]int{},
@@ -42,15 +46,25 @@ func (c *Cache) Stats(ctx context.Context) (Stats, error) {
 		SummaryStates:          map[string]int{},
 		RecentSummaries:        make([]SummaryRow, 0),
 	}
-	if err := c.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&stats.SchemaVersion); err != nil {
+	if version, err := c.schemaVersion(ctx); err != nil {
 		return Stats{}, err
+	} else {
+		stats.SchemaVersion = version
 	}
-	for _, table := range []string{"working_symbols", "working_edges", "summary_cache", "symbol_history"} {
+	for _, table := range []struct {
+		name string
+		ref  string
+	}{
+		{"working_symbols", "working_symbols"},
+		{"working_edges", "working_edges"},
+		{"summary_cache", c.summaryTable("summary_cache")},
+		{"symbol_history", c.summaryTable("symbol_history")},
+	} {
 		var count int
-		if err := c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+		if err := c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table.ref).Scan(&count); err != nil {
 			return Stats{}, err
 		}
-		stats.Tables[table] = count
+		stats.Tables[table.name] = count
 	}
 	stats.WorkingEdges = stats.Tables["working_edges"]
 	stats.CachedSummaries = stats.Tables["summary_cache"]
@@ -68,11 +82,11 @@ func (c *Cache) Stats(ctx context.Context) (Stats, error) {
 	if err := c.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM working_symbols WHERE is_dead = 1").Scan(&stats.DeadSymbols); err != nil {
 		return Stats{}, err
 	}
-	if err := scanCounts(ctx, c, "SELECT kind, COUNT(*) FROM summary_cache GROUP BY kind", stats.CachedSummariesByKind); err != nil {
+	if err := scanCounts(ctx, c, "SELECT kind, COUNT(*) FROM "+c.summaryTable("summary_cache")+" GROUP BY kind", stats.CachedSummariesByKind); err != nil {
 		return Stats{}, err
 	}
 
-	stateQuery := "SELECT state, COUNT(*) FROM (SELECT " + stateExpr + " AS state FROM working_symbols w WHERE w.is_eligible = 1) GROUP BY state"
+	stateQuery := "SELECT state, COUNT(*) FROM (SELECT " + c.stateExpr() + " AS state FROM working_symbols w WHERE w.is_eligible = 1) GROUP BY state"
 	rows, err := c.db.QueryContext(ctx, stateQuery, PromptVersion, PromptVersion, PromptVersion, PromptVersion)
 	if err != nil {
 		return Stats{}, err
@@ -92,7 +106,7 @@ func (c *Cache) Stats(ctx context.Context) (Stats, error) {
 
 	rows, err = c.db.QueryContext(ctx, `
 SELECT content_hash, kind, model_id, summary_json, created_at, last_accessed_at
-FROM summary_cache ORDER BY last_accessed_at DESC LIMIT 10`)
+FROM `+c.summaryTable("summary_cache")+` ORDER BY last_accessed_at DESC LIMIT 10`)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -108,6 +122,24 @@ FROM summary_cache ORDER BY last_accessed_at DESC LIMIT 10`)
 		return Stats{}, err
 	}
 	return stats, nil
+}
+
+func (c *Cache) schemaVersion(ctx context.Context) (int, error) {
+	var version int
+	if err := c.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_meta").Scan(&version); err != nil {
+		return 0, err
+	}
+	if !c.split {
+		return version, nil
+	}
+	var summaryVersion int
+	if err := c.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM summaries.schema_meta").Scan(&summaryVersion); err != nil {
+		return 0, err
+	}
+	if summaryVersion > version {
+		version = summaryVersion
+	}
+	return version, nil
 }
 
 func scanCounts(ctx context.Context, c *Cache, query string, target map[string]int) error {

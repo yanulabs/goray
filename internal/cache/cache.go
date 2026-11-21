@@ -3,41 +3,31 @@ package cache
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"embed"
-	"encoding/hex"
-	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	_ "modernc.org/sqlite"
-
-	"github.com/yanulabs/goray/internal/index"
 )
 
 const (
-	PromptVersion  = "v1"
-	touchInterval  = 30 * time.Second
-	gcInterval     = time.Hour
-	gcTTL          = 30 * 24 * time.Hour
-	gcCapacity     = 50_000
-	schemaFileName = "migrations/*.sql"
+	PromptVersion = "v1"
+	touchInterval = 30 * time.Second
+	gcInterval    = time.Hour
+	gcTTL         = 30 * 24 * time.Hour
+	gcCapacity    = 50_000
 )
 
-//go:embed migrations/*.sql
-var migrations embed.FS
-
-// Cache owns the SQLite working state and summary cache.
+// Cache owns SQLite working state and the content-addressed summary cache. In
+// split mode the working tables live in main and the summary tables live in an
+// attached database named summaries.
 type Cache struct {
-	db   *sql.DB
-	path string
+	db            *sql.DB
+	path          string
+	summaryPath   string
+	summarySchema string
+	split         bool
 
 	touchMu sync.Mutex
 	touches map[touchKey]time.Time
@@ -55,61 +45,57 @@ type touchKey struct {
 	promptVersion string
 }
 
-// Open configures SQLite and applies embedded migrations.
+// Open configures a single SQLite database containing every table.
 func Open(path string) (*Cache, error) {
-	if path != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, err
+	return open(path, path, false)
+}
+
+// OpenSplit configures split storage: working tables in workingPath and summary
+// tables in summaryPath. Equal paths fall back to single-database mode.
+func OpenSplit(workingPath, summaryPath string) (*Cache, error) {
+	if workingPath == summaryPath {
+		return Open(workingPath)
+	}
+	return open(workingPath, summaryPath, true)
+}
+
+func open(workingPath, summaryPath string, split bool) (*Cache, error) {
+	for _, path := range []string{workingPath, summaryPath} {
+		if path != ":memory:" {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return nil, err
+			}
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := openDB(workingPath, summaryPath, split)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	pragmas := []string{
-		"PRAGMA auto_vacuum = INCREMENTAL",
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA busy_timeout = 5000",
+	if err := migrate(db, worktreeMigrations, "migrations/worktree", worktreeScope, ""); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
+	schema := ""
+	if split {
+		schema = "summaries."
 	}
-	if err := migrate(db); err != nil {
+	if err := migrate(db, summaryMigrations, "migrations/summary", summaryScope, schema); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
 	c := &Cache{
-		db:      db,
-		path:    path,
-		touches: map[touchKey]time.Time{},
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		db:            db,
+		path:          workingPath,
+		summaryPath:   summaryPath,
+		summarySchema: schema,
+		split:         split,
+		touches:       map[touchKey]time.Time{},
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
 	}
 	go c.touchLoop()
 	return c, nil
-}
-
-// DefaultPath returns the per-project cache path outside the repository.
-func DefaultPath(projectRoot string) (string, error) {
-	root, err := index.ResolveModuleRoot(projectRoot)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(root))
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	name := RepoSlug(root) + "-" + hex.EncodeToString(sum[:])[:12] + ".db"
-	return filepath.Join(base, "goray", name), nil
 }
 
 // RepoSlug turns a module directory name into a filesystem-friendly label.
@@ -139,68 +125,38 @@ func RepoSlug(root string) string {
 	return slug
 }
 
-// ResolvePath applies flag, env, and default precedence.
-func ResolvePath(projectRoot, flagPath string) (string, error) {
-	path := flagPath
-	if path == "" {
-		path = os.Getenv("GORAY_DB")
-	}
-	if path == "" {
-		return DefaultPath(projectRoot)
-	}
-	if path == ":memory:" {
-		return path, nil
-	}
-	return filepath.Abs(path)
-}
-
-func migrate(db *sql.DB) error {
-	names, err := fs.Glob(migrations, schemaFileName)
-	if err != nil {
-		return err
-	}
-	sort.Strings(names)
-
-	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return err
-	}
-	for _, name := range names {
-		base := filepath.Base(name)
-		prefix, _, ok := strings.Cut(base, "_")
-		if !ok {
-			continue
-		}
-		next, err := strconv.Atoi(prefix)
-		if err != nil || next <= version {
-			continue
-		}
-		body, err := migrations.ReadFile(name)
-		if err != nil {
-			return err
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(string(body)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("migration %s: %w", base, err)
-		}
-		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", next)); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		version = next
-	}
-	return nil
-}
-
-// Path is the SQLite database location.
+// Path is the working SQLite database location.
 func (c *Cache) Path() string { return c.path }
+
+// SummaryPath is the shared summary SQLite database location. It equals Path
+// in single-database mode.
+func (c *Cache) SummaryPath() string { return c.summaryPath }
+
+func (c *Cache) summaryTable(name string) string { return c.summarySchema + name }
+
+// stateExpr classifies working symbols, consulting summary tables through the
+// store's schema qualifier.
+func (c *Cache) stateExpr() string {
+	return `CASE
+    WHEN w.is_eligible = 0 THEN 'not_eligible'
+    WHEN EXISTS (SELECT 1 FROM ` + c.summaryTable("summary_cache") + ` c WHERE c.content_hash = w.content_hash AND c.prompt_version = ?) THEN 'synced'
+    WHEN EXISTS (
+        SELECT 1 FROM ` + c.summaryTable("symbol_history") + ` h
+        JOIN ` + c.summaryTable("summary_cache") + ` c ON c.content_hash = h.last_content_hash AND c.prompt_version = h.prompt_version
+        WHERE h.symbol_id = w.id AND h.prompt_version = ? AND c.self_hash = w.self_hash
+    ) THEN 'soft_stale'
+    WHEN w.self_hash <> '' AND w.kind IN ('func','method','type') AND EXISTS (
+        SELECT 1 FROM ` + c.summaryTable("summary_cache") + ` c
+        WHERE c.self_hash = w.self_hash AND c.prompt_version = ? AND c.kind = w.kind
+    ) THEN 'soft_stale'
+    WHEN EXISTS (
+        SELECT 1 FROM ` + c.summaryTable("symbol_history") + ` h
+        JOIN ` + c.summaryTable("summary_cache") + ` c ON c.content_hash = h.last_content_hash AND c.prompt_version = h.prompt_version
+        WHERE h.symbol_id = w.id AND h.prompt_version = ?
+    ) THEN 'hard_stale'
+    ELSE 'missing'
+END`
+}
 
 // Close flushes pending LRU touches and closes SQLite.
 func (c *Cache) Close() error {
@@ -212,12 +168,13 @@ func (c *Cache) Close() error {
 			err = flushErr
 		}
 		if c.path != ":memory:" {
-			var busy, logFrames, checkpointed int
-			if checkpointErr := c.db.QueryRowContext(context.Background(),
-				"PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); checkpointErr != nil && err == nil {
+			if checkpointErr := checkpoint(context.Background(), c.db, "main"); checkpointErr != nil && err == nil {
 				err = checkpointErr
-			} else if busy != 0 && err == nil {
-				err = fmt.Errorf("sqlite WAL checkpoint is busy")
+			}
+		}
+		if c.split && c.summaryPath != ":memory:" {
+			if checkpointErr := checkpoint(context.Background(), c.db, "summaries"); checkpointErr != nil && err == nil {
+				err = checkpointErr
 			}
 		}
 		if closeErr := c.db.Close(); closeErr != nil && err == nil {
@@ -241,7 +198,8 @@ func (c *Cache) touchLoop() {
 	}
 }
 
-// FlushTouches persists batched last_accessed_at updates.
+// FlushTouches persists batched last_accessed_at updates. It writes only to
+// summary_cache.
 func (c *Cache) FlushTouches(ctx context.Context) error {
 	c.touchMu.Lock()
 	pending := c.touches
@@ -255,7 +213,8 @@ func (c *Cache) FlushTouches(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, "UPDATE summary_cache SET last_accessed_at = ? WHERE content_hash = ? AND prompt_version = ?")
+	stmt, err := tx.PrepareContext(ctx, "UPDATE "+c.summaryTable("summary_cache")+
+		" SET last_accessed_at = ? WHERE content_hash = ? AND prompt_version = ?")
 	if err != nil {
 		_ = tx.Rollback()
 		return err
