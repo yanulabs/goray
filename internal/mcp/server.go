@@ -16,6 +16,7 @@ type Server struct {
 	out     io.Writer
 	byName  map[string]Tool
 	specs   []ToolSpec
+	version string
 	readSem chan struct{}
 	writeMu sync.Mutex
 	outMu   sync.Mutex
@@ -27,6 +28,7 @@ func NewServer(in io.Reader, out io.Writer, tools []Tool) *Server {
 		out:     out,
 		byName:  make(map[string]Tool, len(tools)),
 		specs:   make([]ToolSpec, 0, len(tools)),
+		version: "dev",
 		readSem: make(chan struct{}, maxConcurrentReads),
 	}
 	for _, tool := range tools {
@@ -34,6 +36,13 @@ func NewServer(in io.Reader, out io.Writer, tools []Tool) *Server {
 		s.specs = append(s.specs, tool.spec())
 	}
 	return s
+}
+
+// SetVersion configures the version advertised during initialize.
+func (s *Server) SetVersion(version string) {
+	if version != "" {
+		s.version = version
+	}
 }
 
 // Serve reads JSON-RPC messages until stdin closes, shutdown is received, or
@@ -97,7 +106,7 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) (s
 		s.reply(notification, req.ID, map[string]any{
 			"protocolVersion": protocol,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "go-mcp-server", "version": "0.1.0"},
+			"serverInfo":      map[string]any{"name": "go-mcp-server", "version": s.version},
 		})
 
 	case "notifications/initialized", "initialized", "notifications/cancelled":

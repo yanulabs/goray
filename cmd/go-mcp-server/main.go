@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
@@ -17,6 +18,18 @@ import (
 	"github.com/yanulabs/go-mcp-server/internal/tools"
 	"github.com/yanulabs/go-mcp-server/internal/watch"
 )
+
+var version = "dev"
+
+func buildVersion() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -31,8 +44,14 @@ func run() error {
 	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GO_MCP_DB)")
 	dbInfo := flag.Bool("db-info", false, "print populated cache statistics and exit")
 	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	logLevelFlag := flag.String("log-level", envOr("GO_MCP_LOG_LEVEL", "info"), "log level: off|error|info")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("go-mcp-server %s\n", buildVersion())
+		return nil
+	}
 
 	root := "."
 	if flag.NArg() > 0 {
@@ -109,6 +128,7 @@ func run() error {
 	}
 
 	server := mcp.NewServer(os.Stdin, os.Stdout, tools.New(store, formats, summaries))
+	server.SetVersion(buildVersion())
 	err = server.Serve(ctx)
 	stop()
 	return err

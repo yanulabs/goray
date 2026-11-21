@@ -34,3 +34,6 @@ go.work.sum
 # .vscode/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+# Local build output
+/bin/

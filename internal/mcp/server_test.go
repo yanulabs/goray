@@ -28,6 +28,7 @@ func TestServe(t *testing.T) {
 		},
 	}})
 
+	srv.SetVersion("v9.9.9")
 	if err := srv.Serve(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +41,10 @@ func TestServe(t *testing.T) {
 	init := resultOf(t, responses["1"])
 	if init["protocolVersion"] != "2025-06-18" {
 		t.Fatalf("protocol = %v", init["protocolVersion"])
+	}
+	serverInfo := init["serverInfo"].(map[string]any)
+	if serverInfo["version"] != "v9.9.9" || serverInfo["name"] != "go-mcp-server" {
+		t.Fatalf("serverInfo = %v", serverInfo)
 	}
 
 	list := resultOf(t, responses["2"])
