@@ -27,6 +27,7 @@ type Summaries interface {
 	UpsertSummaries(context.Context, []cache.SummaryInput) ([]cache.UpsertResult, error)
 	Coverage(context.Context, string) (cache.Coverage, error)
 	Path() string
+	SummaryPath() string
 }
 
 type toolset struct {
@@ -98,11 +99,13 @@ func (t *toolset) projectInfo() mcp.Tool {
 				Tools         int    `json:"tools"`
 				Summaries     bool   `json:"summaries_enabled"`
 				DBPath        string `json:"db_path"`
+				SummaryDBPath string `json:"summary_db_path"`
 				PromptVersion string `json:"summary_prompt_version,omitempty"`
 			}
 			out := info{Status: t.src.Status(), Tools: t.count, Summaries: t.summaries != nil}
 			if t.summaries != nil {
 				out.DBPath = t.summaries.Path()
+				out.SummaryDBPath = t.summaries.SummaryPath()
 				out.PromptVersion = cache.PromptVersion
 			}
 			return render.JSON(out), false
