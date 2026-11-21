@@ -240,8 +240,8 @@ all tables live in that one database and no shared summary file is created.
 | Tool | Purpose |
 | --- | --- |
 | `project_info` | Index state, module path, working and summary DB paths, symbol counts, load errors |
-| `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files (`md`/`json`/`dot`/`mermaid`) |
-| `get_module_overview` | Single module packages, dependencies, large files, exported API (`md`/`json`) |
+| `get_codebase_map` | Concise module scorecard, cross-module edges and cycles, large files, top hotspots; `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
+| `get_module_overview` | Single module packages, dependencies, large files, exported API, `tracked_only` (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
 
 ### Symbols, calls, and impact
@@ -254,7 +254,8 @@ all tables live in that one database and no shared summary file is created.
 | `get_call_graph` | BFS callers and callees |
 | `find_implementations` | `go/types.Implements` interface-to-type matrix |
 | `get_impact_analysis` | Transitive blast radius and affected test packages |
-| `get_dead_code` | Unreferenced functions and methods |
+| `get_dead_code` | Unreferenced functions/methods with closed-world, interface, generated, module, and grouped filters |
+| `get_hotspots` | Rank funcs/files/types by risk, complexity, LOC, or fan-in; static test reachability and module/generated/untracked filters |
 | `get_function_body` | Source body, LOC, and cyclomatic complexity |
 
 ### Summary cache

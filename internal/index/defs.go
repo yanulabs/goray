@@ -106,7 +106,7 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl, m
 }
 
 func isHookName(name string, inTest bool) bool {
-	if name == "main" || name == "init" {
+	if name == "main" || name == "init" || isStdHook(name) {
 		return true
 	}
 	if !inTest {

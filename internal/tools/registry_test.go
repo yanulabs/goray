@@ -20,8 +20,8 @@ func (fakeIndexer) Rebuild() error                             { return nil }
 
 func TestRegistry(t *testing.T) {
 	list := New(fakeIndexer{}, render.NewRegistry(), nil)
-	if len(list) != 19 {
-		t.Fatalf("tools = %d, want 19", len(list))
+	if len(list) != 20 {
+		t.Fatalf("tools = %d, want 20", len(list))
 	}
 
 	seen := map[string]bool{}

@@ -56,6 +56,7 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 		t.implementations(),
 		t.impactAnalysis(),
 		t.deadCode(),
+		t.hotspots(),
 		t.functionBody(),
 		t.listStaleSummaries(),
 		t.getSummaryContext(),

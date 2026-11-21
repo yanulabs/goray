@@ -77,8 +77,8 @@ func Build(rootDir string) (*Index, error) {
 	b.indexReferences(pkgs)
 	b.collectImportedInterfaces(pkgs)
 	b.matchInterfaces()
-	b.computeTestCoverage()
 	b.finish()
+	b.computeTestCoverage()
 	b.buildSummary(pkgs)
 	if hasTestFiles(b.idx.Packages) {
 		b.idx.TestLoadErrors = collectTestLoadErrors(absRoot)
