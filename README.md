@@ -4,7 +4,7 @@ Static semantic indexer, MCP stdio server, and offline architecture reporter for
 
 `goray` loads a Go module with `go/packages` and `go/types` to compute dependency graphs, call graphs, interface implementations, dead code, complexity hotspots, and blast radius. It ships as a single pure-Go binary (no CGO) and exposes the index either as a self-contained HTML/Markdown/DOT export or over MCP for coding agents.
 
-`goray` never calls an LLM. If a connected MCP client submits structured symbol summaries via `upsert_summaries`, `goray` validates, hashes, and caches them in an external SQLite database. Every command and report works with an empty cache.
+`goray` never calls an LLM. If a connected MCP client submits structured symbol summaries via `upsert_summaries`, `goray` validates, hashes, and caches them in an external SQLite summary database that can be shared across worktrees. Every command and report works with an empty cache.
 
 ## Install
 
@@ -105,7 +105,7 @@ goray serve [path] [--db <path>] [--log-level off|error|info] [--port <n>] [--op
 
 ```
 
-* `--db <path>` — SQLite cache path (default: user cache dir; env `GORAY_DB`; supports `:memory:`).
+* `--db <path>` — single-database override (default: split working and shared summary databases under the user cache dir; env `GORAY_DB`; supports `:memory:`).
 * `--log-level <level>` — stderr verbosity: `off`, `error`, or `info` (default: `info`; env `GORAY_LOG_LEVEL`).
 * `--port <n>` — local report UI port (default: `4321`; `0` picks a free port). Busy ports auto-increment.
 * `--open` — open the local report URL in the default browser.
@@ -147,17 +147,19 @@ The HTML export is a single offline file with all CSS, JS, and indexed metadata 
 ### `db`
 
 ```sh
-goray db path [path] [--db <path>]
+goray db path [path] [--db <path>] [--summaries]
 goray db info [path] [--db <path>]
-
 ```
 
-`db path` prints only the resolved path to `stdout` without indexing or creating the file:
+`db path` prints only the resolved working database path to `stdout` without
+indexing or creating the file:
 
 ```sh
 sqlite3 "$(goray db path)"
-
 ```
+
+`db path --summaries` prints only the shared summary database path. `db info`
+prints JSON statistics and includes both `db_path` and `summary_db_path`.
 
 ### `index`
 
@@ -176,8 +178,8 @@ goray index --db :memory: .
 ```
 
 `--json` emits a single object with `root`, `module_path`, `db_path`,
-`packages`, `files`, `symbols`, `edges`, `eligible`, `synced`,
-`coverage_percent`, `warnings`, and `duration_ms`.
+`summary_db_path`, `packages`, `files`, `symbols`, `edges`, `eligible`,
+`synced`, `coverage_percent`, `warnings`, and `duration_ms`.
 
 Production parse/type errors exit `1` without overwriting an existing healthy
 working snapshot. Errors confined to `*_test.go` files sync production state,
@@ -185,21 +187,51 @@ print warnings to stderr, and exit `0`.
 
 ## Storage and caching
 
-By default, the SQLite database lives outside the repository so nothing needs to be gitignored:
+By default, storage is split into two SQLite databases outside the repository so
+nothing needs to be gitignored:
 
 ```text
-<os.UserCacheDir()>/goray/<repo-slug>-<sha256(canonicalRoot)[:12]>.db
-
+<os.UserCacheDir()>/goray/worktrees/<dir-slug>-<sha256(canonicalRoot)[:12]>.db
+<os.UserCacheDir()>/goray/summaries/<mod-slug>-<sha256(modulePath)[:12]>.db
 ```
 
-Symlinks are resolved before hashing. `<repo-slug>` is derived from the module directory name (lowercase `a-z0-9._-`, max 32 chars). `--db` and `GORAY_DB` override this path.
+The **working database** is checkout-local and ephemeral. It stores only
+`working_symbols`, `working_edges`, and checkout schema metadata. Symlinks are
+resolved before hashing the canonical root, so every `git worktree` checkout
+and moved directory gets an isolated snapshot.
 
-* **Canonical IDs:** line-independent identifiers (`mod:`, `pkg:`, `file:`, `sym:`) so cached entries survive line shifts, file moves, and branch switches.
-* **Semantic hashing:** normalized AST combined with resolved `go/types` signatures and compiler directives, using a cycle-safe `sig_hash` / `self_hash` / `dep_hash` / `content_hash` chain.
-* **Staleness states:** `synced`, `soft_stale` (dependencies changed), `hard_stale` (symbol changed), `missing`, and `not_eligible`.
-* **Eligibility:** generated files and `*_test.go` symbols remain indexed for navigation and impact analysis, but are excluded from summary eligibility and production risk hotspots.
-* **Module grouping:** uses `modules/<name>` when present; otherwise `cmd/<name>`, `internal/<name>`, `pkg/<name>`, or the first path segment (`root` for top-level packages).
-* **Maintenance:** batched LRU access tracking with periodic garbage collection and optimistic hash checks on write.
+The **summary database** is content-addressed and shared. It stores only
+`summary_cache`, `symbol_history`, and summary schema metadata. `<mod-slug>` is
+derived from the last segment of the module path in `go.mod` (lowercase
+`a-z0-9._-`, max 32 chars, fallback `module`). Worktrees and clones of the same
+module resolve to the same file, so a summary cached for a content hash is
+immediately reusable across branches.
+
+`--db` and `GORAY_DB` (including `:memory:`) switch to single-database mode:
+all tables live in that one database and no shared summary file is created.
+
+* **Concurrency:** the summary database is attached per SQLite connection with
+  WAL and a 5000 ms busy timeout. Working-state syncs never write summary
+  tables, and summary upserts/GC/LRU flushes never write working tables; no
+  transaction spans both databases.
+* **Canonical IDs:** line-independent identifiers (`mod:`, `pkg:`, `file:`,
+  `sym:`) so cached entries survive line shifts, file moves, and branch switches.
+* **Semantic hashing:** normalized AST combined with resolved `go/types`
+  signatures and compiler directives, using a cycle-safe `sig_hash` /
+  `self_hash` / `dep_hash` / `content_hash` chain.
+* **Staleness states:** `synced`, `soft_stale` (dependencies changed),
+  `hard_stale` (symbol changed), `missing`, and `not_eligible`. Direct lookup
+  always checks `(content_hash, prompt_version)` before consulting
+  `symbol_history`, so both branches of a worktree pair stay synced
+  independently.
+* **Eligibility:** generated files and `*_test.go` symbols remain indexed for
+  navigation and impact analysis, but are excluded from summary eligibility and
+  production risk hotspots.
+* **Module grouping:** uses `modules/<name>` when present; otherwise
+  `cmd/<name>`, `internal/<name>`, `pkg/<name>`, or the first path segment
+  (`root` for top-level packages).
+* **Maintenance:** batched LRU access tracking with periodic garbage collection
+  and optimistic hash checks on write.
 
 ## MCP tools
 
@@ -207,7 +239,7 @@ Symlinks are resolved before hashing. `<repo-slug>` is derived from the module d
 
 | Tool | Purpose |
 | --- | --- |
-| `project_info` | Index state, module path, DB path, symbol counts, load errors |
+| `project_info` | Index state, module path, working and summary DB paths, symbol counts, load errors |
 | `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files (`md`/`json`/`dot`/`mermaid`) |
 | `get_module_overview` | Single module packages, dependencies, large files, exported API (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
