@@ -28,13 +28,21 @@ func (t *toolset) impactAnalysis() mcp.Tool {
 				if err != nil {
 					return err.Error(), true
 				}
-				return render.JSON(idx.ImpactBySymbol(sym, depth)), false
+				out := struct {
+					index.Impact
+					IndexState index.State `json:"index_state"`
+				}{Impact: idx.ImpactBySymbol(sym, depth), IndexState: t.src.Status().IndexState}
+				return render.JSON(out), false
 			case pkgArg != "":
 				pkg, ok := idx.ResolvePackage(pkgArg)
 				if !ok {
 					return "package or module not found: " + pkgArg, true
 				}
-				return render.JSON(idx.ImpactByPackage(pkg, depth)), false
+				out := struct {
+					index.Impact
+					IndexState index.State `json:"index_state"`
+				}{Impact: idx.ImpactByPackage(pkg, depth), IndexState: t.src.Status().IndexState}
+				return render.JSON(out), false
 			default:
 				return "specify 'symbol' or 'package'", true
 			}

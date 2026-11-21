@@ -15,6 +15,7 @@ type Symbol struct {
 	PkgRel     string `json:"pkg_rel"`
 	ModuleArea string `json:"module_area"`
 	RecvType   string `json:"recv_type,omitempty"`
+	RecvPtr    bool   `json:"-"`
 	Exported   bool   `json:"exported"`
 	Signature  string `json:"signature"`
 	File       string `json:"file"`
@@ -101,6 +102,7 @@ type Index struct {
 	IfaceMethods  map[string]bool
 	Modules       map[string]*ModSummary
 	LargeFiles    []FileMetric
+	Summary       *SummaryData
 }
 
 // TotalXRefs returns the number of recorded references.

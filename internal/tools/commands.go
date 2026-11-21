@@ -62,10 +62,11 @@ func (t *toolset) reindex() mcp.Tool {
 			}
 			status := t.src.Status()
 			return render.JSON(map[string]any{
-				"status":   "ok",
-				"packages": status.Packages,
-				"symbols":  status.Symbols,
-				"build_ms": status.BuildMS,
+				"status":      "ok",
+				"index_state": status.IndexState,
+				"packages":    status.Packages,
+				"symbols":     status.Symbols,
+				"build_ms":    status.BuildMS,
 			}), false
 		},
 	}

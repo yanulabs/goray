@@ -10,10 +10,12 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/yanulabs/go-mcp-server/internal/cache"
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
 	"github.com/yanulabs/go-mcp-server/internal/render"
 	"github.com/yanulabs/go-mcp-server/internal/tools"
+	"github.com/yanulabs/go-mcp-server/internal/watch"
 )
 
 func main() {
@@ -26,6 +28,8 @@ func main() {
 func run() error {
 	exportDOT := flag.String("export-dot", "", "export the module graph as Graphviz DOT and exit")
 	exportMD := flag.String("export-md", "", "export the architecture map as Markdown and exit")
+	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GO_MCP_DB)")
+	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
 	logLevelFlag := flag.String("log-level", envOr("GO_MCP_LOG_LEVEL", "info"), "log level: off|error|info")
 	flag.Parse()
 
@@ -49,11 +53,43 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	store := index.NewStore(root, logger)
-	store.Start()
+	dbPath, err := cache.ResolvePath(root, *dbFlag)
+	if err != nil {
+		return err
+	}
+	summaries, err := cache.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open summary cache: %w", err)
+	}
+	defer func() {
+		if err := summaries.Close(); err != nil {
+			logger.Error("close summary cache", "err", err)
+		}
+	}()
+	logger.Info("summary cache ready", "path", summaries.Path())
 
-	server := mcp.NewServer(os.Stdin, os.Stdout, tools.New(store, formats))
-	return server.Serve(ctx)
+	store := index.NewStore(root, logger)
+	store.SetBuildHook(func(idx *index.Index) error {
+		return summaries.Sync(context.Background(), idx)
+	})
+	store.Start()
+	defer store.WaitForBuild()
+
+	if !*noWatch {
+		watcher, err := watch.New(root, logger, store.MarkDirty)
+		if err != nil {
+			logger.Warn("file watcher unavailable", "err", err)
+		} else {
+			defer func() { _ = watcher.Close() }()
+			store.StartAutoRebuild(ctx)
+			defer store.WaitForAuto()
+		}
+	}
+
+	server := mcp.NewServer(os.Stdin, os.Stdout, tools.New(store, formats, summaries))
+	err = server.Serve(ctx)
+	stop()
+	return err
 }
 
 func export(root, dotPath, mdPath string, logger *slog.Logger, formats *render.Registry) error {

@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -16,15 +18,61 @@ func (t *toolset) codebaseMap() mcp.Tool {
 		InputSchema: object(map[string]any{
 			"format": propEnum("Output format (default: markdown)", t.formats.CodebaseMapFormats()...),
 		}),
-		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
+		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 			format := strArg(args, "format", "markdown")
 			out, ok := t.formats.RenderCodebaseMap(format, idx)
 			if !ok {
 				return "unsupported format: " + format, true
 			}
-			return out, false
+			if t.summaries == nil || (format != "json" && format != "markdown") {
+				return out, false
+			}
+			summaries := map[string]cachedModule{}
+			for _, name := range idx.SortedModuleNames() {
+				cached, state, depsChanged, err := t.summaries.Enrich(ctx, "mod:"+name)
+				if err == nil && len(cached) > 0 {
+					summaries[name] = cachedModule{summary: cached, state: string(state), depsChanged: depsChanged}
+				}
+			}
+			if len(summaries) == 0 {
+				return out, false
+			}
+			if format == "json" {
+				var view map[string]any
+				if json.Unmarshal([]byte(out), &view) != nil {
+					return out, false
+				}
+				modules, _ := view["modules"].([]any)
+				for _, item := range modules {
+					module, _ := item.(map[string]any)
+					name, _ := module["name"].(string)
+					if cached, ok := summaries[name]; ok {
+						module["summary"] = cached.summary
+						module["sync_state"] = cached.state
+						module["deps_changed"] = cached.depsChanged
+					}
+				}
+				return render.JSON(view), false
+			}
+			var b strings.Builder
+			b.WriteString(out)
+			b.WriteString("\n## Cached Module Summaries\n")
+			for _, name := range idx.SortedModuleNames() {
+				cached, ok := summaries[name]
+				if !ok {
+					continue
+				}
+				fmt.Fprintf(&b, "\n### `%s` (%s)\n\n```json\n%s\n```\n", name, cached.state, cached.summary)
+			}
+			return b.String(), false
 		}),
 	}
+}
+
+type cachedModule struct {
+	summary     json.RawMessage
+	state       string
+	depsChanged bool
 }
 
 func (t *toolset) moduleOverview() mcp.Tool {
@@ -35,7 +83,7 @@ func (t *toolset) moduleOverview() mcp.Tool {
 			"module": propString("Module name (e.g. payments, internal/index)"),
 			"format": propEnum("Output format (default: markdown)", t.formats.ModuleFormats()...),
 		}, "module"),
-		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
+		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 			name := strArg(args, "module", "")
 			summary, ok := idx.Modules[name]
 			if !ok {
@@ -46,7 +94,27 @@ func (t *toolset) moduleOverview() mcp.Tool {
 			if !ok {
 				return "unsupported format: " + format, true
 			}
-			return out, false
+			if t.summaries == nil {
+				return out, false
+			}
+			cached, state, depsChanged, err := t.summaries.Enrich(ctx, "mod:"+name)
+			if err != nil || len(cached) == 0 {
+				return out, false
+			}
+			if format == "json" {
+				var view map[string]any
+				if json.Unmarshal([]byte(out), &view) == nil {
+					view["summary"] = cached
+					view["sync_state"] = state
+					view["deps_changed"] = depsChanged
+					return render.JSON(view), false
+				}
+				return out, false
+			}
+			var b strings.Builder
+			b.WriteString(out)
+			fmt.Fprintf(&b, "\n## Cached Summary\n\n- Sync state: `%s`\n\n```json\n%s\n```\n", state, cached)
+			return b.String(), false
 		}),
 	}
 }

@@ -69,6 +69,7 @@ func Build(rootDir string) (*Index, error) {
 	b.indexReferences(pkgs)
 	b.matchInterfaces()
 	b.finish()
+	b.buildSummary(pkgs)
 
 	b.idx.BuiltAt = time.Now()
 	b.idx.BuildDuration = time.Since(start)

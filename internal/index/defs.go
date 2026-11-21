@@ -44,9 +44,11 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl) {
 	}
 
 	kind, recv := "func", ""
+	recvPtr := false
 	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
 		kind = "method"
 		recv = recvTypeName(sig.Recv().Type())
+		_, recvPtr = sig.Recv().Type().(*types.Pointer)
 	}
 	pos := p.Fset.Position(d.Pos())
 	end := p.Fset.Position(d.End())
@@ -58,6 +60,7 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl) {
 		PkgRel:     pi.RelPath,
 		ModuleArea: pi.ModuleArea,
 		RecvType:   recv,
+		RecvPtr:    recvPtr,
 		Exported:   fn.Exported() && (recv == "" || ast.IsExported(recv)),
 		Signature:  types.TypeString(fn.Type(), qualifier(p.PkgPath)),
 		File:       relFile(b.absRoot, pos.Filename),

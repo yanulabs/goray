@@ -18,9 +18,9 @@ func (fakeIndexer) Root() string                               { return "." }
 func (fakeIndexer) Rebuild() error                             { return nil }
 
 func TestRegistry(t *testing.T) {
-	list := New(fakeIndexer{}, render.NewRegistry())
-	if len(list) != 15 {
-		t.Fatalf("tools = %d, want 15", len(list))
+	list := New(fakeIndexer{}, render.NewRegistry(), nil)
+	if len(list) != 19 {
+		t.Fatalf("tools = %d, want 19", len(list))
 	}
 
 	seen := map[string]bool{}

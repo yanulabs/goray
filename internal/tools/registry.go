@@ -3,7 +3,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/yanulabs/go-mcp-server/internal/cache"
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
 	"github.com/yanulabs/go-mcp-server/internal/render"
@@ -17,18 +19,29 @@ type Indexer interface {
 	Rebuild() error
 }
 
+// Summaries is the summary-cache capability required by the tools.
+type Summaries interface {
+	Enrich(context.Context, string) (json.RawMessage, cache.SyncState, bool, error)
+	ListStale(context.Context, cache.StaleFilter) ([]cache.StaleSymbol, error)
+	SummaryContext(context.Context, string, *index.Index) (cache.SummaryContext, error)
+	UpsertSummaries(context.Context, []cache.SummaryInput) ([]cache.UpsertResult, error)
+	Coverage(context.Context, string) (cache.Coverage, error)
+	Path() string
+}
+
 type toolset struct {
-	src     Indexer
-	formats *render.Registry
-	count   int
+	src       Indexer
+	formats   *render.Registry
+	summaries Summaries
+	count     int
 }
 
 // New returns all tools in stable order.
-func New(src Indexer, formats *render.Registry) []mcp.Tool {
+func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool {
 	if formats == nil {
 		formats = render.NewRegistry()
 	}
-	t := &toolset{src: src, formats: formats}
+	t := &toolset{src: src, formats: formats, summaries: summaries}
 	list := []mcp.Tool{
 		t.projectInfo(),
 		t.codebaseMap(),
@@ -42,6 +55,10 @@ func New(src Indexer, formats *render.Registry) []mcp.Tool {
 		t.impactAnalysis(),
 		t.deadCode(),
 		t.functionBody(),
+		t.listStaleSummaries(),
+		t.getSummaryContext(),
+		t.upsertSummaries(),
+		t.getSummaryCoverage(),
 		t.runTests(),
 		t.runLint(),
 		t.reindex(),
@@ -60,17 +77,35 @@ func (t *toolset) indexed(run func(*index.Index, map[string]any) (string, bool))
 	}
 }
 
+func (t *toolset) indexedCtx(run func(context.Context, *index.Index, map[string]any) (string, bool)) func(context.Context, map[string]any) (string, bool) {
+	return func(ctx context.Context, args map[string]any) (string, bool) {
+		idx, err := t.src.Wait(ctx)
+		if err != nil {
+			return err.Error(), true
+		}
+		return run(ctx, idx, args)
+	}
+}
+
 func (t *toolset) projectInfo() mcp.Tool {
 	return mcp.Tool{
 		Name:        "project_info",
 		Description: "Index readiness, module path, package/symbol/xref counts, load errors, and available tools.",
 		InputSchema: object(nil),
 		Run: func(context.Context, map[string]any) (string, bool) {
-			info := struct {
+			type info struct {
 				index.Status
-				Tools int `json:"tools"`
-			}{Status: t.src.Status(), Tools: t.count}
-			return render.JSON(info), false
+				Tools         int    `json:"tools"`
+				Summaries     bool   `json:"summaries_enabled"`
+				DBPath        string `json:"db_path,omitempty"`
+				PromptVersion string `json:"summary_prompt_version,omitempty"`
+			}
+			out := info{Status: t.src.Status(), Tools: t.count, Summaries: t.summaries != nil}
+			if t.summaries != nil {
+				out.DBPath = t.summaries.Path()
+				out.PromptVersion = cache.PromptVersion
+			}
+			return render.JSON(out), false
 		},
 	}
 }
