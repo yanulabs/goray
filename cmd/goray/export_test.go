@@ -16,7 +16,7 @@ func TestExportHTMLCLI(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join(cwd, "..", ".."))
 	project := filepath.Join(repoRoot, "internal", "index", "testdata", "standard")
 	tmp := t.TempDir()
-	binary := filepath.Join(tmp, "go-mcp-server")
+	binary := filepath.Join(tmp, "goray")
 	build := exec.Command("go", "build", "-o", binary, ".")
 	build.Dir = cwd
 	if out, err := build.CombinedOutput(); err != nil {

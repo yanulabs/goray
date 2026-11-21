@@ -16,7 +16,7 @@ func buildTestCLI(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(t.TempDir(), "go-mcp-server")
+	binary := filepath.Join(t.TempDir(), "goray")
 	cmd := exec.Command("go", "build", "-o", binary, ".")
 	cmd.Dir = cwd
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -29,7 +29,7 @@ func cliEnv(cacheHome string, overrides map[string]string) []string {
 	values := map[string]string{
 		"HOME":           cacheHome,
 		"XDG_CACHE_HOME": filepath.Join(cacheHome, "xdg"),
-		"GO_MCP_DB":      "",
+		"GORAY_DB":       "",
 	}
 	for key, value := range overrides {
 		values[key] = value
@@ -110,6 +110,14 @@ func TestDBPathCLI(t *testing.T) {
 	file := filepath.Join(deep, "summary.go")
 	writeTestFile(t, file, "package cache\n")
 
+	versionOut, versionErr, err := runTestCLI(t, binary, root, env, "-version")
+	if err != nil {
+		t.Fatalf("version: %v (%s)", err, versionErr)
+	}
+	if !strings.HasPrefix(versionOut, "goray ") {
+		t.Fatalf("version output = %q", versionOut)
+	}
+
 	stdout, stderr, err := runTestCLI(t, binary, root, env, "-db-path")
 	if err != nil {
 		t.Fatalf("db-path: %v (%s)", err, stderr)
@@ -155,7 +163,7 @@ func TestDBPathCLI(t *testing.T) {
 	})
 
 	t.Run("env override", func(t *testing.T) {
-		env := cliEnv(cacheHome, map[string]string{"GO_MCP_DB": ":memory:"})
+		env := cliEnv(cacheHome, map[string]string{"GORAY_DB": ":memory:"})
 		out, errText, err := runTestCLI(t, binary, deep, env, "-db-path")
 		if err != nil {
 			t.Fatalf("db-path: %v (%s)", err, errText)
@@ -340,5 +348,19 @@ func TestExportFromSubdirectoryResolvesModuleRoot(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("export missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestGORAYLogLevelEnv(t *testing.T) {
+	binary := buildTestCLI(t)
+	root := filepath.Join(t.TempDir(), "repo")
+	writeTestModule(t, root, "example.com/repo")
+	env := cliEnv(t.TempDir(), map[string]string{"GORAY_LOG_LEVEL": "verbose"})
+	_, stderr, err := runTestCLI(t, binary, root, env, "-db-info", "-db", ":memory:")
+	if err == nil {
+		t.Fatal("invalid GORAY_LOG_LEVEL should fail")
+	}
+	if !strings.Contains(stderr, "invalid log level") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }

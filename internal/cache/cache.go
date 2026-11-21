@@ -19,7 +19,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 const (
@@ -109,7 +109,7 @@ func DefaultPath(projectRoot string) (string, error) {
 		return "", err
 	}
 	name := repoSlug(root) + "-" + hex.EncodeToString(sum[:])[:12] + ".db"
-	return filepath.Join(base, "go-mcp-server", name), nil
+	return filepath.Join(base, "goray", name), nil
 }
 
 // repoSlug turns a module directory name into a filesystem-friendly label.
@@ -143,7 +143,7 @@ func repoSlug(root string) string {
 func ResolvePath(projectRoot, flagPath string) (string, error) {
 	path := flagPath
 	if path == "" {
-		path = os.Getenv("GO_MCP_DB")
+		path = os.Getenv("GORAY_DB")
 	}
 	if path == "" {
 		return DefaultPath(projectRoot)

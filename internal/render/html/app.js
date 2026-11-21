@@ -1641,7 +1641,7 @@ function restoreFromHash() {
 }
 
 function setupTheme() {
-  const saved = localStorage.getItem("go-mcp-theme");
+  const saved = localStorage.getItem("goray-theme");
   const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = saved || (prefersDark ? "dark" : "light");
   const syncLabel = () => {
@@ -1650,7 +1650,7 @@ function setupTheme() {
   syncLabel();
   $("#theme-toggle").addEventListener("click", () => {
     document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    localStorage.setItem("go-mcp-theme", document.documentElement.dataset.theme);
+    localStorage.setItem("goray-theme", document.documentElement.dataset.theme);
     syncLabel();
   });
 }
@@ -1737,7 +1737,7 @@ function setupPanels() {
 }
 
 function init() {
-  document.title = (DATA.repo || "Go Codebase") + " · Architecture Report";
+  document.title = (DATA.repo || "goray") + " · Architecture Report";
   $("#repo-meta").textContent = [DATA.repo, DATA.module_path, "generated " + DATA.generated_at].filter(Boolean).join(" · ");
 
   const cov = DATA.coverage || {};

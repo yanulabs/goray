@@ -106,7 +106,7 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) (s
 		s.reply(notification, req.ID, map[string]any{
 			"protocolVersion": protocol,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "go-mcp-server", "version": s.version},
+			"serverInfo":      map[string]any{"name": "goray", "version": s.version},
 		})
 
 	case "notifications/initialized", "initialized", "notifications/cancelled":

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 func testIndex() *index.Index {

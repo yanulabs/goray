@@ -1,12 +1,12 @@
 SHELL := /bin/sh
 
 GO ?= go
-BINARY := go-mcp-server
+BINARY := goray
 BIN_DIR := bin
 ROOT ?= .
 
 CONFIG_HOME := $(if $(XDG_CONFIG_HOME),$(XDG_CONFIG_HOME),$(HOME)/.config)
-SKILL_NAME ?= go-mcp-server
+SKILL_NAME ?= goray
 SKILL_SRC ?= .opencode/skills/$(SKILL_NAME)
 SKILL_TARGET ?=
 SKILL_DIR ?=
@@ -204,7 +204,7 @@ clean: ## Remove build output
 	rm -rf "$(BIN_DIR)"
 
 help: ## Show available targets and variables
-	@awk 'BEGIN {FS = ":.*## "; printf "go-mcp-server (version %s)\n\nTargets:\n", "$(VERSION)"} \
+	@awk 'BEGIN {FS = ":.*## "; printf "goray (version %s)\n\nTargets:\n", "$(VERSION)"} \
 		/^[a-zA-Z0-9_.-]+:.*## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf '\nVariables:\n'
 	@printf '  ROOT=%s\n' '$(ROOT)'

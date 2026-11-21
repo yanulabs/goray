@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 // Sync atomically replaces ephemeral working-tree tables from an index build.

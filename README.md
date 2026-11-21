@@ -1,4 +1,4 @@
-# go-mcp-server
+# goray
 
 An MCP stdio server that builds a semantic index of a Go module with
 `go/packages` and `go/types`, then exposes architecture, symbol, call-graph,
@@ -13,20 +13,21 @@ them deterministically in SQLite.
 ```sh
 make install
 make install-skill   # optional: install the OpenCode skill globally
-go-mcp-server -version
+goray -version
 ```
 
 `make install` uses `GOBIN` (or `GOPATH/bin`) and embeds the version from
 `git describe`. Alternatively:
 
 ```sh
-go install github.com/yanulabs/go-mcp-server/cmd/go-mcp-server@latest
+go install github.com/yanulabs/goray/cmd/goray@latest
 ```
 
 Or build a local binary:
 
 ```sh
-make build          # bin/go-mcp-server
+make build                    # bin/goray
+go build -o goray ./cmd/goray
 ```
 
 ## Connect an MCP client
@@ -34,7 +35,7 @@ make build          # bin/go-mcp-server
 OpenCode, project-local:
 
 ```sh
-opencode mcp add go-mcp-server -- go-mcp-server .
+opencode mcp add goray -- goray .
 opencode mcp list
 ```
 
@@ -43,8 +44,8 @@ Generic MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "go-mcp-server": {
-      "command": "go-mcp-server",
+    "goray": {
+      "command": "goray",
       "args": ["/absolute/path/to/go/project"]
     }
   }
@@ -55,9 +56,9 @@ The index builds in the background. File changes are watched automatically and
 coalesced into debounced rebuilds. Queries wait briefly for an active rebuild;
 otherwise they use the last good snapshot and report `index_state`.
 
-The project skill in `.opencode/skills/go-mcp-server/SKILL.md` is discovered
+The project skill in `.opencode/skills/goray/SKILL.md` is discovered
 automatically by OpenCode and describes the recommended navigation and summary
-workflow. Mention `@go-mcp-server` to load it explicitly, or let OpenCode
+workflow. Mention `@goray` to load it explicitly, or let OpenCode
 auto-invoke it.
 
 ### CLI flags
@@ -68,11 +69,11 @@ auto-invoke it.
 | `-export-dot <file>` | Write the module graph as Graphviz DOT and exit |
 | `-export-md <file>` | Write the architecture map as Markdown and exit |
 | `-export-html <file>` | Write the self-contained interactive HTML report and exit |
-| `-db <path>` | SQLite path; `:memory:` for ephemeral runs (or `GO_MCP_DB`) |
+| `-db <path>` | SQLite path; `:memory:` for ephemeral runs (or `GORAY_DB`) |
 | `-db-info` | Print cache path, table counts, staleness counts, and recent summaries, then exit |
 | `-db-path` | Print the effective SQLite path and exit; does not load packages or create the DB |
 | `-no-watch` | Disable automatic file watching/reindexing |
-| `-log-level off\|error\|info` | stderr log level (default `info`, or `GO_MCP_LOG_LEVEL`) |
+| `-log-level off\|error\|info` | stderr log level (default `info`, or `GORAY_LOG_LEVEL`) |
 
 The optional positional path defaults to `.`. Every mode resolves it to the
 nearest ancestor directory containing `go.mod`; the path may also point at a
@@ -80,16 +81,16 @@ file inside the module. This lets you invoke the server from any subdirectory,
 and nested modules resolve to their own root.
 
 The default database lives outside the repository at
-`<UserCacheDir>/go-mcp-server/<repo-slug>-<sha256(canonicalRoot)[:12]>.db`.
+`<UserCacheDir>/goray/<repo-slug>-<sha256(canonicalRoot)[:12]>.db`.
 The slug comes from the module directory name: lowercase, restricted to
 `a-z0-9._-`, up to 32 characters. Symlinks are resolved before hashing, so the
-same checkout has one default DB. `-db` and `GO_MCP_DB` still take precedence.
+same checkout has one default DB. `-db` and `GORAY_DB` still take precedence.
 
 Print the effective DB path without building an index or touching the database:
 
 ```sh
-go-mcp-server -db-path
-sqlite3 "$(go-mcp-server -db-path)"
+goray -db-path
+sqlite3 "$(goray -db-path)"
 ```
 
 Module-level metrics use `modules/<name>` when present; otherwise standard
@@ -114,7 +115,7 @@ first path segment form the module group. Root packages are grouped as `root`.
 Generate a single-file offline HTML report (static analysis plus cached summaries):
 
 ```sh
-go-mcp-server -export-html report.html /path/to/go/project
+goray -export-html report.html /path/to/go/project
 ```
 
 The report includes an executive scorecard, deterministic layered dependency graph,
@@ -125,7 +126,7 @@ is required, and it remains useful with an empty summary cache.
 Inspect the populated cache:
 
 ```sh
-go-mcp-server -db-info /path/to/go/project
+goray -db-info /path/to/go/project
 ```
 
 ## Tools
@@ -156,7 +157,7 @@ go-mcp-server -db-info /path/to/go/project
 
 | Target | Meaning |
 |---|---|
-| `make build` | Build `bin/go-mcp-server` with version metadata |
+| `make build` | Build `bin/goray` with version metadata |
 | `make install` | Install to `GOBIN`/`GOPATH/bin` |
 | `make install-skill` | Install the OpenCode skill under `~/.config/opencode/skills` |
 | `make test` | Run tests |
@@ -171,7 +172,7 @@ go-mcp-server -db-info /path/to/go/project
 ## Layout
 
 ```
-cmd/go-mcp-server             CLI wiring and versioning
+cmd/goray                     CLI wiring and versioning
 internal/index                semantic index, hashing, summary metadata, store
 internal/cache                SQLite schema, working state, summaries, GC
 internal/watch                fsnotify-based project watcher
@@ -179,7 +180,7 @@ internal/mcp                  JSON-RPC 2.0 stdio transport and tool protocol
 internal/tools                tool registry and handlers
 internal/report               HTML report view-model assembler
 internal/render               renderer registry + embedded HTML/CSS/JS report
-.opencode/skills/go-mcp-server  provider-agnostic usage skill for OpenCode
+.opencode/skills/goray        provider-agnostic usage skill for OpenCode
 ```
 
 ## Development

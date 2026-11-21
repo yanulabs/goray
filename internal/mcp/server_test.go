@@ -43,7 +43,7 @@ func TestServe(t *testing.T) {
 		t.Fatalf("protocol = %v", init["protocolVersion"])
 	}
 	serverInfo := init["serverInfo"].(map[string]any)
-	if serverInfo["version"] != "v9.9.9" || serverInfo["name"] != "go-mcp-server" {
+	if serverInfo["version"] != "v9.9.9" || serverInfo["name"] != "goray" {
 		t.Fatalf("serverInfo = %v", serverInfo)
 	}
 

@@ -61,6 +61,12 @@ func TestRenderHTMLSelfContainedAndEmptySummaries(t *testing.T) {
 	if !strings.Contains(html, "No cached LLM summary") {
 		t.Fatal("empty-summary fallback is missing")
 	}
+	if !strings.Contains(html, "goray · Architecture Report") {
+		t.Fatal("goray report title is missing")
+	}
+	if !strings.Contains(html, `localStorage.getItem("goray-theme")`) {
+		t.Fatal("goray theme storage key is missing")
+	}
 }
 
 func TestRenderHTMLEscapesScriptBreakout(t *testing.T) {

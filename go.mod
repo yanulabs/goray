@@ -1,4 +1,4 @@
-module github.com/yanulabs/go-mcp-server
+module github.com/yanulabs/goray
 
 go 1.26.0
 

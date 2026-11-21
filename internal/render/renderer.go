@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 // Renderer is the base capability shared by every output format.

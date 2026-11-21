@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/yanulabs/go-mcp-server/internal/cache"
-	"github.com/yanulabs/go-mcp-server/internal/index"
-	"github.com/yanulabs/go-mcp-server/internal/mcp"
-	"github.com/yanulabs/go-mcp-server/internal/render"
+	"github.com/yanulabs/goray/internal/cache"
+	"github.com/yanulabs/goray/internal/index"
+	"github.com/yanulabs/goray/internal/mcp"
+	"github.com/yanulabs/goray/internal/render"
 )
 
 func stringSliceArg(args map[string]any, key string) ([]string, error) {

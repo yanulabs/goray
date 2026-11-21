@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 type mermaid struct{ baseRenderer }

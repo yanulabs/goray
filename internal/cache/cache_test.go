@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 const testModule = "example.com/cachetest"
@@ -462,7 +462,7 @@ func Leaf() int {
 func TestResolvePath(t *testing.T) {
 	project := t.TempDir()
 	writeCacheModule(t, project, map[string]string{})
-	t.Setenv("GO_MCP_DB", "")
+	t.Setenv("GORAY_DB", "")
 	path, err := ResolvePath(project, "")
 	if err != nil {
 		t.Fatal(err)
@@ -471,7 +471,7 @@ func TestResolvePath(t *testing.T) {
 		t.Fatalf("default path = %q", path)
 	}
 
-	t.Setenv("GO_MCP_DB", ":memory:")
+	t.Setenv("GORAY_DB", ":memory:")
 	if path, err := ResolvePath(project, ""); err != nil || path != ":memory:" {
 		t.Fatalf("env path = %q (%v)", path, err)
 	}
@@ -853,6 +853,9 @@ func TestDefaultPathReadableName(t *testing.T) {
 	hashPart := strings.TrimSuffix(name[cut+1:], ".db")
 	if len(hashPart) != 12 || !isLowerHex(hashPart) {
 		t.Fatalf("hash suffix = %q", hashPart)
+	}
+	if filepath.Base(filepath.Dir(path)) != "goray" {
+		t.Fatalf("cache directory = %q", filepath.Dir(path))
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("DefaultPath created a file: %v", err)

@@ -12,13 +12,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/yanulabs/go-mcp-server/internal/cache"
-	"github.com/yanulabs/go-mcp-server/internal/index"
-	"github.com/yanulabs/go-mcp-server/internal/mcp"
-	"github.com/yanulabs/go-mcp-server/internal/render"
-	"github.com/yanulabs/go-mcp-server/internal/report"
-	"github.com/yanulabs/go-mcp-server/internal/tools"
-	"github.com/yanulabs/go-mcp-server/internal/watch"
+	"github.com/yanulabs/goray/internal/cache"
+	"github.com/yanulabs/goray/internal/index"
+	"github.com/yanulabs/goray/internal/mcp"
+	"github.com/yanulabs/goray/internal/render"
+	"github.com/yanulabs/goray/internal/report"
+	"github.com/yanulabs/goray/internal/tools"
+	"github.com/yanulabs/goray/internal/watch"
 )
 
 var version = "dev"
@@ -44,16 +44,16 @@ func run() error {
 	exportDOT := flag.String("export-dot", "", "export the module graph as Graphviz DOT and exit")
 	exportMD := flag.String("export-md", "", "export the architecture map as Markdown and exit")
 	exportHTML := flag.String("export-html", "", "export a self-contained interactive HTML report and exit")
-	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GO_MCP_DB)")
+	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GORAY_DB)")
 	dbInfo := flag.Bool("db-info", false, "print populated cache statistics and exit")
 	dbPathOnly := flag.Bool("db-path", false, "print the resolved SQLite cache path and exit")
 	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
 	showVersion := flag.Bool("version", false, "print version and exit")
-	logLevelFlag := flag.String("log-level", envOr("GO_MCP_LOG_LEVEL", "info"), "log level: off|error|info")
+	logLevelFlag := flag.String("log-level", envOr("GORAY_LOG_LEVEL", "info"), "log level: off|error|info")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("go-mcp-server %s\n", buildVersion())
+		fmt.Printf("goray %s\n", buildVersion())
 		return nil
 	}
 
@@ -228,7 +228,7 @@ func writeAtomic(path string, data []byte) (err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".go-mcp-report-*.html")
+	tmp, err := os.CreateTemp(dir, ".goray-report-*.html")
 	if err != nil {
 		return err
 	}

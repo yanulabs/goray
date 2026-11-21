@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yanulabs/go-mcp-server/internal/cache"
-	"github.com/yanulabs/go-mcp-server/internal/index"
-	"github.com/yanulabs/go-mcp-server/internal/render"
+	"github.com/yanulabs/goray/internal/cache"
+	"github.com/yanulabs/goray/internal/index"
+	"github.com/yanulabs/goray/internal/render"
 )
 
 // Build combines an immutable index snapshot with cached summaries.

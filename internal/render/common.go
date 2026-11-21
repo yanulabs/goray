@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/goray/internal/index"
 )
 
 func safeID(s string) string {

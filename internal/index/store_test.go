@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yanulabs/go-mcp-server/internal/watch"
+	"github.com/yanulabs/goray/internal/watch"
 )
 
 func TestStoreAutoRebuildCoalescing(t *testing.T) {

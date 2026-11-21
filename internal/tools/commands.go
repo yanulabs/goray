@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/yanulabs/go-mcp-server/internal/mcp"
-	"github.com/yanulabs/go-mcp-server/internal/render"
+	"github.com/yanulabs/goray/internal/mcp"
+	"github.com/yanulabs/goray/internal/render"
 )
 
 const commandTimeout = 3 * time.Minute
