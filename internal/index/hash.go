@@ -104,31 +104,17 @@ func (b *builder) canonicalType(t types.Type) string {
 }
 
 func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, seen map[types.Type]bool) {
-	switch typ := t.(type) {
-	case nil:
+	if t == nil {
 		sb.WriteString("<nil>")
+		return
+	}
+	switch typ := t.(type) {
 	case *types.Basic:
 		sb.WriteString(typ.Name())
 	case *types.Named:
-		sb.WriteString(typeObjectName(typ.Obj()))
-		b.writeTypeArgs(sb, typ.TypeArgs(), seen)
-		if obj := typ.Obj(); obj != nil && obj.Pkg() != nil && b.inModule(obj.Pkg().Path()) && !seen[typ] {
-			seen[typ] = true
-			sb.WriteString("{")
-			b.writeCanonicalType(sb, typ.Underlying(), seen)
-			sb.WriteString("}")
-			delete(seen, typ)
-		}
+		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), typ, seen)
 	case *types.Alias:
-		sb.WriteString(typeObjectName(typ.Obj()))
-		b.writeTypeArgs(sb, typ.TypeArgs(), seen)
-		if obj := typ.Obj(); obj != nil && obj.Pkg() != nil && b.inModule(obj.Pkg().Path()) && !seen[typ] {
-			seen[typ] = true
-			sb.WriteString("{")
-			b.writeCanonicalType(sb, typ.Underlying(), seen)
-			sb.WriteString("}")
-			delete(seen, typ)
-		}
+		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), typ, seen)
 	case *types.Pointer:
 		sb.WriteString("*")
 		b.writeCanonicalType(sb, typ.Elem(), seen)
@@ -144,101 +130,158 @@ func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, seen map
 		sb.WriteString("]")
 		b.writeCanonicalType(sb, typ.Elem(), seen)
 	case *types.Chan:
-		switch typ.Dir() {
-		case types.SendOnly:
-			sb.WriteString("chan<- ")
-		case types.RecvOnly:
-			sb.WriteString("<-chan ")
-		default:
-			sb.WriteString("chan ")
-		}
-		b.writeCanonicalType(sb, typ.Elem(), seen)
+		b.writeChanType(sb, typ, seen)
+	default:
+		b.writeCanonicalComposite(sb, t, seen)
+	}
+}
+
+func (b *builder) writeCanonicalComposite(sb *strings.Builder, t types.Type, seen map[types.Type]bool) {
+	switch typ := t.(type) {
 	case *types.Signature:
-		if typ.Recv() != nil {
-			sb.WriteString("recv(")
-			b.writeCanonicalType(sb, typ.Recv().Type(), seen)
-			sb.WriteString(") ")
-		}
-		if params := typ.TypeParams(); params != nil && params.Len() > 0 {
-			sb.WriteString("[")
-			for i := 0; i < params.Len(); i++ {
-				if i > 0 {
-					sb.WriteString(", ")
-				}
-				b.writeCanonicalType(sb, params.At(i), seen)
-			}
-			sb.WriteString("]")
-		}
-		sb.WriteString("func(")
-		b.writeParams(sb, typ.Params(), typ.Variadic(), seen)
-		sb.WriteString(") (")
-		b.writeTuple(sb, typ.Results(), seen)
-		sb.WriteString(")")
+		b.writeSignatureType(sb, typ, seen)
 	case *types.Struct:
-		sb.WriteString("struct{")
-		for i := 0; i < typ.NumFields(); i++ {
-			if i > 0 {
-				sb.WriteString("; ")
-			}
-			field := typ.Field(i)
-			if field.Embedded() {
-				sb.WriteString("embedded ")
-			} else {
-				sb.WriteString(field.Name())
-				sb.WriteString(" ")
-			}
-			b.writeCanonicalType(sb, field.Type(), seen)
-			if tag := typ.Tag(i); tag != "" {
-				fmt.Fprintf(sb, " %q", tag)
-			}
-		}
-		sb.WriteString("}")
+		b.writeStructType(sb, typ, seen)
 	case *types.Interface:
-		sb.WriteString("interface{")
-		for i := 0; i < typ.NumMethods(); i++ {
-			if i > 0 {
-				sb.WriteString("; ")
-			}
-			method := typ.Method(i)
-			sb.WriteString(method.Name())
-			b.writeCanonicalType(sb, method.Type(), seen)
-		}
-		for i := 0; i < typ.NumEmbeddeds(); i++ {
-			if typ.NumMethods() > 0 || i > 0 {
-				sb.WriteString("; ")
-			}
-			b.writeCanonicalType(sb, typ.EmbeddedType(i), seen)
-		}
-		sb.WriteString("}")
+		b.writeInterfaceType(sb, typ, seen)
 	case *types.Tuple:
 		b.writeTuple(sb, typ, seen)
 	case *types.TypeParam:
-		sb.WriteString(typ.Obj().Name())
-		if typ.Constraint() != nil && !seen[typ] {
-			seen[typ] = true
-			sb.WriteString(" ")
-			b.writeCanonicalType(sb, typ.Constraint(), seen)
-			delete(seen, typ)
-		}
+		b.writeTypeParamType(sb, typ, seen)
 	case *types.Union:
-		for i := 0; i < typ.Len(); i++ {
-			if i > 0 {
-				sb.WriteString("|")
-			}
-			term := typ.Term(i)
-			if term.Tilde() {
-				sb.WriteString("~")
-			}
-			b.writeCanonicalType(sb, term.Type(), seen)
-		}
+		b.writeUnionType(sb, typ, seen)
 	default:
-		sb.WriteString(types.TypeString(t, func(pkg *types.Package) string {
-			if pkg == nil {
-				return ""
-			}
-			return pkg.Path()
-		}))
+		b.writeFallbackType(sb, t)
 	}
+}
+
+func (b *builder) writeNamedType(sb *strings.Builder, obj *types.TypeName, args *types.TypeList, underlying types.Type, key types.Type, seen map[types.Type]bool) {
+	sb.WriteString(typeObjectName(obj))
+	b.writeTypeArgs(sb, args, seen)
+	if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) || seen[key] {
+		return
+	}
+	seen[key] = true
+	sb.WriteString("{")
+	b.writeCanonicalType(sb, underlying, seen)
+	sb.WriteString("}")
+	delete(seen, key)
+}
+
+func (b *builder) writeChanType(sb *strings.Builder, typ *types.Chan, seen map[types.Type]bool) {
+	switch typ.Dir() {
+	case types.SendOnly:
+		sb.WriteString("chan<- ")
+	case types.RecvOnly:
+		sb.WriteString("<-chan ")
+	default:
+		sb.WriteString("chan ")
+	}
+	b.writeCanonicalType(sb, typ.Elem(), seen)
+}
+
+func (b *builder) writeSignatureType(sb *strings.Builder, typ *types.Signature, seen map[types.Type]bool) {
+	if typ.Recv() != nil {
+		sb.WriteString("recv(")
+		b.writeCanonicalType(sb, typ.Recv().Type(), seen)
+		sb.WriteString(") ")
+	}
+	b.writeSignatureTypeParams(sb, typ.TypeParams(), seen)
+	sb.WriteString("func(")
+	b.writeParams(sb, typ.Params(), typ.Variadic(), seen)
+	sb.WriteString(") (")
+	b.writeTuple(sb, typ.Results(), seen)
+	sb.WriteString(")")
+}
+
+func (b *builder) writeSignatureTypeParams(sb *strings.Builder, params *types.TypeParamList, seen map[types.Type]bool) {
+	if params == nil || params.Len() == 0 {
+		return
+	}
+	sb.WriteString("[")
+	for i := 0; i < params.Len(); i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		b.writeCanonicalType(sb, params.At(i), seen)
+	}
+	sb.WriteString("]")
+}
+
+func (b *builder) writeStructType(sb *strings.Builder, typ *types.Struct, seen map[types.Type]bool) {
+	sb.WriteString("struct{")
+	for i := 0; i < typ.NumFields(); i++ {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		b.writeStructField(sb, typ, i, seen)
+	}
+	sb.WriteString("}")
+}
+
+func (b *builder) writeStructField(sb *strings.Builder, typ *types.Struct, i int, seen map[types.Type]bool) {
+	field := typ.Field(i)
+	if field.Embedded() {
+		sb.WriteString("embedded ")
+	} else {
+		sb.WriteString(field.Name())
+		sb.WriteString(" ")
+	}
+	b.writeCanonicalType(sb, field.Type(), seen)
+	if tag := typ.Tag(i); tag != "" {
+		fmt.Fprintf(sb, " %q", tag)
+	}
+}
+
+func (b *builder) writeInterfaceType(sb *strings.Builder, typ *types.Interface, seen map[types.Type]bool) {
+	sb.WriteString("interface{")
+	for i := 0; i < typ.NumMethods(); i++ {
+		if i > 0 {
+			sb.WriteString("; ")
+		}
+		method := typ.Method(i)
+		sb.WriteString(method.Name())
+		b.writeCanonicalType(sb, method.Type(), seen)
+	}
+	for i := 0; i < typ.NumEmbeddeds(); i++ {
+		if typ.NumMethods() > 0 || i > 0 {
+			sb.WriteString("; ")
+		}
+		b.writeCanonicalType(sb, typ.EmbeddedType(i), seen)
+	}
+	sb.WriteString("}")
+}
+
+func (b *builder) writeTypeParamType(sb *strings.Builder, typ *types.TypeParam, seen map[types.Type]bool) {
+	sb.WriteString(typ.Obj().Name())
+	if typ.Constraint() != nil && !seen[typ] {
+		seen[typ] = true
+		sb.WriteString(" ")
+		b.writeCanonicalType(sb, typ.Constraint(), seen)
+		delete(seen, typ)
+	}
+}
+
+func (b *builder) writeUnionType(sb *strings.Builder, typ *types.Union, seen map[types.Type]bool) {
+	for i := 0; i < typ.Len(); i++ {
+		if i > 0 {
+			sb.WriteString("|")
+		}
+		term := typ.Term(i)
+		if term.Tilde() {
+			sb.WriteString("~")
+		}
+		b.writeCanonicalType(sb, term.Type(), seen)
+	}
+}
+
+func (b *builder) writeFallbackType(sb *strings.Builder, t types.Type) {
+	sb.WriteString(types.TypeString(t, func(pkg *types.Package) string {
+		if pkg == nil {
+			return ""
+		}
+		return pkg.Path()
+	}))
 }
 
 func (b *builder) writeTypeArgs(sb *strings.Builder, args *types.TypeList, seen map[types.Type]bool) {
