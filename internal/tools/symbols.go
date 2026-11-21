@@ -9,6 +9,7 @@ import (
 
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
+	"github.com/yanulabs/go-mcp-server/internal/render"
 )
 
 func (t *toolset) lookupSymbol() mcp.Tool {
@@ -30,7 +31,7 @@ func (t *toolset) lookupSymbol() mcp.Tool {
 			for _, sym := range symbols {
 				out = append(out, hit{Symbol: sym, XRefCount: len(idx.XRefs[sym.ID])})
 			}
-			return toJSON(out), false
+			return render.JSON(out), false
 		}),
 	}
 }
@@ -73,7 +74,7 @@ func (t *toolset) apiSurface() mcp.Tool {
 			for kind := range grouped {
 				sort.Slice(grouped[kind], func(i, j int) bool { return grouped[kind][i].Name < grouped[kind][j].Name })
 			}
-			return toJSON(map[string]any{
+			return render.JSON(map[string]any{
 				"package":  pkg,
 				"exported": idx.Packages[pkg].Exported,
 				"symbols":  grouped,
@@ -103,7 +104,7 @@ func (t *toolset) references() mcp.Tool {
 				refs = refs[:limit]
 				truncated = true
 			}
-			return toJSON(map[string]any{
+			return render.JSON(map[string]any{
 				"symbol":    sym,
 				"total":     len(all),
 				"truncated": truncated,
@@ -129,7 +130,7 @@ func (t *toolset) callGraph() mcp.Tool {
 				return err.Error(), true
 			}
 			graph := idx.CallGraph(sym.ID, strArg(args, "direction", "both"), intArg(args, "depth", 2), intArg(args, "limit", 80))
-			return toJSON(graph), false
+			return render.JSON(graph), false
 		}),
 	}
 }
@@ -147,12 +148,12 @@ func (t *toolset) implementations() mcp.Tool {
 				return err.Error(), true
 			}
 			if sym.Kind == "interface" {
-				return toJSON(map[string]any{
+				return render.JSON(map[string]any{
 					"interface":       sym,
 					"implementations": nonNil(idx.IfaceImpls[sym.ID]),
 				}), false
 			}
-			return toJSON(map[string]any{
+			return render.JSON(map[string]any{
 				"type":       sym,
 				"interfaces": nonNil(idx.TypeImpls[sym.ID]),
 			}), false
@@ -178,7 +179,7 @@ func (t *toolset) deadCode() mcp.Tool {
 			if limit := intArg(args, "limit", 100); len(dead) > limit {
 				dead = dead[:limit]
 			}
-			return toJSON(map[string]any{
+			return render.JSON(map[string]any{
 				"total_candidates": total,
 				"candidates":       dead,
 			}), false

@@ -44,9 +44,9 @@ first path segment form the module group. Root packages are grouped as `root`.
 | Tool | Purpose |
 |---|---|
 | `project_info` | Index status, module path, counts, load errors |
-| `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files |
-| `get_module_overview` | One module's packages, deps, large files, exported API |
-| `get_dependency_graph` | Package BFS graph, fan-in/fan-out ranking |
+| `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files (Markdown/JSON/DOT/Mermaid) |
+| `get_module_overview` | One module's packages, deps, large files, exported API (Markdown/JSON) |
+| `get_dependency_graph` | Package BFS graph, fan-in/fan-out ranking (JSON/Mermaid/DOT) |
 | `lookup_symbol` | Exact/fuzzy symbol lookup |
 | `get_api_surface` | Exported symbols of a package or module root |
 | `get_references` | Type-checked references with caller and `file:line` |
@@ -66,7 +66,7 @@ cmd/go-mcp-server     CLI wiring
 internal/index        semantic index, queries, graphs, impact, snapshot store
 internal/mcp          JSON-RPC 2.0 stdio transport and tool protocol
 internal/tools        tool registry and handlers
-internal/render       Markdown, Mermaid, and DOT output
+internal/render       renderer registry: Markdown, JSON, Mermaid, DOT
 ```
 
 ## Development

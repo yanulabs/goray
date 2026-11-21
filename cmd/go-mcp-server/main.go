@@ -40,9 +40,10 @@ func run() error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
+	formats := render.NewRegistry()
 
 	if *exportDOT != "" || *exportMD != "" {
-		return export(root, *exportDOT, *exportMD, logger)
+		return export(root, *exportDOT, *exportMD, logger, formats)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -51,23 +52,31 @@ func run() error {
 	store := index.NewStore(root, logger)
 	store.Start()
 
-	server := mcp.NewServer(os.Stdin, os.Stdout, tools.New(store))
+	server := mcp.NewServer(os.Stdin, os.Stdout, tools.New(store, formats))
 	return server.Serve(ctx)
 }
 
-func export(root, dotPath, mdPath string, logger *slog.Logger) error {
+func export(root, dotPath, mdPath string, logger *slog.Logger, formats *render.Registry) error {
 	idx, err := index.Build(root)
 	if err != nil {
 		return err
 	}
 	if dotPath != "" {
-		if err := os.WriteFile(dotPath, []byte(render.CodebaseMapDOT(idx)), 0o644); err != nil {
+		content, ok := formats.RenderCodebaseMap("dot", idx)
+		if !ok {
+			return fmt.Errorf("dot renderer is not registered")
+		}
+		if err := os.WriteFile(dotPath, []byte(content), 0o644); err != nil {
 			return err
 		}
 		logger.Info("wrote DOT", "path", dotPath, "modules", len(idx.Modules))
 	}
 	if mdPath != "" {
-		if err := os.WriteFile(mdPath, []byte(render.CodebaseMapMarkdown(idx)), 0o644); err != nil {
+		content, ok := formats.RenderCodebaseMap("markdown", idx)
+		if !ok {
+			return fmt.Errorf("markdown renderer is not registered")
+		}
+		if err := os.WriteFile(mdPath, []byte(content), 0o644); err != nil {
 			return err
 		}
 		logger.Info("wrote Markdown", "path", mdPath, "modules", len(idx.Modules))

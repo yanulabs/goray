@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/yanulabs/go-mcp-server/internal/index"
+	"github.com/yanulabs/go-mcp-server/internal/render"
 )
 
 type fakeIndexer struct{}
@@ -17,7 +18,7 @@ func (fakeIndexer) Root() string                               { return "." }
 func (fakeIndexer) Rebuild() error                             { return nil }
 
 func TestRegistry(t *testing.T) {
-	list := New(fakeIndexer{})
+	list := New(fakeIndexer{}, render.NewRegistry())
 	if len(list) != 15 {
 		t.Fatalf("tools = %d, want 15", len(list))
 	}

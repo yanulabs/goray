@@ -5,6 +5,7 @@ import (
 
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
+	"github.com/yanulabs/go-mcp-server/internal/render"
 )
 
 func (t *toolset) impactAnalysis() mcp.Tool {
@@ -27,13 +28,13 @@ func (t *toolset) impactAnalysis() mcp.Tool {
 				if err != nil {
 					return err.Error(), true
 				}
-				return toJSON(idx.ImpactBySymbol(sym, depth)), false
+				return render.JSON(idx.ImpactBySymbol(sym, depth)), false
 			case pkgArg != "":
 				pkg, ok := idx.ResolvePackage(pkgArg)
 				if !ok {
 					return "package or module not found: " + pkgArg, true
 				}
-				return toJSON(idx.ImpactByPackage(pkg, depth)), false
+				return render.JSON(idx.ImpactByPackage(pkg, depth)), false
 			default:
 				return "specify 'symbol' or 'package'", true
 			}

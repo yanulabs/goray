@@ -3,10 +3,10 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
+	"github.com/yanulabs/go-mcp-server/internal/render"
 )
 
 // Indexer is the index capability required by the tools.
@@ -18,13 +18,17 @@ type Indexer interface {
 }
 
 type toolset struct {
-	src   Indexer
-	count int
+	src     Indexer
+	formats *render.Registry
+	count   int
 }
 
 // New returns all tools in stable order.
-func New(src Indexer) []mcp.Tool {
-	t := &toolset{src: src}
+func New(src Indexer, formats *render.Registry) []mcp.Tool {
+	if formats == nil {
+		formats = render.NewRegistry()
+	}
+	t := &toolset{src: src, formats: formats}
 	list := []mcp.Tool{
 		t.projectInfo(),
 		t.codebaseMap(),
@@ -66,7 +70,7 @@ func (t *toolset) projectInfo() mcp.Tool {
 				index.Status
 				Tools int `json:"tools"`
 			}{Status: t.src.Status(), Tools: t.count}
-			return toJSON(info), false
+			return render.JSON(info), false
 		},
 	}
 }
@@ -117,15 +121,6 @@ func boolArg(args map[string]any, key string, fallback bool) bool {
 		return v
 	}
 	return fallback
-}
-
-func toJSON(v any) string {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		fallback, _ := json.Marshal(map[string]string{"error": err.Error()})
-		return string(fallback)
-	}
-	return string(data)
 }
 
 func nonNil[T any](items []T) []T {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
+	"github.com/yanulabs/go-mcp-server/internal/render"
 )
 
 const commandTimeout = 3 * time.Minute
@@ -60,7 +61,7 @@ func (t *toolset) reindex() mcp.Tool {
 				return "reindex failed: " + err.Error(), true
 			}
 			status := t.src.Status()
-			return toJSON(map[string]any{
+			return render.JSON(map[string]any{
 				"status":   "ok",
 				"packages": status.Packages,
 				"symbols":  status.Symbols,
