@@ -57,7 +57,10 @@ first path segment form the module group. Root packages are grouped as `root`.
 - Two-tier staleness: `synced`, `soft_stale`, `hard_stale`, `missing`, and
   `not_eligible`.
 - Content-addressed summaries survive branch switches and function moves.
+- Generated and `_test.go` symbols stay indexed but are never summary-eligible.
+- Parse/type errors keep the last healthy snapshot and report load details.
 - Structured JSON validation for `func`/`method` and architecture kinds.
+- Batched summary context retrieval with per-call character budgets.
 - LRU access tracking with batched flushes and periodic garbage collection.
 
 ## Tools
@@ -77,7 +80,7 @@ first path segment form the module group. Root packages are grouped as `root`.
 | `get_dead_code` | Unreferenced functions/methods |
 | `get_function_body` | Source, LOC, and cyclomatic complexity |
 | `list_stale_summaries` | Eligible symbols needing summaries, ordered bottom-up |
-| `get_summary_context` | Schema, hashes, staleness, source, and dependency context |
+| `get_summary_context` | Single/batched schema, hashes, staleness, source, and dependency context (max 25) |
 | `upsert_summaries` | Validate and store summaries with optimistic hash checks |
 | `get_summary_coverage` | Coverage counts by kind and module |
 | `run_tests` | `go test -race -count=1` |

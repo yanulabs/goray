@@ -162,10 +162,16 @@ func isGenerated(name string, src []byte) bool {
 		return true
 	}
 	head := src
-	if len(head) > 512 {
-		head = head[:512]
+	if idx := bytes.Index(src, []byte("package ")); idx >= 0 {
+		head = src[:idx]
 	}
-	return bytes.Contains(head, []byte("Code generated")) && bytes.Contains(head, []byte("DO NOT EDIT"))
+	for _, line := range bytes.Split(head, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("// Code generated ")) && bytes.HasSuffix(line, []byte(" DO NOT EDIT.")) {
+			return true
+		}
+	}
+	return false
 }
 
 func countLines(src []byte) int {

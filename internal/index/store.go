@@ -24,18 +24,19 @@ const (
 
 // Status describes the indexer's current state.
 type Status struct {
-	RootDir    string `json:"root_dir"`
-	Indexing   bool   `json:"indexing"`
-	Ready      bool   `json:"ready"`
-	IndexState State  `json:"index_state"`
-	LastError  string `json:"last_err,omitempty"`
-	ModulePath string `json:"module_path,omitempty"`
-	Packages   int    `json:"packages,omitempty"`
-	Modules    int    `json:"modules,omitempty"`
-	Symbols    int    `json:"symbols,omitempty"`
-	XRefs      int    `json:"xrefs,omitempty"`
-	LoadErrors int    `json:"load_errors,omitempty"`
-	BuildMS    int64  `json:"build_ms,omitempty"`
+	RootDir          string   `json:"root_dir"`
+	Indexing         bool     `json:"indexing"`
+	Ready            bool     `json:"ready"`
+	IndexState       State    `json:"index_state"`
+	LastError        string   `json:"last_err,omitempty"`
+	ModulePath       string   `json:"module_path,omitempty"`
+	Packages         int      `json:"packages,omitempty"`
+	Modules          int      `json:"modules,omitempty"`
+	Symbols          int      `json:"symbols,omitempty"`
+	XRefs            int      `json:"xrefs,omitempty"`
+	LoadErrors       int      `json:"load_errors,omitempty"`
+	LoadErrorDetails []string `json:"load_error_details,omitempty"`
+	BuildMS          int64    `json:"build_ms,omitempty"`
 }
 
 // Store owns the current immutable index snapshot.
@@ -43,13 +44,14 @@ type Store struct {
 	root string
 	log  *slog.Logger
 
-	mu        sync.RWMutex
-	idx       *Index
-	err       error
-	indexing  bool
-	state     State
-	changeSeq uint64
-	stateCh   chan struct{}
+	mu         sync.RWMutex
+	idx        *Index
+	err        error
+	loadErrors []string
+	indexing   bool
+	state      State
+	changeSeq  uint64
+	stateCh    chan struct{}
 
 	ready     chan struct{}
 	readyOnce sync.Once
@@ -184,10 +186,12 @@ func (s *Store) Rebuild() error {
 	s.indexing = false
 	if err != nil {
 		s.err = err
+		s.loadErrors = loadErrorMessages(err)
 		s.setStateLocked(StateError)
 	} else {
 		s.idx = idx
 		s.err = nil
+		s.loadErrors = nil
 		if s.changeSeq != startSeq {
 			s.setStateLocked(StateDirty)
 		} else {
@@ -247,6 +251,14 @@ func (s *Store) waitSettled(ctx context.Context) error {
 	}
 }
 
+func loadErrorMessages(err error) []string {
+	var loadErr *LoadError
+	if errors.As(err, &loadErr) {
+		return append([]string{}, loadErr.Errors...)
+	}
+	return []string{err.Error()}
+}
+
 func (s *Store) setStateLocked(state State) {
 	if s.state == state {
 		return
@@ -269,13 +281,18 @@ func (s *Store) Status() Status {
 	if s.err != nil {
 		status.LastError = s.err.Error()
 	}
+	if len(s.loadErrors) > 0 {
+		status.LoadErrors = len(s.loadErrors)
+		status.LoadErrorDetails = append([]string{}, s.loadErrors...)
+	} else if s.idx != nil {
+		status.LoadErrors = len(s.idx.LoadErrors)
+	}
 	if s.idx != nil {
 		status.ModulePath = s.idx.ModulePath
 		status.Packages = len(s.idx.Packages)
 		status.Modules = len(s.idx.Modules)
 		status.Symbols = len(s.idx.Symbols)
 		status.XRefs = s.idx.TotalXRefs()
-		status.LoadErrors = len(s.idx.LoadErrors)
 		status.BuildMS = s.idx.BuildDuration.Milliseconds()
 	}
 	return status

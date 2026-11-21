@@ -3,12 +3,33 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/yanulabs/go-mcp-server/internal/cache"
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
 	"github.com/yanulabs/go-mcp-server/internal/render"
 )
+
+func stringSliceArg(args map[string]any, key string) ([]string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array of strings", key)
+	}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		text, ok := item.(string)
+		if !ok || text == "" {
+			return nil, fmt.Errorf("%s[%d] must be a non-empty string", key, i)
+		}
+		out = append(out, text)
+	}
+	return out, nil
+}
 
 func (t *toolset) enrich(ctx context.Context, sym *index.Symbol) (json.RawMessage, cache.SyncState, bool) {
 	if t.summaries == nil || sym == nil {
@@ -65,30 +86,70 @@ func (t *toolset) listStaleSummaries() mcp.Tool {
 func (t *toolset) getSummaryContext() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_summary_context",
-		Description: "One-round-trip context for producing or updating a structured summary: schema, hashes, staleness, source, and dependencies.",
+		Description: "Single or batched context for producing/updating summaries: schema, hashes, staleness, source, and dependencies (max 25, budgeted).",
 		InputSchema: object(map[string]any{
-			"symbol_id": propString("Canonical symbol ID (e.g. sym:pkg.(*Svc).Run)"),
-		}, "symbol_id"),
+			"symbol_id":  propString("Canonical symbol ID (single-symbol mode)"),
+			"symbol_ids": map[string]any{"type": "array", "maxItems": 25, "items": map[string]any{"type": "string"}, "description": "Batch canonical symbol IDs (max 25)"},
+			"max_chars":  propInt("Batch output budget in characters (default 40000)"),
+		}),
 		Run: func(ctx context.Context, args map[string]any) (string, bool) {
 			if t.summaries == nil {
 				return "summary cache is unavailable", true
-			}
-			id := strArg(args, "symbol_id", "")
-			if id == "" {
-				return "'symbol_id' must not be empty", true
 			}
 			idx, err := t.src.Wait(ctx)
 			if err != nil {
 				return err.Error(), true
 			}
-			summaryContext, err := t.summaries.SummaryContext(ctx, id, idx)
+			id := strArg(args, "symbol_id", "")
+			ids, err := stringSliceArg(args, "symbol_ids")
 			if err != nil {
 				return err.Error(), true
 			}
+			if id == "" && len(ids) == 0 {
+				return "provide 'symbol_id' or 'symbol_ids'", true
+			}
+			if id != "" {
+				summaryContext, err := t.summaries.SummaryContext(ctx, id, idx)
+				if err != nil {
+					return err.Error(), true
+				}
+				out := struct {
+					cache.SummaryContext
+					IndexState index.State `json:"index_state"`
+				}{SummaryContext: summaryContext, IndexState: t.src.Status().IndexState}
+				return render.JSON(out), false
+			}
+			if len(ids) > 25 {
+				return "symbol_ids exceeds the maximum of 25", true
+			}
+			maxChars := intArg(args, "max_chars", 40000)
+			contexts := make([]json.RawMessage, 0, len(ids))
+			truncated := make([]string, 0)
+			used := 0
+			for i, symbolID := range ids {
+				summaryContext, err := t.summaries.SummaryContext(ctx, symbolID, idx)
+				if err != nil {
+					return err.Error(), true
+				}
+				raw := json.RawMessage(render.JSON(summaryContext))
+				if len(contexts) > 0 && used+len(raw) > maxChars {
+					truncated = append(truncated, ids[i:]...)
+					break
+				}
+				contexts = append(contexts, raw)
+				used += len(raw)
+			}
 			out := struct {
-				cache.SummaryContext
-				IndexState index.State `json:"index_state"`
-			}{SummaryContext: summaryContext, IndexState: t.src.Status().IndexState}
+				PromptVersion string            `json:"prompt_version"`
+				IndexState    index.State       `json:"index_state"`
+				Contexts      []json.RawMessage `json:"contexts"`
+				TruncatedIDs  []string          `json:"truncated_ids"`
+			}{
+				PromptVersion: cache.PromptVersion,
+				IndexState:    t.src.Status().IndexState,
+				Contexts:      contexts,
+				TruncatedIDs:  truncated,
+			}
 			return render.JSON(out), false
 		},
 	}

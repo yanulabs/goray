@@ -2,11 +2,14 @@ package index
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yanulabs/go-mcp-server/internal/watch"
 )
 
 func TestStoreAutoRebuildCoalescing(t *testing.T) {
@@ -81,5 +84,80 @@ func TestStoreWaitBoundedWhileDirty(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed < 1500*time.Millisecond || elapsed > 5*time.Second {
 		t.Fatalf("dirty wait = %s", elapsed)
+	}
+}
+
+func TestWatcherBurstCoalescesAndKeepsFinalState(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/burst\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package burst\n\nfunc Base() int { return 0 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(dir, nil)
+	var builds atomic.Int32
+	store.SetBuildHook(func(*Index) error { builds.Add(1); return nil })
+	store.Start()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := store.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	store.StartAutoRebuild(ctx)
+	watcher, err := watch.New(dir, nil, store.MarkDirty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cancel()
+		_ = watcher.Close()
+		store.WaitForAuto()
+		store.WaitForBuild()
+	}()
+
+	for i := 0; i < 60; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("burst%02d.go", i))
+		body := fmt.Sprintf("package burst\n\nfunc Fn%02d() int { return %d }\n", i, i)
+		if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	var final *Index
+	for time.Now().Before(deadline) {
+		idx, err := store.Wait(ctx)
+		if err == nil {
+			if sym := idx.Symbols["example.com/burst.Fn59"]; sym != nil {
+				final = idx
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if final == nil {
+		t.Fatalf("final file not indexed; builds=%d state=%s", builds.Load(), store.State())
+	}
+	if sym := final.Symbols["example.com/burst.Fn00"]; sym == nil {
+		t.Fatal("first burst file missing")
+	}
+	if builds.Load() > 4 {
+		t.Fatalf("burst was not coalesced: %d builds", builds.Load())
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		cancel()
+		_ = watcher.Close()
+		store.WaitForAuto()
+		store.WaitForBuild()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher/store shutdown leaked")
 	}
 }

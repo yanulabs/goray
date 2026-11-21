@@ -34,6 +34,9 @@ func Build(rootDir string) (*Index, error) {
 	if len(pkgs) == 0 {
 		return nil, fmt.Errorf("no Go packages found in %s", absRoot)
 	}
+	if loadErr := packageLoadErrors(pkgs); loadErr != nil {
+		return nil, loadErr
+	}
 
 	modPath := findModulePath(absRoot, pkgs)
 	if modPath == "" {
@@ -74,6 +77,38 @@ func Build(rootDir string) (*Index, error) {
 	b.idx.BuiltAt = time.Now()
 	b.idx.BuildDuration = time.Since(start)
 	return b.idx, nil
+}
+
+// LoadError reports package parse/type errors that must not replace a healthy snapshot.
+type LoadError struct {
+	Errors []string
+}
+
+func (e *LoadError) Error() string {
+	return "package load errors:\n" + strings.Join(e.Errors, "\n")
+}
+
+func packageLoadErrors(pkgs []*packages.Package) error {
+	var messages []string
+	for _, p := range pkgs {
+		for _, loadErr := range p.Errors {
+			messages = append(messages, p.PkgPath+": "+loadErr.Error())
+		}
+		if len(p.GoFiles) == 0 {
+			continue
+		}
+		if p.Types == nil || p.TypesInfo == nil || p.Fset == nil || len(p.Syntax) == 0 {
+			messages = append(messages, p.PkgPath+": incomplete syntax or type information")
+			continue
+		}
+		if p.IllTyped || !p.Types.Complete() {
+			messages = append(messages, p.PkgPath+": type checking incomplete")
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return &LoadError{Errors: messages}
 }
 
 type builder struct {
