@@ -101,6 +101,9 @@ func DefaultPath(projectRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
 	sum := sha256.Sum256([]byte(abs))
 	base, err := os.UserCacheDir()
 	if err != nil {

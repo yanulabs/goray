@@ -102,7 +102,7 @@ func TestSyncAndCoverage(t *testing.T) {
 type OrderID int64
 
 func Leaf() OrderID {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 
@@ -181,15 +181,16 @@ func TestStalenessAndRollup(t *testing.T) {
 		"a/a.go": `package a
 
 func Leaf() OrderID {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 
 func Caller() {
-	if true { if true { if true { if true { _ = Leaf() } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { _ = Leaf() } } } } } } } } } }
 }
 `,
-		"a/types.go": "package a\ntype OrderID int64\n",
+		"a/types.go":   "package a\ntype OrderID int64\n",
+		"a/sub/sub.go": "package sub\n\nfunc Helper() {}\n",
 	}
 	c := openTestCache(t)
 	idx := buildSync(t, c, dir, files)
@@ -206,7 +207,6 @@ func Caller() {
 	}{
 		{leafID, testFuncSummary("leaf")},
 		{callerID, testFuncSummary("caller")},
-		{fileID, testArchSummary("file")},
 		{pkgID, testArchSummary("package")},
 		{modID, testArchSummary("module")},
 	} {
@@ -218,17 +218,17 @@ func Caller() {
 	files["a/a.go"] = `package a
 
 func Leaf() OrderID {
-	if false { if false { if false { if false { return 2 } } } }
+	if false { if false { if false { if false { if false { if false { if false { if false { if false { if false { return 2 } } } } } } } } } }
 	return 1
 }
 
 func Caller() {
-	if true { if true { if true { if true { _ = Leaf() } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { _ = Leaf() } } } } } } } } } }
 }
 `
 	idx = buildSync(t, c, dir, files)
 	states := map[string]SyncState{}
-	for _, id := range []string{leafID, callerID, fileID, pkgID, modID} {
+	for _, id := range []string{leafID, callerID, pkgID, modID} {
 		sc, err := c.SummaryContext(ctx, id, idx)
 		if err != nil {
 			t.Fatal(err)
@@ -246,10 +246,13 @@ func Caller() {
 	if states[callerID] != StateSynced {
 		t.Fatalf("caller body edit should not cascade: %s", states[callerID])
 	}
-	for _, id := range []string{fileID, pkgID, modID} {
+	for _, id := range []string{pkgID, modID} {
 		if states[id] != StateSoftStale {
 			t.Fatalf("%s state = %s", id, states[id])
 		}
+	}
+	if fileCtx, err := c.SummaryContext(ctx, fileID, idx); err != nil || fileCtx.SyncState != StateNotEligible {
+		t.Fatalf("file state = %+v (%v)", fileCtx.SyncState, err)
 	}
 
 	// Signature-affecting type change makes the direct caller soft stale.
@@ -257,12 +260,12 @@ func Caller() {
 	files["a/a.go"] = `package a
 
 func Leaf() OrderID {
-	if false { if false { if false { if false { return "x" } } } }
+	if false { if false { if false { if false { if false { if false { if false { if false { if false { if false { return "x" } } } } } } } } } }
 	return ""
 }
 
 func Caller() {
-	if true { if true { if true { if true { _ = Leaf() } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { _ = Leaf() } } } } } } } } } }
 }
 `
 	idx = buildSync(t, c, dir, files)
@@ -283,7 +286,7 @@ func TestUpsertValidationAndConcurrency(t *testing.T) {
 	files := map[string]string{"a/a.go": `package a
 
 func Leaf() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 `}
@@ -340,7 +343,7 @@ func TestBranchSwitchAndRenameResilience(t *testing.T) {
 	base := `package a
 
 func Standalone() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 
@@ -374,7 +377,7 @@ func TestGCAndTouch(t *testing.T) {
 	files := map[string]string{"a/a.go": `package a
 
 func Leaf() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 `}
@@ -409,7 +412,7 @@ func Leaf() int {
 	files["a/a.go"] = `package a
 
 func Leaf() int {
-	if false { if false { if false { if false { return 2 } } } }
+	if false { if false { if false { if false { if false { if false { if false { if false { if false { if false { return 2 } } } } } } } } } }
 	return 1
 }
 `
@@ -505,7 +508,7 @@ func TestSchemaPragmas(t *testing.T) {
 func TestRenameAndMoveKeepsCacheHit(t *testing.T) {
 	dir := t.TempDir()
 	body := `func Standalone() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 `
@@ -566,7 +569,7 @@ func TestLoadErrorsKeepHealthySnapshotAndCache(t *testing.T) {
 	files := map[string]string{"a/a.go": `package a
 
 func Leaf() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 `}
@@ -633,7 +636,7 @@ func Leaf() int {
 func TestGeneratedAndTestFilesExcludedFromStaleAndCoverage(t *testing.T) {
 	dir := t.TempDir()
 	big := `func %s() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 `
@@ -675,12 +678,12 @@ func TestSignatureChangeSoftStalesCaller(t *testing.T) {
 	files := map[string]string{"a/a.go": `package a
 
 func Leaf() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 
 func Caller() {
-	if true { if true { if true { if true { _ = Leaf() } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { _ = Leaf() } } } } } } } } } }
 }
 `}
 	c := openTestCache(t)
@@ -697,12 +700,12 @@ func Caller() {
 	files["a/a.go"] = `package a
 
 func Leaf() string {
-	if true { if true { if true { if true { return "x" } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return "x" } } } } } } } } } }
 	return ""
 }
 
 func Caller() {
-	if true { if true { if true { if true { _ = Leaf() } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { _ = Leaf() } } } } } } } } } }
 }
 `
 	idx = buildSync(t, c, dir, files)
@@ -732,7 +735,7 @@ func TestCrossFileNamedTypeEditInvalidatesPay(t *testing.T) {
 		"a/pay.go": `package a
 
 func Pay(id OrderID) {
-	if true { if true { if true { if true { _ = id } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { _ = id } } } } } } } } } }
 }
 `,
 	}
@@ -771,7 +774,7 @@ func TestStats(t *testing.T) {
 	files := map[string]string{"a/a.go": `package a
 
 func Leaf() int {
-	if true { if true { if true { if true { return 1 } } } }
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
 	return 0
 }
 `}
@@ -796,5 +799,102 @@ func Leaf() int {
 	}
 	if stats.CachedSummariesByKind["func"] != 1 {
 		t.Fatalf("cached by kind = %+v", stats.CachedSummariesByKind)
+	}
+}
+
+func TestDefaultPathResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	realPath, err := DefaultPath(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkPath, err := DefaultPath(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if realPath != linkPath {
+		t.Fatalf("symlink path differs: %s != %s", realPath, linkPath)
+	}
+	if _, err := DefaultPath(filepath.Join(root, "not-created-yet")); err != nil {
+		t.Fatalf("non-existent path should fall back cleanly: %v", err)
+	}
+}
+
+func TestEditingTestFileKeepsPackageSynced(t *testing.T) {
+	dir := t.TempDir()
+	big := "func Leaf() int {\n\tif true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }\n\treturn 0\n}\n"
+	files := map[string]string{
+		"a/a.go":      "package a\n\n" + big,
+		"a/a_test.go": "package a\n\nfunc TestHelper() int { return 1 }\n",
+	}
+	c := openTestCache(t)
+	idx := buildSync(t, c, dir, files)
+	ctx := context.Background()
+	pkgID := "pkg:" + testModule + "/a"
+	before := summaryOfID(t, idx, pkgID)
+	if result := upsertSummary(t, c, idx, pkgID, testArchSummary("package")); result.Status != "updated" {
+		t.Fatalf("%+v", result)
+	}
+
+	files["a/a_test.go"] = "package a\n\nfunc TestHelper() int { return 2 }\n\nfunc AnotherHelper() {}\n"
+	idx = buildSync(t, c, dir, files)
+	after := summaryOfID(t, idx, pkgID)
+	if after.ContentHash != before.ContentHash {
+		t.Fatal("test edit changed production package content hash")
+	}
+	state, err := c.StateOf(ctx, pkgID)
+	if err != nil || state != StateSynced {
+		t.Fatalf("package state = %s (%v)", state, err)
+	}
+}
+
+func TestTestFileLoadErrorsDoNotAbortProduction(t *testing.T) {
+	dir := t.TempDir()
+	big := "func Leaf() int {\n\tif true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }\n\treturn 0\n}\n"
+	files := map[string]string{
+		"a/a.go":      "package a\n\n" + big,
+		"a/a_test.go": "package a\n\nfunc TestHelper() int { return 1 }\n",
+	}
+	writeCacheModule(t, dir, files)
+	c := openTestCache(t)
+	store := index.NewStore(dir, nil)
+	ctx := context.Background()
+	store.SetBuildHook(func(idx *index.Index) error { return c.Sync(ctx, idx) })
+	store.Start()
+	if _, err := store.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Break only the test package and add a production symbol at the same time.
+	files["a/a.go"] = "package a\n\n" + big + "\nfunc Added() int { return 7 }\n"
+	files["a/a_test.go"] = "package a\n\nfunc TestBroken() { missingName() }\n"
+	writeCacheModule(t, dir, files)
+	if err := store.Rebuild(); err != nil {
+		t.Fatalf("production rebuild should survive test errors: %v", err)
+	}
+	if store.State() != index.StateReady {
+		t.Fatalf("state = %s", store.State())
+	}
+	idx, err := store.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx.Symbols["example.com/cachetest/a.Added"] == nil {
+		t.Fatal("production symbol update was not published")
+	}
+	status := store.Status()
+	if status.TestLoadErrors == 0 || len(status.TestLoadErrorDetails) == 0 {
+		t.Fatalf("test load errors not reported: %+v", status)
+	}
+	if status.LoadErrors != 0 {
+		t.Fatalf("production load errors should be zero: %+v", status)
 	}
 }

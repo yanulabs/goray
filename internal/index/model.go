@@ -84,11 +84,12 @@ type ModSummary struct {
 
 // Index is an immutable snapshot after Build returns.
 type Index struct {
-	RootDir       string
-	ModulePath    string
-	BuiltAt       time.Time
-	BuildDuration time.Duration
-	LoadErrors    []string
+	RootDir        string
+	ModulePath     string
+	BuiltAt        time.Time
+	BuildDuration  time.Duration
+	LoadErrors     []string
+	TestLoadErrors []string
 
 	Packages      map[string]*PkgInfo
 	RevImports    map[string][]string

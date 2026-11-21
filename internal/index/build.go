@@ -73,6 +73,9 @@ func Build(rootDir string) (*Index, error) {
 	b.matchInterfaces()
 	b.finish()
 	b.buildSummary(pkgs)
+	if hasTestFiles(b.idx.Packages) {
+		b.idx.TestLoadErrors = collectTestLoadErrors(absRoot)
+	}
 
 	b.idx.BuiltAt = time.Now()
 	b.idx.BuildDuration = time.Since(start)
@@ -124,6 +127,43 @@ type builder struct {
 
 	concrete []concreteType
 	ifaces   []ifaceType
+}
+
+func hasTestFiles(packagesByPath map[string]*PkgInfo) bool {
+	for _, pkg := range packagesByPath {
+		if pkg.TestFiles > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func collectTestLoadErrors(dir string) []string {
+	pkgs, err := packages.Load(&packages.Config{
+		Dir:   dir,
+		Tests: true,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports |
+			packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax |
+			packages.NeedTypesInfo | packages.NeedModule | packages.NeedForTest,
+	}, "./...")
+	if err != nil {
+		return []string{err.Error()}
+	}
+	seen := map[string]struct{}{}
+	for _, p := range pkgs {
+		if p.ForTest == "" {
+			continue
+		}
+		for _, loadErr := range p.Errors {
+			seen[p.PkgPath+": "+loadErr.Error()] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for message := range seen {
+		out = append(out, message)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func findModulePath(dir string, pkgs []*packages.Package) string {

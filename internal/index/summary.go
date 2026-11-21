@@ -14,13 +14,13 @@ import (
 )
 
 const (
-	funcEligibleLOC        = 25
-	funcEligibleComplexity = 5
-	funcEligibleFanIn      = 5
+	funcEligibleLOC        = 60
+	funcEligibleComplexity = 10
+	funcEligibleFanIn      = 8
 	typeEligibleMethods    = 3
-	typeEligibleFields     = 5
-	fileEligibleSymbols    = 2
-	fileEligibleLOC        = 150
+	typeEligibleFields     = 6
+	fileEligibleSymbols    = 3
+	fileEligibleLOC        = 250
 )
 
 // SummaryData is the transient semantic snapshot used by the summary cache.
@@ -109,9 +109,10 @@ type summaryFile struct {
 }
 
 type summaryPackage struct {
-	sym   *SummarySymbol
-	files []*summaryFile
-	docs  map[string]string
+	sym             *SummarySymbol
+	files           []*summaryFile
+	docs            map[string]string
+	productiveFiles int
 }
 
 type summaryModule struct {
@@ -198,6 +199,8 @@ func (b *builder) buildSummary(pkgs []*packages.Package) {
 				pkgRec.files = append(pkgRec.files, fileRec)
 				if generated {
 					forcedIneligible[fileID] = true
+				} else {
+					pkgRec.productiveFiles++
 				}
 			}
 			if file.Doc != nil {
@@ -246,7 +249,7 @@ func (b *builder) buildSummary(pkgs []*packages.Package) {
 			shape := typesByID[sym.ID]
 			if shape != nil {
 				methodCount := len(methodsByType[shape.existingID])
-				sym.Eligible = sym.Exported || shape.isInterface || methodCount >= typeEligibleMethods || shape.structFields >= typeEligibleFields
+				sym.Eligible = sym.Exported && (shape.isInterface || methodCount >= typeEligibleMethods || shape.structFields >= typeEligibleFields)
 			}
 			continue
 		}
@@ -269,7 +272,13 @@ func (b *builder) buildSummary(pkgs []*packages.Package) {
 				eligible++
 			}
 		}
-		fileRec.sym.Eligible = eligible >= fileEligibleSymbols || fileRec.sym.LOC >= fileEligibleLOC
+		fileRec.sym.Eligible = eligible >= fileEligibleSymbols && fileRec.sym.LOC >= fileEligibleLOC
+	}
+	for _, pkgRec := range packagesByPath {
+		pkgRec.sym.Eligible = pkgRec.productiveFiles > 0
+	}
+	for _, modRec := range modules {
+		modRec.sym.Eligible = len(modRec.packages) >= 2
 	}
 
 	// Dependency hashes use only signature hashes and are cycle-safe.
@@ -331,6 +340,9 @@ func (b *builder) buildSummary(pkgs []*packages.Package) {
 		pkgRec.sym.SelfHash = hashText(strings.Join(docLines, "\n"))
 		lines := make([]string, 0, len(pkgRec.files))
 		for _, fileRec := range pkgRec.files {
+			if strings.HasSuffix(fileRec.sym.FilePath, "_test.go") {
+				continue
+			}
 			lines = append(lines, "file:"+fileRec.sym.ID+":"+fileRec.sym.ContentHash)
 		}
 		pkgRec.sym.DepHash = hashSorted(lines)

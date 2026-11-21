@@ -24,19 +24,21 @@ const (
 
 // Status describes the indexer's current state.
 type Status struct {
-	RootDir          string   `json:"root_dir"`
-	Indexing         bool     `json:"indexing"`
-	Ready            bool     `json:"ready"`
-	IndexState       State    `json:"index_state"`
-	LastError        string   `json:"last_err,omitempty"`
-	ModulePath       string   `json:"module_path,omitempty"`
-	Packages         int      `json:"packages,omitempty"`
-	Modules          int      `json:"modules,omitempty"`
-	Symbols          int      `json:"symbols,omitempty"`
-	XRefs            int      `json:"xrefs,omitempty"`
-	LoadErrors       int      `json:"load_errors,omitempty"`
-	LoadErrorDetails []string `json:"load_error_details,omitempty"`
-	BuildMS          int64    `json:"build_ms,omitempty"`
+	RootDir              string   `json:"root_dir"`
+	Indexing             bool     `json:"indexing"`
+	Ready                bool     `json:"ready"`
+	IndexState           State    `json:"index_state"`
+	LastError            string   `json:"last_err,omitempty"`
+	ModulePath           string   `json:"module_path,omitempty"`
+	Packages             int      `json:"packages,omitempty"`
+	Modules              int      `json:"modules,omitempty"`
+	Symbols              int      `json:"symbols,omitempty"`
+	XRefs                int      `json:"xrefs,omitempty"`
+	LoadErrors           int      `json:"load_errors,omitempty"`
+	LoadErrorDetails     []string `json:"load_error_details,omitempty"`
+	TestLoadErrors       int      `json:"test_load_errors,omitempty"`
+	TestLoadErrorDetails []string `json:"test_load_error_details,omitempty"`
+	BuildMS              int64    `json:"build_ms,omitempty"`
 }
 
 // Store owns the current immutable index snapshot.
@@ -288,6 +290,8 @@ func (s *Store) Status() Status {
 		status.LoadErrors = len(s.idx.LoadErrors)
 	}
 	if s.idx != nil {
+		status.TestLoadErrors = len(s.idx.TestLoadErrors)
+		status.TestLoadErrorDetails = append([]string{}, s.idx.TestLoadErrors...)
 		status.ModulePath = s.idx.ModulePath
 		status.Packages = len(s.idx.Packages)
 		status.Modules = len(s.idx.Modules)
