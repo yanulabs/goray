@@ -308,6 +308,16 @@ func TestGeneratedAndTestFilesNotEligible(t *testing.T) {
 	if summaryOf(t, idx, "file:a/generated.go").Eligible || summaryOf(t, idx, "file:a/a_test.go").Eligible {
 		t.Fatal("generated/test files must not be eligible")
 	}
+	seen := map[string]bool{}
+	for _, sym := range idx.Summary.Symbols {
+		if seen[sym.ID] {
+			t.Fatalf("duplicate summary symbol: %s", sym.ID)
+		}
+		seen[sym.ID] = true
+	}
+	if len(idx.Summary.ByID) != len(idx.Summary.Symbols) {
+		t.Fatalf("summary map/slice mismatch: %d vs %d", len(idx.Summary.ByID), len(idx.Summary.Symbols))
+	}
 }
 
 func TestCycleSafeTypeHashing(t *testing.T) {

@@ -3,27 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Go Codebase Report</title>
+<title>Go Architecture Report</title>
 <style>{{.CSS}}</style>
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">Go Codebase Report</div>
-  <div id="repo-meta" class="muted"></div>
+  <div class="brand-wrap">
+    <span class="brand-mark" aria-hidden="true">Go</span>
+    <div>
+      <div class="brand">Architecture &amp; Semantic Index</div>
+      <div id="repo-meta" class="meta-line"></div>
+    </div>
+  </div>
   <div class="spacer"></div>
-  <button type="button" class="ghost" id="theme-toggle">Theme</button>
+  <div class="search-wrap">
+    <input id="global-search" type="search" autocomplete="off" spellcheck="false" placeholder="Jump to symbol, file, package…" aria-label="Global symbol search">
+    <kbd class="kbd">/</kbd>
+  </div>
+  <button type="button" class="ghost" id="theme-toggle" title="Toggle light/dark theme">Theme</button>
 </header>
-<nav class="tabs" id="tabs">
-  <button type="button" class="tab active" data-tab="overview">Overview</button>
-  <button type="button" class="tab" data-tab="graph">Dependencies</button>
-  <button type="button" class="tab" data-tab="hotspots">Hotspots</button>
-  <button type="button" class="tab" data-tab="interfaces">Interfaces</button>
-  <button type="button" class="tab" data-tab="tree">Hierarchy</button>
-  <input id="global-search" type="search" placeholder="Search symbols, files, packages…  (/)">
-</nav>
-<div id="search-results" class="search-results" hidden></div>
 
-<main>
+<nav class="tabs" id="tabs" role="tablist">
+  <button type="button" class="tab active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+  <button type="button" class="tab" data-tab="graph" role="tab" aria-selected="false">Dependencies</button>
+  <button type="button" class="tab" data-tab="hotspots" role="tab" aria-selected="false">Hotspots</button>
+  <button type="button" class="tab" data-tab="interfaces" role="tab" aria-selected="false">Interfaces</button>
+  <button type="button" class="tab" data-tab="tree" role="tab" aria-selected="false">Hierarchy</button>
+  <div class="spacer"></div>
+  <div id="tab-summary-badge" class="tab-status"></div>
+</nav>
+
+<div id="search-results" class="search-results" role="listbox" hidden></div>
+
+<main class="main">
   <section class="view active" data-view="overview">
     <div id="overview-content"></div>
   </section>
@@ -31,34 +43,65 @@
   <section class="view" data-view="graph">
     <div class="controls" id="graph-controls"></div>
     <div class="graph-wrap">
+      <div class="graph-hud" id="graph-hud"></div>
       <svg id="graph-svg" role="img" aria-label="Dependency graph"></svg>
+      <div class="graph-legend" id="graph-legend">
+        <span class="legend-item"><span class="swatch swatch-out"></span>Outgoing dep</span>
+        <span class="legend-item"><span class="swatch swatch-in"></span>Incoming caller</span>
+        <span class="legend-item"><span class="swatch swatch-cycle"></span>Cycle / back-edge</span>
+        <span class="legend-hint">Scroll to zoom · Drag to pan · Click node to inspect · Double-click module to drill down</span>
+      </div>
     </div>
   </section>
 
   <section class="view" data-view="hotspots">
     <div id="hotspot-controls" class="controls"></div>
-    <div class="panel"><div id="hotspot-table"></div></div>
+    <div class="panel table-panel"><div id="hotspot-table"></div></div>
   </section>
 
   <section class="view" data-view="interfaces">
-    <div class="controls"><input id="interface-search" type="search" placeholder="Filter interfaces, types, or packages…"></div>
+    <div class="controls" id="interface-controls">
+      <input id="interface-search" type="search" placeholder="Filter interfaces, implementations, or packages…">
+      <select id="interface-filter" aria-label="Filter interfaces by implementation count">
+        <option value="all">All interfaces</option>
+        <option value="implemented">Implemented only</option>
+        <option value="unimplemented">Unimplemented (0 impls)</option>
+      </select>
+      <div class="spacer"></div>
+      <span id="interface-count" class="muted"></span>
+    </div>
     <div id="interfaces-content"></div>
   </section>
 
   <section class="view" data-view="tree">
-    <div class="controls"><input id="tree-search" type="search" placeholder="Filter hierarchy…"></div>
+    <div class="controls" id="tree-controls">
+      <input id="tree-search" type="search" placeholder="Filter hierarchy by name, path, or kind…">
+      <button type="button" class="ghost" id="tree-expand">Expand all</button>
+      <button type="button" class="ghost" id="tree-collapse">Collapse to packages</button>
+      <div class="spacer"></div>
+      <span id="tree-count" class="muted"></span>
+    </div>
     <div id="tree-content" class="tree"></div>
   </section>
 </main>
 
-<aside id="inspector" class="inspector" hidden>
+<div id="inspector-backdrop" class="inspector-backdrop" hidden></div>
+<aside id="inspector" class="inspector" aria-label="Symbol inspector" hidden>
   <div class="inspector-head">
-    <h2 id="inspector-title">Details</h2>
-    <button type="button" class="close" id="inspector-close">Close</button>
+    <div class="inspector-nav">
+      <button type="button" class="icon-btn" id="inspector-back" title="Back (Alt+Left)" disabled>&larr;</button>
+      <button type="button" class="icon-btn" id="inspector-forward" title="Forward (Alt+Right)" disabled>&rarr;</button>
+    </div>
+    <div class="inspector-title-wrap">
+      <h2 id="inspector-title">Details</h2>
+      <div id="inspector-subtitle" class="muted mono"></div>
+    </div>
+    <button type="button" class="close" id="inspector-close" title="Close (Esc)">&times;</button>
   </div>
-  <div id="inspector-body"></div>
+  <div id="inspector-body" class="inspector-body"></div>
 </aside>
 
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <noscript>This report requires JavaScript. All data is embedded locally.</noscript>
 <script id="report-data" type="application/json">{{.ReportJSON}}</script>
 <script>{{.JS}}</script>

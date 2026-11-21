@@ -100,8 +100,6 @@ Generate a single-file offline HTML report (static analysis plus cached summarie
 
 ```sh
 go-mcp-server -export-html report.html /path/to/go/project
-# or
-make report ROOT=/path/to/go/project REPORT=report.html
 ```
 
 The report includes an executive scorecard, deterministic layered dependency graph,
@@ -153,7 +151,6 @@ go-mcp-server -db-info /path/to/go/project
 | `make fmt` | Format Go sources |
 | `make verify` | Format check, vet, race tests, and lint |
 | `make db-info` | Inspect the populated cache (`ROOT=.` by default) |
-| `make report` | Generate `bin/report.html` from `ROOT=.` |
 | `make clean` | Remove `bin/` |
 
 ## Layout

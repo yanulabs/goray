@@ -58,7 +58,7 @@ func TestRenderHTMLSelfContainedAndEmptySummaries(t *testing.T) {
 			t.Fatalf("report contains external/network reference %q", forbidden)
 		}
 	}
-	if !strings.Contains(html, "No cached summary") {
+	if !strings.Contains(html, "No cached LLM summary") {
 		t.Fatal("empty-summary fallback is missing")
 	}
 }

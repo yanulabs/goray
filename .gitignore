@@ -37,3 +37,6 @@ go.work.sum
 
 # Local build output
 /bin/
+
+# macOS metadata
+.DS_Store

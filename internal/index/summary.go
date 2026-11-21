@@ -652,8 +652,6 @@ func (b *builder) addTestFileSummaries(
 					SigHash:    sigHash, SelfHash: selfHash,
 					Doc: doc, Signature: sig, Directives: directives,
 				}
-				data.Symbols = append(data.Symbols, sym)
-				data.ByID[canonical] = sym
 				decls[canonical] = &summaryDecl{
 					sym: sym, recvType: recv, typeRefs: map[string]struct{}{},
 				}
@@ -689,8 +687,6 @@ func (b *builder) addTestFileSummaries(
 						SigHash:  sigHash, SelfHash: selfHash,
 						Doc: doc, Signature: sig, Directives: directives,
 					}
-					data.Symbols = append(data.Symbols, sym)
-					data.ByID[canonical] = sym
 					decls[canonical] = &summaryDecl{
 						sym: sym, isType: true, typeRefs: map[string]struct{}{},
 					}
