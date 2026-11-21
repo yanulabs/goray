@@ -18,6 +18,11 @@ func (c *Cache) Sync(ctx context.Context, idx *index.Index) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, `INSERT INTO cache_meta (key, value) VALUES ('canonical_root', ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, idx.RootDir); err != nil {
+		return err
+	}
+
 	var generation int64
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(updated_gen), 0) + 1 FROM working_symbols").Scan(&generation); err != nil {
 		return err

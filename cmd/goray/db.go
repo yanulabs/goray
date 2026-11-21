@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
@@ -18,38 +19,51 @@ type dbOptions struct {
 	path      string
 	dbPath    string
 	summaries bool
+	all       bool
+	dryRun    bool
+	force     bool
 }
 
 func parseDBArgs(args []string) (dbOptions, error) {
 	if len(args) == 0 {
-		return dbOptions{}, usagef("db requires a subcommand: info or path")
+		return dbOptions{}, usagef("db requires a subcommand: info, path, rm, or prune")
 	}
 	opts := dbOptions{command: args[0]}
 	switch opts.command {
-	case "info", "path":
+	case "info", "path", "rm", "prune":
 	default:
-		return dbOptions{}, usagef("unknown db subcommand %q (use info or path)", opts.command)
+		return dbOptions{}, usagef("unknown db subcommand %q (use info, path, rm, or prune)", opts.command)
 	}
 
 	fs := flag.NewFlagSet("db "+opts.command, flag.ContinueOnError)
 	quietFlagSet(fs)
 	fs.StringVar(&opts.dbPath, "db", "", "SQLite cache path")
-	fs.BoolVar(&opts.summaries, "summaries", false, "print the shared summary database path")
+	fs.BoolVar(&opts.summaries, "summaries", false, "target the shared summary database")
+	fs.BoolVar(&opts.all, "all", false, "target both the working and summary databases")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "print targets without deleting them")
+	fs.BoolVar(&opts.force, "force", false, "remove even if another process holds a lock")
 	positionals, err := parseFlagSet(fs, args[1:])
 	if err != nil {
 		return dbOptions{}, err
 	}
-	opts.path, err = singlePath(positionals, "db "+opts.command)
-	if err != nil {
-		return dbOptions{}, err
+	if opts.command == "prune" {
+		if len(positionals) != 0 {
+			return dbOptions{}, usagef("db prune accepts no path")
+		}
+		opts.path = "."
+		return opts, nil
 	}
-	return opts, nil
+	opts.path, err = singlePath(positionals, "db "+opts.command)
+	return opts, err
 }
 
 func runDB(args []string, stdout io.Writer) error {
 	opts, err := parseDBArgs(args)
 	if err != nil {
 		return err
+	}
+	if opts.command == "prune" {
+		return runDBPrune(opts, stdout)
 	}
 	root, err := index.ResolveModuleRoot(opts.path)
 	if err != nil {
@@ -68,6 +82,10 @@ func runDB(args []string, stdout io.Writer) error {
 		_, _ = fmt.Fprintln(stdout, dbPath)
 		return nil
 	}
+	if opts.command == "rm" {
+		return runDBRemove(opts, root, stdout)
+	}
+
 	workingPath, summaryPath, err := cache.ResolvePaths(root, opts.dbPath)
 	if err != nil {
 		return err
@@ -85,5 +103,95 @@ func runDB(args []string, stdout io.Writer) error {
 		return closeErr
 	}
 	_, _ = fmt.Fprintln(stdout, render.JSON(stats))
+	return nil
+}
+
+func explicitDBPath(flagPath string) (string, bool) {
+	if flagPath != "" {
+		return flagPath, true
+	}
+	if env := os.Getenv("GORAY_DB"); env != "" {
+		return env, true
+	}
+	return "", false
+}
+
+func removeOptions(opts dbOptions) cache.RemoveOptions {
+	return cache.RemoveOptions{DryRun: opts.dryRun, Force: opts.force}
+}
+
+func printRemoved(stdout io.Writer, result cache.RemoveResult, dryRun bool) {
+	if len(result.Files) == 0 {
+		_, _ = fmt.Fprintln(stdout, "nothing to remove")
+		return
+	}
+	verb := "removed"
+	if dryRun {
+		verb = "would remove"
+	}
+	for _, file := range result.Files {
+		_, _ = fmt.Fprintf(stdout, "%s %s (%d bytes)\n", verb, file.Path, file.Size)
+	}
+}
+
+func runDBRemove(opts dbOptions, root string, stdout io.Writer) error {
+	removeFlags := removeOptions(opts)
+	if path, ok := explicitDBPath(opts.dbPath); ok {
+		if path == ":memory:" {
+			return usagef("refusing to remove :memory: database")
+		}
+		result, err := cache.RemoveDB(path, removeFlags)
+		if err != nil {
+			return err
+		}
+		printRemoved(stdout, result, opts.dryRun)
+		return nil
+	}
+
+	working, summary, err := cache.ResolvePaths(root, "")
+	if err != nil {
+		return err
+	}
+	targets := []string{working}
+	switch {
+	case opts.summaries:
+		targets = []string{summary}
+	case opts.all:
+		targets = []string{working, summary}
+	}
+	seen := map[string]bool{}
+	for _, target := range targets {
+		if target == "" || seen[target] || target == ":memory:" {
+			continue
+		}
+		seen[target] = true
+		result, err := cache.RemoveDB(target, removeFlags)
+		if err != nil {
+			return err
+		}
+		printRemoved(stdout, result, opts.dryRun)
+	}
+	return nil
+}
+
+func runDBPrune(opts dbOptions, stdout io.Writer) error {
+	result, err := cache.Prune(removeOptions(opts))
+	if err != nil {
+		return err
+	}
+	verb := "removed"
+	if opts.dryRun {
+		verb = "would remove"
+	}
+	for _, file := range result.Removed {
+		_, _ = fmt.Fprintf(stdout, "%s %s (%d bytes)\n", verb, file.Path, file.Size)
+	}
+	for _, skipped := range result.Skipped {
+		_, _ = fmt.Fprintf(stdout, "skipped %s: %s\n", skipped.Path, skipped.Reason)
+	}
+	if len(result.Removed) == 0 && len(result.Skipped) == 0 {
+		_, _ = fmt.Fprintln(stdout, "nothing to prune")
+	}
+	_, _ = fmt.Fprintf(stdout, "reclaimed bytes: %d\n", result.ReclaimedBytes)
 	return nil
 }

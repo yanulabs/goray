@@ -93,7 +93,7 @@ goray <command> [flags] [path]
 | --- | --- |
 | `goray serve [path]` | Run the MCP stdio server |
 | `goray export <html|md|dot> [path]` | Export an HTML report, Markdown map, or Graphviz DOT graph |
-| `goray db <info|path> [path]` | Inspect cache stats or print the resolved SQLite DB path |
+| `goray db <info|path|rm|prune> [path]` | Inspect, locate, remove, or prune SQLite databases |
 | `goray index [path]` | Build and sync the semantic index once |
 | `goray version` | Print version (`-v` / `--version` also accepted) |
 | `goray help [command]` | Show help for root or a specific command |
@@ -149,6 +149,8 @@ The HTML export is a single offline file with all CSS, JS, and indexed metadata 
 ```sh
 goray db path [path] [--db <path>] [--summaries]
 goray db info [path] [--db <path>]
+goray db rm [path] [--summaries] [--all] [--dry-run] [--force] [--db <path>]
+goray db prune [--dry-run] [--force]
 ```
 
 `db path` prints only the resolved working database path to `stdout` without
@@ -160,6 +162,27 @@ sqlite3 "$(goray db path)"
 
 `db path --summaries` prints only the shared summary database path. `db info`
 prints JSON statistics and includes both `db_path` and `summary_db_path`.
+
+`db rm` is safe by default:
+
+```sh
+goray db rm                 # current checkout's working DB + -wal/-shm only; summaries untouched
+goray db rm --summaries     # shared summary DB only; working DB untouched
+goray db rm --all           # both DBs and all sidecars
+goray db rm --dry-run       # print exact files and byte sizes, delete nothing
+goray db rm --db /path/x.db # explicit single DB; --db :memory: fails with exit code 2
+```
+
+Removal is idempotent (a missing DB prints `nothing to remove` and exits 0).
+Before deleting, `db rm` acquires an exclusive SQLite lock; if another process
+(such as `goray serve`) holds the DB it fails with exit code 1 unless `--force`
+is passed. An explicit `--db` / `GORAY_DB` target is treated as a single DB,
+including its `-wal` and `-shm` sidecars.
+
+`db prune` scans `<user-cache>/goray/worktrees/*.db`, reads the `canonical_root`
+persisted during `Sync`, and removes only databases whose checkout directory no
+longer exists. It never touches `summaries/`, and skips locked or unannotated
+databases while reporting them in the output.
 
 ### `index`
 

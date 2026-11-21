@@ -14,7 +14,7 @@ Usage:
 Commands:
   serve [path]                 Run the MCP stdio server + local report UI (default: .)
   export <html|md|dot> [path]  Export an architecture report or dependency graph
-  db <info|path> [path]        Inspect or locate SQLite databases
+  db <info|path|rm|prune>      Inspect, locate, remove, or prune SQLite databases
   index [path]                 Build and sync the semantic index once
   version                      Print version and exit
   help [command]               Show help for goray or a command
@@ -32,6 +32,8 @@ Examples:
   goray index --json .
   sqlite3 "$(goray db path)"
   goray db info
+  goray db rm --dry-run
+  goray db prune
 `)
 }
 
@@ -85,29 +87,38 @@ Examples:
 
 func printDBHelp(w io.Writer) {
 	_, _ = fmt.Fprint(w, `Usage:
-  goray db <info|path> [flags] [path]
+  goray db <info|path|rm|prune> [flags] [path]
 
-Inspect or locate the SQLite databases. The path defaults to ".". By default
-two databases are used: a per-checkout working database under
+Inspect, locate, remove, or prune the SQLite databases. The path defaults to
+".". By default two databases are used: a per-checkout working database under
 <user-cache>/goray/worktrees/ and a shared summary database under
 <user-cache>/goray/summaries/. Worktrees and clones of the same module share
 summaries while keeping working state isolated.
 
 Subcommands:
-  info   Print cache statistics and recent summaries as JSON
-  path   Print only the resolved working database path
+  info    Print cache statistics and recent summaries as JSON
+  path    Print only the resolved working database path
+  rm      Remove the working DB (default), summary DB, or both
+  prune   Remove worktree DBs whose checkout directory no longer exists
 
 Flags:
-  --db <path>   Single-database override (default: user cache directory; env GORAY_DB)
-  --summaries   With "path", print only the shared summary database path
+  --db <path>   Single-database override for info/path/rm (env GORAY_DB)
+  --summaries   With "path" or "rm", target only the shared summary database
+  --all         With "rm", remove both working and summary databases
+  --dry-run     Print exact files and sizes without deleting (rm/prune)
+  --force       Remove even if another process holds the DB lock (rm/prune)
   -h, --help    Show this help
 
 Examples:
   goray db path
   goray db path --summaries
-  goray db path /path/to/repo
-  goray db path --db :memory:
   goray db info /path/to/repo
+  goray db rm                       # working DB only; summaries untouched
+  goray db rm --summaries           # shared summary DB only
+  goray db rm --all --dry-run
+  goray db rm --db /tmp/goray.db
+  goray db rm --force .
+  goray db prune --dry-run
   sqlite3 "$(goray db path)"
 `)
 }
