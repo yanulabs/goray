@@ -12,6 +12,9 @@ func (idx *Index) Resolve(query, kind string, limit int) []*Symbol {
 	if sym, ok := idx.Symbols[q]; ok {
 		return []*Symbol{sym}
 	}
+	if sym, ok := idx.CanonicalSymbols[q]; ok {
+		return []*Symbol{sym}
+	}
 
 	q = strings.ToLower(q)
 	matches := make([]*Symbol, 0)
@@ -57,6 +60,9 @@ func (idx *Index) SingleSymbol(query string) (*Symbol, error) {
 		return nil, fmt.Errorf("'symbol' must not be empty")
 	}
 	if sym, ok := idx.Symbols[query]; ok {
+		return sym, nil
+	}
+	if sym, ok := idx.CanonicalSymbols[query]; ok {
 		return sym, nil
 	}
 	matches := idx.Resolve(query, "", 10)

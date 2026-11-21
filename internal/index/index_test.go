@@ -124,6 +124,12 @@ func TestQueries(t *testing.T) {
 	if err != nil || sym.ID != samplePayments+".Service.Charge" {
 		t.Fatalf("SingleSymbol = %v, %v", sym, err)
 	}
+	if got, err := idx.SingleSymbol(sym.CanonicalID()); err != nil || got.ID != sym.ID {
+		t.Fatalf("SingleSymbol(canonical) = %v, %v", got, err)
+	}
+	if matches := idx.Resolve(sym.CanonicalID(), "", 5); len(matches) != 1 || matches[0].ID != sym.ID {
+		t.Fatalf("Resolve(canonical) = %v", matches)
+	}
 	if _, err := idx.SingleSymbol(""); err == nil {
 		t.Fatal("empty query should fail")
 	}

@@ -92,19 +92,20 @@ type Index struct {
 	LoadErrors     []string
 	TestLoadErrors []string
 
-	Packages      map[string]*PkgInfo
-	RevImports    map[string][]string
-	Symbols       map[string]*Symbol
-	SymbolsByName map[string][]*Symbol
-	XRefs         map[string][]XRef
-	Callers       map[string][]string
-	Callees       map[string][]string
-	IfaceImpls    map[string][]ImplMatch
-	TypeImpls     map[string][]ImplMatch
-	IfaceMethods  map[string]bool
-	Modules       map[string]*ModSummary
-	LargeFiles    []FileMetric
-	Summary       *SummaryData
+	Packages         map[string]*PkgInfo
+	RevImports       map[string][]string
+	Symbols          map[string]*Symbol
+	SymbolsByName    map[string][]*Symbol
+	CanonicalSymbols map[string]*Symbol
+	XRefs            map[string][]XRef
+	Callers          map[string][]string
+	Callees          map[string][]string
+	IfaceImpls       map[string][]ImplMatch
+	TypeImpls        map[string][]ImplMatch
+	IfaceMethods     map[string]bool
+	Modules          map[string]*ModSummary
+	LargeFiles       []FileMetric
+	Summary          *SummaryData
 }
 
 // TotalXRefs returns the number of recorded references.

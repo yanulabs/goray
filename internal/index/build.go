@@ -52,19 +52,20 @@ func Build(rootDir string) (*Index, error) {
 		modOut:     map[string]map[string]map[string]struct{}{},
 		modIn:      map[string]map[string]map[string]struct{}{},
 		idx: &Index{
-			RootDir:       absRoot,
-			ModulePath:    modPath,
-			Packages:      map[string]*PkgInfo{},
-			RevImports:    map[string][]string{},
-			Symbols:       map[string]*Symbol{},
-			SymbolsByName: map[string][]*Symbol{},
-			XRefs:         map[string][]XRef{},
-			Callers:       map[string][]string{},
-			Callees:       map[string][]string{},
-			IfaceImpls:    map[string][]ImplMatch{},
-			TypeImpls:     map[string][]ImplMatch{},
-			IfaceMethods:  map[string]bool{},
-			Modules:       map[string]*ModSummary{},
+			RootDir:          absRoot,
+			ModulePath:       modPath,
+			Packages:         map[string]*PkgInfo{},
+			RevImports:       map[string][]string{},
+			Symbols:          map[string]*Symbol{},
+			SymbolsByName:    map[string][]*Symbol{},
+			CanonicalSymbols: map[string]*Symbol{},
+			XRefs:            map[string][]XRef{},
+			Callers:          map[string][]string{},
+			Callees:          map[string][]string{},
+			IfaceImpls:       map[string][]ImplMatch{},
+			TypeImpls:        map[string][]ImplMatch{},
+			IfaceMethods:     map[string]bool{},
+			Modules:          map[string]*ModSummary{},
 		},
 	}
 
@@ -294,6 +295,9 @@ func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
 
 func (b *builder) addSymbol(sym *Symbol, pi *PkgInfo) {
 	b.idx.Symbols[sym.ID] = sym
+	if canonical := sym.CanonicalID(); canonical != "" {
+		b.idx.CanonicalSymbols[canonical] = sym
+	}
 	key := strings.ToLower(sym.Name)
 	b.idx.SymbolsByName[key] = append(b.idx.SymbolsByName[key], sym)
 	if !sym.Exported {
