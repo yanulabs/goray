@@ -14,7 +14,7 @@ Usage:
 Commands:
   serve [path]                 Run the MCP stdio server + local report UI (default: .)
   export <html|md|dot> [path]  Export an architecture report or dependency graph
-  db <info|path> [path]        Inspect or locate the SQLite summary cache
+  db <info|path> [path]        Inspect or locate SQLite databases
   index [path]                 Build and sync the semantic index once
   version                      Print version and exit
   help [command]               Show help for goray or a command
@@ -87,18 +87,24 @@ func printDBHelp(w io.Writer) {
 	_, _ = fmt.Fprint(w, `Usage:
   goray db <info|path> [flags] [path]
 
-Inspect or locate the SQLite summary cache. The path defaults to ".".
+Inspect or locate the SQLite databases. The path defaults to ".". By default
+two databases are used: a per-checkout working database under
+<user-cache>/goray/worktrees/ and a shared summary database under
+<user-cache>/goray/summaries/. Worktrees and clones of the same module share
+summaries while keeping working state isolated.
 
 Subcommands:
   info   Print cache statistics and recent summaries as JSON
-  path   Print only the resolved cache path
+  path   Print only the resolved working database path
 
 Flags:
-  --db <path>  SQLite cache path override (default: user cache directory; env GORAY_DB)
-  -h, --help   Show this help
+  --db <path>   Single-database override (default: user cache directory; env GORAY_DB)
+  --summaries   With "path", print only the shared summary database path
+  -h, --help    Show this help
 
 Examples:
   goray db path
+  goray db path --summaries
   goray db path /path/to/repo
   goray db path --db :memory:
   goray db info /path/to/repo
@@ -114,9 +120,14 @@ Build the semantic index once, sync working symbols and edges to SQLite, print
 a summary, and exit. This does not start file watching, MCP stdio, or the local
 report UI.
 
+By default the working state is written to a per-checkout database under
+<user-cache>/goray/worktrees/ and summaries are read/written in a shared
+database under <user-cache>/goray/summaries/. --db or GORAY_DB switches to a
+single database containing all tables.
+
 Flags:
-  --db <path>  SQLite cache path (default: user cache directory; env GORAY_DB;
-               supports :memory:)
+  --db <path>  Single SQLite database override (default: user cache directory;
+               env GORAY_DB; supports :memory:)
   --json       Emit one machine-readable JSON object to stdout
   -h, --help   Show this help
 

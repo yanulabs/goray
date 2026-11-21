@@ -24,6 +24,7 @@ type indexResult struct {
 	Root            string  `json:"root"`
 	ModulePath      string  `json:"module_path"`
 	DBPath          string  `json:"db_path"`
+	SummaryDBPath   string  `json:"summary_db_path"`
 	Packages        int     `json:"packages"`
 	Files           int     `json:"files"`
 	Symbols         int     `json:"symbols"`
@@ -76,11 +77,11 @@ func indexOnce(opts indexOptions, stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 
-	dbPath, err := cache.ResolvePath(root, opts.dbPath)
+	dbPath, summaryDBPath, err := cache.ResolvePaths(root, opts.dbPath)
 	if err != nil {
 		return err
 	}
-	summaries, err := cache.Open(dbPath)
+	summaries, err := cache.OpenSplit(dbPath, summaryDBPath)
 	if err != nil {
 		return fmt.Errorf("open summary cache: %w", err)
 	}
@@ -112,6 +113,7 @@ func indexOnce(opts indexOptions, stdout, stderr io.Writer) error {
 		Root:            root,
 		ModulePath:      idx.ModulePath,
 		DBPath:          dbPath,
+		SummaryDBPath:   summaryDBPath,
 		Packages:        len(idx.Packages),
 		Files:           files,
 		Symbols:         len(idx.Summary.Symbols),
@@ -135,13 +137,14 @@ func printIndexResult(w io.Writer, result indexResult, elapsed time.Duration) er
 
   Root:      %s
   Database:  %s
+  Summaries: %s
   Packages:  %d
   Files:     %d
   Symbols:   %d
   Edges:     %d
   Eligible:  %d
   Coverage:  %.1f%% (%d / %d synced)
-`, result.ModulePath, result.Root, result.DBPath,
+`, result.ModulePath, result.Root, result.DBPath, result.SummaryDBPath,
 		result.Packages, result.Files, result.Symbols, result.Edges,
 		result.Eligible, result.CoveragePercent, result.Synced, result.Eligible)
 	if err != nil {

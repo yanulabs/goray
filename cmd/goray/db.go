@@ -14,9 +14,10 @@ import (
 var dbValueFlags = map[string]bool{"db": true}
 
 type dbOptions struct {
-	command string
-	path    string
-	dbPath  string
+	command   string
+	path      string
+	dbPath    string
+	summaries bool
 }
 
 func parseDBArgs(args []string) (dbOptions, error) {
@@ -33,6 +34,7 @@ func parseDBArgs(args []string) (dbOptions, error) {
 	fs := flag.NewFlagSet("db "+opts.command, flag.ContinueOnError)
 	quietFlagSet(fs)
 	fs.StringVar(&opts.dbPath, "db", "", "SQLite cache path")
+	fs.BoolVar(&opts.summaries, "summaries", false, "print the shared summary database path")
 	positionals, err := parseFlagSet(fs, args[1:])
 	if err != nil {
 		return dbOptions{}, err
@@ -53,15 +55,24 @@ func runDB(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	dbPath, err := cache.ResolvePath(root, opts.dbPath)
-	if err != nil {
-		return err
-	}
 	if opts.command == "path" {
+		var dbPath string
+		if opts.summaries {
+			dbPath, err = cache.ResolveSummaryPath(root, opts.dbPath)
+		} else {
+			dbPath, err = cache.ResolvePath(root, opts.dbPath)
+		}
+		if err != nil {
+			return err
+		}
 		_, _ = fmt.Fprintln(stdout, dbPath)
 		return nil
 	}
-	summaries, err := cache.Open(dbPath)
+	workingPath, summaryPath, err := cache.ResolvePaths(root, opts.dbPath)
+	if err != nil {
+		return err
+	}
+	summaries, err := cache.OpenSplit(workingPath, summaryPath)
 	if err != nil {
 		return fmt.Errorf("open summary cache: %w", err)
 	}

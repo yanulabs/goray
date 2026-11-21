@@ -179,7 +179,7 @@ func TestIndexJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, field := range []string{
-		"root", "module_path", "db_path", "packages", "files", "symbols",
+		"root", "module_path", "db_path", "summary_db_path", "packages", "files", "symbols",
 		"edges", "eligible", "synced", "coverage_percent", "warnings", "duration_ms",
 	} {
 		if _, ok := raw[field]; !ok {
@@ -190,8 +190,37 @@ func TestIndexJSON(t *testing.T) {
 	if result.Root != canonicalCLIPath(t, root) || result.ModulePath != "example.com/check" || result.DBPath != dbPath {
 		t.Fatalf("result = %+v", result)
 	}
+	if result.SummaryDBPath != dbPath {
+		t.Fatalf("explicit DB summary_db_path = %q, want %q", result.SummaryDBPath, dbPath)
+	}
 	if result.Packages == 0 || result.Symbols == 0 || result.Eligible == 0 {
 		t.Fatalf("unexpected counts: %+v", result)
+	}
+}
+
+func TestIndexDefaultSplitLayout(t *testing.T) {
+	isolateCLIEnv(t)
+	root, _, _ := newTestModule(t)
+
+	result := indexJSON(t, "index", "--json", root)
+	if result.DBPath == result.SummaryDBPath {
+		t.Fatalf("default mode used one DB: %q", result.DBPath)
+	}
+	if filepath.Base(filepath.Dir(result.DBPath)) != "worktrees" {
+		t.Fatalf("working DB path = %q", result.DBPath)
+	}
+	if filepath.Base(filepath.Dir(result.SummaryDBPath)) != "summaries" {
+		t.Fatalf("summary DB path = %q", result.SummaryDBPath)
+	}
+	for _, path := range []string{result.DBPath, result.SummaryDBPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("index did not create %q: %v", path, err)
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(path + suffix); !os.IsNotExist(err) {
+				t.Fatalf("stale SQLite sidecar %s%s", path, suffix)
+			}
+		}
 	}
 }
 
