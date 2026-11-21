@@ -46,6 +46,8 @@ type SummarySymbol struct {
 	Exported    bool
 	Dead        bool
 	Eligible    bool
+	IsTest      bool
+	IsGenerated bool
 	SigHash     string
 	SelfHash    string
 	DepHash     string
@@ -190,6 +192,7 @@ func (b *builder) buildSummary(pkgs []*packages.Package) {
 					ID: fileID, ParentID: pkgRec.sym.ID, Kind: "file",
 					ModuleName: pkgRec.sym.ModuleName, PkgPath: p.PkgPath,
 					FilePath: filePath, StartLine: 1, EndLine: loc, LOC: loc,
+					IsTest: strings.HasSuffix(filePath, "_test.go"), IsGenerated: generated,
 					SelfHash:   hashText(strings.Join(dirs, "\n")),
 					Directives: dirs,
 				}
@@ -451,6 +454,7 @@ func (b *builder) summaryFunc(
 		ModuleName: sym.ModuleArea, PkgPath: sym.PkgPath, FilePath: sym.File,
 		StartLine: sym.Line, EndLine: sym.EndLine, LOC: sym.LOC, Complexity: sym.Cyclomatic,
 		Exported: sym.Exported, SigHash: sigHash, SelfHash: selfHash,
+		IsTest: fileRec.sym.IsTest, IsGenerated: fileRec.sym.IsGenerated,
 		Doc: doc, Signature: sym.Signature, Directives: directives,
 	}
 	decls[canonical] = &summaryDecl{
@@ -522,6 +526,7 @@ func (b *builder) summaryType(
 		ModuleName: sym.ModuleArea, PkgPath: sym.PkgPath, FilePath: sym.File,
 		StartLine: sym.Line, EndLine: sym.EndLine, LOC: sym.LOC,
 		Exported: sym.Exported, SigHash: sigHash, SelfHash: selfHash,
+		IsTest: fileRec.sym.IsTest, IsGenerated: fileRec.sym.IsGenerated,
 		Doc: doc, Signature: sym.Signature, Directives: directives,
 	}
 	decl := &summaryDecl{
@@ -607,6 +612,7 @@ func (b *builder) addTestFileSummaries(
 			ID: fileID, ParentID: pkgRec.sym.ID, Kind: "file",
 			ModuleName: pkgRec.sym.ModuleName, PkgPath: p.PkgPath,
 			FilePath: filePath, StartLine: 1, EndLine: loc, LOC: loc,
+			IsTest: true, IsGenerated: isGenerated(filepath.Base(path), src),
 			SelfHash:   hashText(strings.Join(dirs, "\n")),
 			Directives: dirs,
 		}
@@ -650,6 +656,7 @@ func (b *builder) addTestFileSummaries(
 					Complexity: cyclomatic(d.Body),
 					Exported:   ast.IsExported(d.Name.Name) && (recv == "" || ast.IsExported(recv)),
 					SigHash:    sigHash, SelfHash: selfHash,
+					IsTest: true, IsGenerated: fileRec.sym.IsGenerated,
 					Doc: doc, Signature: sig, Directives: directives,
 				}
 				decls[canonical] = &summaryDecl{
@@ -685,6 +692,7 @@ func (b *builder) addTestFileSummaries(
 						StartLine: pos.Line, EndLine: end.Line, LOC: end.Line - pos.Line + 1,
 						Exported: ast.IsExported(ts.Name.Name),
 						SigHash:  sigHash, SelfHash: selfHash,
+						IsTest: true, IsGenerated: fileRec.sym.IsGenerated,
 						Doc: doc, Signature: sig, Directives: directives,
 					}
 					decls[canonical] = &summaryDecl{

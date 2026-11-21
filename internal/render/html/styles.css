@@ -572,7 +572,7 @@ tbody tr.clickable:hover td { background: var(--panel-2); cursor: pointer; }
 .inspector-nav { display: flex; gap: 4px; flex: none; margin-top: 2px; }
 .inspector-title-wrap { flex: 1; min-width: 0; }
 .inspector-title-wrap h2 { margin: 0; font-size: 16px; word-break: break-word; }
-#inspector-subtitle { font-size: 11px; margin-top: 2px; word-break: break-all; }
+#inspector-subtitle { font-size: 11px; margin-top: 2px; overflow-wrap: break-word; word-break: normal; }
 .close {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -596,7 +596,7 @@ tbody tr.clickable:hover td { background: var(--panel-2); cursor: pointer; }
   padding: 6px 8px;
   margin-bottom: 12px;
 }
-.id-bar .id { flex: 1; font-size: 11px; color: var(--text-2); word-break: break-all; }
+.id-bar .id { flex: 1; min-width: 0; font-size: 11px; color: var(--text-2); white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
 
 .stat-strip {
   display: grid;

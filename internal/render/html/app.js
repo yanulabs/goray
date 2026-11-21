@@ -11,6 +11,10 @@ const symbols = Array.isArray(DATA.symbols) ? DATA.symbols : [];
 const symbolById = new Map(symbols.map((s) => [s.id, s]));
 const packageByPath = new Map((DATA.packages || []).map((p) => [p.rel_path, p]));
 const moduleNames = (DATA.modules || []).map((m) => m.name);
+const oneToOneModules = (() => {
+  const modules = DATA.modules || [];
+  return modules.length > 0 && modules.every((m) => (m.packages || 0) <= 1);
+})();
 
 // Cross-reference maps built once on boot for O(1) inspector lookups.
 const implsByTypeId = new Map();
@@ -212,7 +216,7 @@ function summaryNode(summary, fallbackState) {
   if (effects.length) {
     addPills(section, effects, "warn");
   } else if (Array.isArray(summary.side_effects) && summary.side_effects.includes("none")) {
-    addPills(section, ["pure / no side effects"], "good");
+    addPills(section, ["no side effects reported"]);
   }
   addList(section, "Invariants", summary.invariants || summary.key_invariants);
   if (summary.concurrency) {
@@ -220,11 +224,12 @@ function summaryNode(summary, fallbackState) {
     section.appendChild(el("div", null, summary.concurrency));
   }
   addList(section, "Boundaries", summary.boundaries);
-  const meta = el("div", "pills");
-  meta.style.marginTop = "8px";
-  meta.appendChild(stateBadge(summary.sync_state));
-  if (summary.model_id) meta.appendChild(el("span", "pill mono", summary.model_id));
-  section.appendChild(meta);
+  if (summary.model_id) {
+    const meta = el("div", "pills");
+    meta.style.marginTop = "8px";
+    meta.appendChild(el("span", "pill mono", summary.model_id));
+    section.appendChild(meta);
+  }
   if (summary.deps_changed) {
     section.appendChild(el("div", "notice", "Direct dependencies or children changed; this cached summary is soft-stale."));
   }
@@ -443,7 +448,7 @@ function renderOverview() {
     grid.appendChild(card);
   };
   addMetric("Modules", fmt(metrics.modules), "View dependency graph →", null, () => {
-    graphState.mode = "modules";
+    graphState.mode = oneToOneModules ? "packages" : "modules";
     switchTab("graph");
   });
   addMetric("Packages", fmt(metrics.packages), "View package graph →", null, () => {
@@ -613,7 +618,7 @@ function renderArchitectureCards(container) {
     return ((b[locKey] || 0) - (a[locKey] || 0)) || nameA.localeCompare(nameB);
   };
 
-  const modules = (DATA.modules || [])
+  const modules = (oneToOneModules ? [] : (DATA.modules || []))
     .filter((m) => !q || (m.name + " " + (m.summary && m.summary.intent || "")).toLowerCase().includes(q))
     .slice()
     .sort((a, b) => sortFn(a, b, "prod_loc", (a.in_modules || 0) + (a.out_modules || 0), (b.in_modules || 0) + (b.out_modules || 0), a.name, b.name));
@@ -692,6 +697,7 @@ const hotspotState = {
   high: false,
   exported: false,
   sideEffects: false,
+  includeTests: false,
   sort: "risk",
   direction: -1,
   limit: PAGE_SIZE,
@@ -708,6 +714,7 @@ function resetHotspotFilters(overrides = {}) {
   hotspotState.high = false;
   hotspotState.exported = false;
   hotspotState.sideEffects = false;
+  hotspotState.includeTests = false;
   hotspotState.limit = PAGE_SIZE;
   Object.assign(hotspotState, overrides);
   setupHotspots();
@@ -771,9 +778,11 @@ function setupHotspots() {
     ["high", "Complexity ≥10"],
     ["exported", "Exported"],
     ["sideEffects", "Side effects"],
+    ["includeTests", "Include tests"],
   ];
   for (const [key, label] of toggles) {
     const wrapper = el("label", "toggle-chip");
+    if (key === "includeTests") wrapper.title = "Include test and generated symbols";
     const input = el("input");
     input.type = "checkbox";
     input.checked = Boolean(hotspotState[key]);
@@ -825,6 +834,7 @@ function renderHotspots() {
 
   const rows = symbols.filter((s) => {
     if (!allowedKinds.has(s.kind)) return false;
+    if (!hotspotState.includeTests && (s.is_test || s.is_generated)) return false;
     if (hotspotState.kind !== "all" && s.kind !== hotspotState.kind) return false;
     if (hotspotState.module && s.module !== hotspotState.module) return false;
     if (hotspotState.state !== "all" && (s.sync_state || "missing") !== hotspotState.state) return false;
@@ -1096,7 +1106,7 @@ function treeElement(node) {
 /* ==================== Interactive Dependency Graph ==================== */
 
 const graphState = {
-  mode: "modules",
+  mode: oneToOneModules ? "packages" : "modules",
   module: "",
   query: "",
   transitive: false,

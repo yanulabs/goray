@@ -158,3 +158,37 @@ func TestLayoutGraphCyclesDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestHotspotsExcludeTestAndGeneratedSymbols(t *testing.T) {
+	report := emptyReport()
+	report.Symbols = []HTMLSymbol{
+		{ID: "sym:example.com/app.Prod", Name: "Prod", Kind: "func", Complexity: 15, FanIn: 1},
+		{ID: "sym:example.com/app.TestProd", Name: "TestProd", Kind: "func", Complexity: 99, IsTest: true},
+		{ID: "sym:example.com/app.Generated", Name: "Generated", Kind: "func", Complexity: 88, IsGenerated: true},
+		{ID: "file:a/a_test.go", Name: "a/a_test.go", Kind: "file", Complexity: 77, IsTest: true},
+	}
+	html, err := RenderHTML(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded HTMLReport
+	if err := json.Unmarshal([]byte(htmlPayload(t, html)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Hotspots) != 1 || decoded.Hotspots[0].ID != "sym:example.com/app.Prod" {
+		t.Fatalf("hotspots = %+v", decoded.Hotspots)
+	}
+	flags := map[string]HTMLSymbol{}
+	for _, symbol := range decoded.Symbols {
+		flags[symbol.ID] = symbol
+	}
+	if !flags["sym:example.com/app.TestProd"].IsTest || flags["sym:example.com/app.TestProd"].IsGenerated {
+		t.Fatalf("test flags not serialized: %+v", flags["sym:example.com/app.TestProd"])
+	}
+	if !flags["sym:example.com/app.Generated"].IsGenerated || flags["sym:example.com/app.Generated"].IsTest {
+		t.Fatalf("generated flags not serialized: %+v", flags["sym:example.com/app.Generated"])
+	}
+	if flags["sym:example.com/app.Prod"].IsTest || flags["sym:example.com/app.Prod"].IsGenerated {
+		t.Fatalf("production flags wrong: %+v", flags["sym:example.com/app.Prod"])
+	}
+}

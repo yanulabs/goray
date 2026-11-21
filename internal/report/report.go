@@ -57,6 +57,7 @@ func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HT
 			LOC: summary.LOC, Complexity: summary.Complexity, FanIn: summary.FanIn,
 			FanOut: fanOut(idx, summary, sym), Exported: summary.Exported,
 			Dead: summary.Dead, Eligible: summary.Eligible,
+			IsTest: summary.IsTest, IsGenerated: summary.IsGenerated,
 			SyncState: stateFor(cached, summary),
 			Summary:   summaryView(cached[summary.ID]),
 		}
@@ -77,7 +78,7 @@ func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HT
 		Repo: idx.RootDir, ModulePath: idx.ModulePath,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Metrics:     metrics, Coverage: coverage,
-		Hotspots:        buildHotspots(rows),
+		Hotspots:        render.BuildHotspots(rows),
 		CoupledPackages: buildCoupling(idx),
 		Modules:         buildModuleCards(idx, cached),
 		Packages:        buildPackageCards(idx, cached),
@@ -218,31 +219,6 @@ func buildCoverage(ctx context.Context, store *cache.Cache) (render.HTMLCoverage
 		out.Percent = float64(int(out.Percent*10+0.5)) / 10
 	}
 	return out, nil
-}
-
-func buildHotspots(rows []render.HTMLSymbol) []render.HTMLSymbol {
-	hotspots := make([]render.HTMLSymbol, 0)
-	for _, row := range rows {
-		if row.Kind != "func" && row.Kind != "method" && row.Kind != "type" {
-			continue
-		}
-		if row.Complexity == 0 && row.FanIn == 0 {
-			continue
-		}
-		hotspots = append(hotspots, row)
-	}
-	sort.Slice(hotspots, func(i, j int) bool {
-		left := hotspots[i].Complexity*2 + hotspots[i].FanIn
-		right := hotspots[j].Complexity*2 + hotspots[j].FanIn
-		if left != right {
-			return left > right
-		}
-		return hotspots[i].ID < hotspots[j].ID
-	})
-	if len(hotspots) > 10 {
-		hotspots = hotspots[:10]
-	}
-	return hotspots
 }
 
 func buildCoupling(idx *index.Index) []render.HTMLCoupled {

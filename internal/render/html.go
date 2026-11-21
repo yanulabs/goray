@@ -72,25 +72,27 @@ type HTMLSummary struct {
 }
 
 type HTMLSymbol struct {
-	ID         string       `json:"id"`
-	Name       string       `json:"name"`
-	Kind       string       `json:"kind"`
-	PkgPath    string       `json:"pkg_path,omitempty"`
-	Module     string       `json:"module,omitempty"`
-	File       string       `json:"file,omitempty"`
-	StartLine  int          `json:"start_line,omitempty"`
-	EndLine    int          `json:"end_line,omitempty"`
-	LOC        int          `json:"loc"`
-	Complexity int          `json:"complexity"`
-	FanIn      int          `json:"fan_in"`
-	FanOut     int          `json:"fan_out"`
-	Exported   bool         `json:"exported"`
-	Dead       bool         `json:"dead"`
-	Eligible   bool         `json:"eligible"`
-	SyncState  string       `json:"sync_state"`
-	Summary    *HTMLSummary `json:"summary,omitempty"`
-	Callers    []string     `json:"callers,omitempty"`
-	Callees    []string     `json:"callees,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Kind        string       `json:"kind"`
+	PkgPath     string       `json:"pkg_path,omitempty"`
+	Module      string       `json:"module,omitempty"`
+	File        string       `json:"file,omitempty"`
+	StartLine   int          `json:"start_line,omitempty"`
+	EndLine     int          `json:"end_line,omitempty"`
+	LOC         int          `json:"loc"`
+	Complexity  int          `json:"complexity"`
+	FanIn       int          `json:"fan_in"`
+	FanOut      int          `json:"fan_out"`
+	Exported    bool         `json:"exported"`
+	Dead        bool         `json:"dead"`
+	Eligible    bool         `json:"eligible"`
+	IsTest      bool         `json:"is_test"`
+	IsGenerated bool         `json:"is_generated"`
+	SyncState   string       `json:"sync_state"`
+	Summary     *HTMLSummary `json:"summary,omitempty"`
+	Callers     []string     `json:"callers,omitempty"`
+	Callees     []string     `json:"callees,omitempty"`
 }
 
 type HTMLCoupled struct {
@@ -184,6 +186,8 @@ type HTMLTreeNode struct {
 
 // RenderHTML renders the single-file offline report.
 func RenderHTML(report HTMLReport) (string, error) {
+	// Hotspots are a derived production-risk view; never trust stale or noisy input.
+	report.Hotspots = BuildHotspots(report.Symbols)
 	payload, err := json.Marshal(report)
 	if err != nil {
 		return "", err
@@ -202,6 +206,38 @@ func RenderHTML(report HTMLReport) (string, error) {
 		return "", err
 	}
 	return out.String(), nil
+}
+
+// BuildHotspots selects the highest-risk production symbols. Test and generated
+// declarations are excluded because their branches are not shipped risk.
+func BuildHotspots(symbols []HTMLSymbol) []HTMLSymbol {
+	hotspots := make([]HTMLSymbol, 0)
+	for _, symbol := range symbols {
+		if symbol.IsTest || symbol.IsGenerated {
+			continue
+		}
+		switch symbol.Kind {
+		case "func", "method", "type":
+		default:
+			continue
+		}
+		if symbol.Complexity == 0 && symbol.FanIn == 0 {
+			continue
+		}
+		hotspots = append(hotspots, symbol)
+	}
+	sort.Slice(hotspots, func(i, j int) bool {
+		left := hotspots[i].Complexity*2 + hotspots[i].FanIn
+		right := hotspots[j].Complexity*2 + hotspots[j].FanIn
+		if left != right {
+			return left > right
+		}
+		return hotspots[i].ID < hotspots[j].ID
+	})
+	if len(hotspots) > 10 {
+		hotspots = hotspots[:10]
+	}
+	return hotspots
 }
 
 // LayoutGraph assigns deterministic layer/order coordinates, breaking cycles
