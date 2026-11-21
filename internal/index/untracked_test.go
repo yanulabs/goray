@@ -29,10 +29,10 @@ func TestDetectUntracked(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"go.mod":          "module example.com/nested\n\ngo 1.23\n",
-		"tracked.go":      "package nested\n",
-		"untracked.go":    "package nested\n",
-		"with space.go":   "package nested\n",
+		"go.mod":        "module example.com/nested\n\ngo 1.23\n",
+		"tracked.go":    "package nested\n",
+		"untracked.go":  "package nested\n",
+		"with space.go": "package nested\n",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(nested, name), []byte(body), 0o644); err != nil {
@@ -59,6 +59,30 @@ func TestDetectUntracked(t *testing.T) {
 	}
 }
 
+func TestTrackedViewDropsModuleEdges(t *testing.T) {
+	idx := &Index{
+		UntrackedFiles: map[string]bool{"b/b.go": true},
+		Symbols: map[string]*Symbol{
+			"example.com/a.X": {ID: "example.com/a.X", Name: "X", ModuleArea: "a"},
+		},
+		Modules: map[string]*ModSummary{
+			"a": {Name: "a", Files: 1, OutModules: map[string][]string{"b": {"X"}}, InModules: map[string][]string{}},
+			"b": {Name: "b", Files: 1, UntrackedFiles: 1, AllUntracked: true,
+				OutModules: map[string][]string{"a": {"Y"}}, InModules: map[string][]string{"a": {"X"}}},
+		},
+	}
+	view := idx.TrackedView()
+	if _, ok := view.Modules["b"]; ok {
+		t.Fatal("all-untracked module survived tracked view")
+	}
+	if _, ok := view.Modules["a"].OutModules["b"]; ok {
+		t.Fatal("tracked view kept an edge to a dropped module")
+	}
+	if _, ok := idx.Modules["a"].OutModules["b"]; !ok {
+		t.Fatal("tracked view mutated the source index")
+	}
+}
+
 func TestBuildTagsUntrackedFiles(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -81,6 +105,13 @@ func TestBuildTagsUntrackedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(mod, "scratch.go"), []byte("package app\n\nfunc Scratch() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	untrackedPkg := filepath.Join(mod, "scratchpkg")
+	if err := os.MkdirAll(untrackedPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(untrackedPkg, "s.go"), []byte("package scratchpkg\n\nfunc S() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	gitRun(t, root, "add", "app/go.mod", "app/tracked.go")
 
 	idx, err := Build(mod)
@@ -100,8 +131,12 @@ func TestBuildTagsUntrackedFiles(t *testing.T) {
 	if modSummary == nil || modSummary.UntrackedFiles != 1 || modSummary.AllUntracked {
 		t.Fatalf("module summary = %+v", modSummary)
 	}
+	scratchModule := idx.Modules["scratchpkg"]
+	if scratchModule == nil || scratchModule.UntrackedFiles != 1 || !scratchModule.AllUntracked {
+		t.Fatalf("all-untracked module summary = %+v", scratchModule)
+	}
 	view := idx.TrackedView()
-	if len(view.Symbols) != len(idx.Symbols)-1 || view.Symbols["example.com/app.Scratch"] != nil {
-		t.Fatalf("tracked view did not drop untracked symbol: %d vs %d", len(view.Symbols), len(idx.Symbols))
+	if len(view.Symbols) != len(idx.Symbols)-2 || view.Symbols["example.com/app.Scratch"] != nil || view.Symbols["example.com/app/scratchpkg.S"] != nil {
+		t.Fatalf("tracked view did not drop untracked symbols: %d vs %d", len(view.Symbols), len(idx.Symbols))
 	}
 }

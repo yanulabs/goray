@@ -235,29 +235,27 @@ func (s *Store) Rebuild() error {
 }
 
 // Wait returns the latest snapshot, waiting up to indexWaitGrace for the
-// initial build and briefly for in-flight rebuilds. A cold start that exceeds
-// the grace period returns *IndexingError so callers can respond immediately.
+// initial build and briefly for in-flight rebuilds. Only a cold start that
+// exceeds the grace period returns *IndexingError; a long rebuild serves the
+// last healthy snapshot instead of discarding it.
 func (s *Store) Wait(ctx context.Context) (*Index, error) {
 	start := time.Now()
-	waitCtx, cancel := context.WithTimeout(ctx, indexWaitGrace)
-	defer cancel()
-	indexingErr := func(err error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return &IndexingError{Elapsed: time.Since(start), State: s.State()}
-		}
-		return err
-	}
-
+	timer := time.NewTimer(indexWaitGrace)
+	defer timer.Stop()
 	select {
 	case <-s.ready:
-	case <-waitCtx.Done():
-		return nil, indexingErr(waitCtx.Err())
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		// The build may have completed while the timer fired; prefer readiness.
+		select {
+		case <-s.ready:
+		default:
+			return nil, &IndexingError{Elapsed: time.Since(start), State: s.State()}
+		}
 	}
-	if err := s.waitSettled(waitCtx); err != nil {
-		return nil, indexingErr(err)
+	if err := s.waitSettled(ctx); err != nil {
+		return nil, err
 	}
 
 	s.mu.RLock()

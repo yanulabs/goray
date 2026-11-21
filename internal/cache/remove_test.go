@@ -147,6 +147,24 @@ func TestRemoveDBTargetsAndDryRun(t *testing.T) {
 	}
 }
 
+func TestRemoveDBSidecarsWithoutMain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sidecar-only.db")
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if err := os.WriteFile(sidecar, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := RemoveDB(path, RemoveOptions{})
+	if err != nil || !result.Removed || len(result.Files) != 2 {
+		t.Fatalf("sidecar-only removal = %+v (%v)", result, err)
+	}
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists: %v", sidecar, err)
+		}
+	}
+}
+
 func TestRemoveDBLockProtection(t *testing.T) {
 	root := t.TempDir()
 	working, _ := makeDBPair(t, root)

@@ -55,3 +55,44 @@ func TestStoreWaitReturnsIndexingErrorWhileBuilding(t *testing.T) {
 		t.Fatalf("wait after build: %v", err)
 	}
 }
+
+func TestStoreWaitServesSnapshotDuringLongRebuild(t *testing.T) {
+	previous := indexWaitGrace
+	indexWaitGrace = 50 * time.Millisecond
+	defer func() { indexWaitGrace = previous }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/rebuild\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package rebuild\n\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(dir, nil)
+	store.Start()
+	store.WaitForBuild()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	store.SetBuildHook(func(*Index) error {
+		close(entered)
+		<-release
+		return nil
+	})
+	go func() { _ = store.Rebuild() }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rebuild never reached the hook")
+	}
+
+	idx, err := store.Wait(context.Background())
+	if err != nil || idx == nil {
+		t.Fatalf("long rebuild should serve the last snapshot, got idx=%v err=%v", idx, err)
+	}
+	unblock()
+	store.WaitForBuild()
+}

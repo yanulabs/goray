@@ -103,9 +103,15 @@ func (idx *Index) TrackedView() *Index {
 			out.LargeFiles = append(out.LargeFiles, file)
 		}
 	}
-	out.Modules = make(map[string]*ModSummary, len(idx.Modules))
+	keptModules := make(map[string]bool, len(idx.Modules))
 	for name, mod := range idx.Modules {
-		if mod.AllUntracked {
+		if !mod.AllUntracked {
+			keptModules[name] = true
+		}
+	}
+	out.Modules = make(map[string]*ModSummary, len(keptModules))
+	for name, mod := range idx.Modules {
+		if !keptModules[name] {
 			continue
 		}
 		copyMod := *mod
@@ -118,6 +124,18 @@ func (idx *Index) TrackedView() *Index {
 		for _, file := range mod.LargeFiles {
 			if !file.Untracked {
 				copyMod.LargeFiles = append(copyMod.LargeFiles, file)
+			}
+		}
+		copyMod.OutModules = make(map[string][]string, len(mod.OutModules))
+		for dst, symbols := range mod.OutModules {
+			if keptModules[dst] {
+				copyMod.OutModules[dst] = symbols
+			}
+		}
+		copyMod.InModules = make(map[string][]string, len(mod.InModules))
+		for src, symbols := range mod.InModules {
+			if keptModules[src] {
+				copyMod.InModules[src] = symbols
 			}
 		}
 		out.Modules[name] = &copyMod

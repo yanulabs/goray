@@ -228,6 +228,28 @@ func TestDBRmTargets(t *testing.T) {
 	})
 }
 
+func TestDBRmExplicitWithoutModule(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GORAY_DB", "")
+	noModule := t.TempDir()
+
+	dbPath := filepath.Join(t.TempDir(), "explicit.db")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runDBCli(t, "db", "rm", "--db", dbPath, noModule)
+	if code != 0 {
+		t.Fatalf("explicit DB outside a module: exit %d: %s", code, errOut)
+	}
+	mustNotExist(t, dbPath)
+
+	code, _, errOut = runDBCli(t, "db", "rm", "--db", ":memory:", noModule)
+	if code != 2 || !strings.Contains(errOut, ":memory:") {
+		t.Fatalf(":memory: outside a module: exit %d, err %q", code, errOut)
+	}
+}
+
 func TestDBRmLockProtection(t *testing.T) {
 	root, working, _ := setupDBModule(t, "example.com/rmlocked")
 	startCmdLockHolder(t, working)
@@ -284,7 +306,16 @@ func TestDBPruneCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, out, errOut := runDBCli(t, "db", "prune")
+	code, out, errOut := runDBCli(t, "db", "prune", "--dry-run")
+	if code != 0 {
+		t.Fatalf("dry-run exit %d: %s", code, errOut)
+	}
+	if !strings.Contains(out, "would remove") || !strings.Contains(out, orphanDB) {
+		t.Fatalf("prune dry-run output = %q", out)
+	}
+	mustExist(t, orphanDB, aliveDB)
+
+	code, out, errOut = runDBCli(t, "db", "prune")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}

@@ -16,7 +16,7 @@ type HotspotOptions struct {
 	UntestedOnly     bool
 }
 
-func (opts HotspotOptions) allowed(module string, generated, untracked bool, complexity, loc int) bool {
+func (opts HotspotOptions) selected(module string, generated, untracked bool) bool {
 	if opts.Module != "" && module != opts.Module {
 		return false
 	}
@@ -31,10 +31,15 @@ func (opts HotspotOptions) allowed(module string, generated, untracked bool, com
 	if opts.TrackedOnly && untracked {
 		return false
 	}
-	if complexity < opts.MinComplexity || loc < opts.MinLoc {
-		return false
-	}
 	return true
+}
+
+func (opts HotspotOptions) meets(complexity, loc int) bool {
+	return complexity >= opts.MinComplexity && loc >= opts.MinLoc
+}
+
+func (opts HotspotOptions) allowed(module string, generated, untracked bool, complexity, loc int) bool {
+	return opts.selected(module, generated, untracked) && opts.meets(complexity, loc)
 }
 
 // Hotspot is one ranked item. TestCovered is a pointer so an explicit false is
@@ -108,21 +113,28 @@ func (idx *Index) funcHotspots(opts HotspotOptions) []Hotspot {
 type fileAggregate struct {
 	hotspot   Hotspot
 	totalComp int
+	callers   map[string]bool
 }
 
 func (idx *Index) fileHotspots(opts HotspotOptions) []Hotspot {
 	aggregates := map[string]*fileAggregate{}
 	for _, sym := range idx.Symbols {
-		if !opts.allowed(sym.ModuleArea, sym.Generated, sym.Untracked, sym.Cyclomatic, sym.LOC) {
+		// Filters that depend on file-level aggregates (min_complexity,
+		// min_loc) are applied after aggregation so a large file is not
+		// discarded because its individual symbols are small.
+		if !opts.selected(sym.ModuleArea, sym.Generated, sym.Untracked) {
 			continue
 		}
 		agg := aggregates[sym.File]
 		if agg == nil {
-			agg = &fileAggregate{hotspot: Hotspot{
-				ID: "file:" + sym.File, CanonicalID: "file:" + sym.File,
-				Name: sym.File, Kind: "file", File: sym.File, Module: sym.ModuleArea,
-				Generated: sym.Generated, Untracked: sym.Untracked,
-			}}
+			agg = &fileAggregate{
+				hotspot: Hotspot{
+					ID: "file:" + sym.File, CanonicalID: "file:" + sym.File,
+					Name: sym.File, Kind: "file", File: sym.File, Module: sym.ModuleArea,
+					Generated: sym.Generated, Untracked: sym.Untracked,
+				},
+				callers: map[string]bool{},
+			}
 			aggregates[sym.File] = agg
 		}
 		if sym.LOC > 0 {
@@ -137,6 +149,9 @@ func (idx *Index) fileHotspots(opts HotspotOptions) []Hotspot {
 		}
 		agg.hotspot.Generated = agg.hotspot.Generated || sym.Generated
 		agg.hotspot.Untracked = agg.hotspot.Untracked || sym.Untracked
+		for _, caller := range idx.Callers[sym.ID] {
+			agg.callers[caller] = true
+		}
 	}
 	items := make([]Hotspot, 0, len(aggregates))
 	for path, agg := range aggregates {
@@ -146,8 +161,12 @@ func (idx *Index) fileHotspots(opts HotspotOptions) []Hotspot {
 				break
 			}
 		}
+		agg.hotspot.FanIn = len(agg.callers)
 		agg.hotspot.TotalComplexity = agg.totalComp
-		agg.hotspot.RiskScore = agg.hotspot.Complexity*3 + agg.hotspot.LOC/10
+		agg.hotspot.RiskScore = agg.hotspot.Complexity*3 + agg.hotspot.LOC/10 + agg.hotspot.FanIn*2
+		if !opts.meets(agg.hotspot.Complexity, agg.hotspot.LOC) {
+			continue
+		}
 		items = append(items, agg.hotspot)
 	}
 	return items
@@ -165,15 +184,19 @@ func (idx *Index) typeHotspots(opts HotspotOptions) []Hotspot {
 		if sym.Kind != "struct" && sym.Kind != "type" {
 			continue
 		}
-		if !opts.allowed(sym.ModuleArea, sym.Generated, sym.Untracked, 0, sym.LOC) {
+		if !opts.selected(sym.ModuleArea, sym.Generated, sym.Untracked) {
 			continue
 		}
 		fanIn := len(idx.Callers[sym.ID]) + len(idx.XRefs[sym.ID])
 		methods := methodCounts[sym.PkgPath+"."+sym.Name]
+		complexity := sym.Fields + methods
+		if !opts.meets(complexity, sym.LOC) {
+			continue
+		}
 		items = append(items, Hotspot{
 			ID: sym.ID, CanonicalID: sym.CanonicalID(), Name: sym.Name, Kind: sym.Kind,
 			File: sym.File, Line: sym.Line, Module: sym.ModuleArea, LOC: sym.LOC,
-			FanIn: fanIn, RiskScore: sym.Fields*2 + methods*3 + fanIn,
+			Complexity: complexity, FanIn: fanIn, RiskScore: sym.Fields*2 + methods*3 + fanIn,
 			Fields: sym.Fields, Methods: methods, Generated: sym.Generated, Untracked: sym.Untracked,
 		})
 	}

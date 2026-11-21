@@ -65,6 +65,19 @@ func runDB(args []string, stdout io.Writer) error {
 	if opts.command == "prune" {
 		return runDBPrune(opts, stdout)
 	}
+	if opts.command == "rm" {
+		if dbPath, ok := explicitDBPath(opts.dbPath); ok {
+			if dbPath == ":memory:" {
+				return usagef("refusing to remove :memory: database")
+			}
+			result, removeErr := cache.RemoveDB(dbPath, removeOptions(opts))
+			if removeErr != nil {
+				return removeErr
+			}
+			printRemoved(stdout, result, opts.dryRun)
+			return nil
+		}
+	}
 	root, err := index.ResolveModuleRoot(opts.path)
 	if err != nil {
 		return err
@@ -136,18 +149,6 @@ func printRemoved(stdout io.Writer, result cache.RemoveResult, dryRun bool) {
 
 func runDBRemove(opts dbOptions, root string, stdout io.Writer) error {
 	removeFlags := removeOptions(opts)
-	if path, ok := explicitDBPath(opts.dbPath); ok {
-		if path == ":memory:" {
-			return usagef("refusing to remove :memory: database")
-		}
-		result, err := cache.RemoveDB(path, removeFlags)
-		if err != nil {
-			return err
-		}
-		printRemoved(stdout, result, opts.dryRun)
-		return nil
-	}
-
 	working, summary, err := cache.ResolvePaths(root, "")
 	if err != nil {
 		return err

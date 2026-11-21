@@ -24,8 +24,8 @@ func (s staticIndexer) Status() index.Status {
 	}
 	return s.status
 }
-func (s staticIndexer) Root() string     { return s.idx.RootDir }
-func (s staticIndexer) Rebuild() error   { return nil }
+func (s staticIndexer) Root() string   { return s.idx.RootDir }
+func (s staticIndexer) Rebuild() error { return nil }
 
 func buildToolFixture(t *testing.T) *index.Index {
 	t.Helper()

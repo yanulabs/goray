@@ -227,13 +227,13 @@ func (t *toolset) deadCode() mcp.Tool {
 		Name:        "get_dead_code",
 		Description: "Zero-reference functions/methods with closed-world and interface-satisfaction filtering. Supports generated/exported/module filters and grouped summaries.",
 		InputSchema: object(map[string]any{
-			"package_prefix":   propString("Optional relative package prefix"),
-			"include_exported": propBool("Include exported symbols in public packages (default: false; internal/ and cmd/ always audited)"),
+			"package_prefix":    propString("Optional relative package prefix"),
+			"include_exported":  propBool("Include exported symbols in public packages (default: false; internal/ and cmd/ always audited)"),
 			"include_generated": propBool("Include symbols from generated files (default: false)"),
-			"module":           propString("Restrict results to one module group"),
-			"exclude_modules":  map[string]any{"type": "array", "items": propString("Module group to exclude"), "description": "Module groups to exclude"},
-			"group_by":         propEnum("Group results: none, module, or package (default: none)", "none", "module", "package"),
-			"limit":            propInt("Max results (or groups when grouped; default: 100)"),
+			"module":            propString("Restrict results to one module group"),
+			"exclude_modules":   map[string]any{"type": "array", "items": propString("Module group to exclude"), "description": "Module groups to exclude"},
+			"group_by":          propEnum("Group results: none, module, or package (default: none)", "none", "module", "package"),
+			"limit":             propInt("Max results (or groups when grouped; default: 100)"),
 		}),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
 			groupBy := strArg(args, "group_by", "none")

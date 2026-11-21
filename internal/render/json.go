@@ -29,17 +29,17 @@ func (jsonRenderer) RenderCodebaseMap(idx *index.Index) string {
 	}
 
 	return JSON(map[string]any{
-		"module_path":       idx.ModulePath,
-		"packages":          len(idx.Packages),
-		"symbols":           len(idx.Symbols),
-		"generated_files":   generatedFileCount(idx),
-		"untracked_files":   untrackedFileCount(idx),
-		"modules":           idx.ModulesByLOC(),
+		"module_path":        idx.ModulePath,
+		"packages":           len(idx.Packages),
+		"symbols":            len(idx.Symbols),
+		"generated_files":    generatedFileCount(idx),
+		"untracked_files":    untrackedFileCount(idx),
+		"modules":            idx.ModulesByLOC(),
 		"cross_module_edges": moduleEdges(idx),
-		"module_cycles":     cycleStrings,
-		"large_files":       large,
-		"top_complex":       hotspots,
-		"top_hotspots":      hotspots,
+		"module_cycles":      cycleStrings,
+		"large_files":        large,
+		"top_complex":        hotspots,
+		"top_hotspots":       hotspots,
 	})
 }
 

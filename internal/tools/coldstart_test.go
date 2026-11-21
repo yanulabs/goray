@@ -14,9 +14,11 @@ type indexingIndexer struct{}
 func (indexingIndexer) Wait(context.Context) (*index.Index, error) {
 	return nil, &index.IndexingError{Elapsed: 1500 * time.Millisecond, State: index.StateRebuilding}
 }
-func (indexingIndexer) Status() index.Status { return index.Status{IndexState: index.StateInitializing} }
-func (indexingIndexer) Root() string         { return "." }
-func (indexingIndexer) Rebuild() error       { return nil }
+func (indexingIndexer) Status() index.Status {
+	return index.Status{IndexState: index.StateInitializing}
+}
+func (indexingIndexer) Root() string   { return "." }
+func (indexingIndexer) Rebuild() error { return nil }
 
 func TestToolsReturnStructuredIndexingState(t *testing.T) {
 	localOnly := map[string]bool{

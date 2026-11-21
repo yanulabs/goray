@@ -134,7 +134,7 @@ func TestHotspotTargetsAndSorts(t *testing.T) {
 		t.Fatalf("file hotspots = %+v", files)
 	}
 	types, total := idx.Hotspots(HotspotOptions{Target: "type", Limit: 100})
-	if total == 0 || types[0].Name != "Big" || types[0].Fields != 3 || types[0].Methods != 1 {
+	if total == 0 || types[0].Name != "Big" || types[0].Fields != 3 || types[0].Methods != 1 || types[0].Complexity != 4 {
 		t.Fatalf("type hotspots = %+v", types)
 	}
 
@@ -155,5 +155,75 @@ func TestHotspotTargetsAndSorts(t *testing.T) {
 	limited, total := idx.Hotspots(HotspotOptions{Target: "func", Limit: 1})
 	if len(limited) != 1 || total <= 1 {
 		t.Fatalf("limit = %d, total = %d", len(limited), total)
+	}
+}
+
+func TestTestHelperFunctionsSeedCoverage(t *testing.T) {
+	dir := writeGoModule(t, map[string]string{
+		"go.mod": "module example.com/helper\n\ngo 1.23\n",
+		"pkg/p.go": `package pkg
+
+func Target() {}
+`,
+		"pkg/p_test.go": `package pkg
+
+import "testing"
+
+func TestX(t *testing.T) { helper() }
+func helper()           { Target() }
+`,
+	})
+	idx, err := Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !idx.TestCovered["example.com/helper/pkg.Target"] {
+		t.Fatal("production function reached through a test helper was not marked covered")
+	}
+}
+
+func TestFileHotspotsFanInAndAggregateFilters(t *testing.T) {
+	idx := hotspotFixture(t)
+	items, _ := idx.Hotspots(HotspotOptions{Target: "file", SortBy: "fan_in", Limit: 100})
+	var target Hotspot
+	for _, item := range items {
+		if item.Name == "pkg/pkg.go" {
+			target = item
+		}
+	}
+	if target.Name == "" {
+		t.Fatalf("pkg/pkg.go missing from file hotspots: %+v", items)
+	}
+	if target.FanIn == 0 {
+		t.Fatalf("file fan-in not aggregated: %+v", target)
+	}
+
+	full := target.LOC
+	byMin, _ := idx.Hotspots(HotspotOptions{Target: "file", MinLoc: full, Limit: 100})
+	if len(byMin) == 0 {
+		t.Fatalf("min_loc should apply to aggregate file LOC (%d)", full)
+	}
+	above, _ := idx.Hotspots(HotspotOptions{Target: "file", MinLoc: full + 1, Limit: 100})
+	if len(above) != 0 {
+		t.Fatalf("min_loc above aggregate LOC should filter the file: %+v", above)
+	}
+
+	for _, sortBy := range []string{"loc", "complexity", "fan_in"} {
+		items, _ := idx.Hotspots(HotspotOptions{Target: "file", SortBy: sortBy, Limit: 100})
+		key := func(item Hotspot) int {
+			switch sortBy {
+			case "loc":
+				return item.LOC
+			case "complexity":
+				return item.Complexity
+			default:
+				return item.FanIn
+			}
+		}
+		for i := 1; i < len(items); i++ {
+			if key(items[i-1]) < key(items[i]) {
+				t.Fatalf("file %s order broken: %+v then %+v", sortBy, items[i-1], items[i])
+			}
+		}
 	}
 }

@@ -29,7 +29,7 @@ func (b *builder) computeTestCoverage() {
 		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || !isTestEntry(fn.Name.Name) || fn.Body == nil {
+			if !ok || fn.Body == nil {
 				continue
 			}
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
@@ -74,13 +74,4 @@ func (b *builder) computeTestCoverage() {
 			b.idx.TestCovered[id] = true
 		}
 	}
-}
-
-func isTestEntry(name string) bool {
-	for _, prefix := range []string{"Test", "Benchmark", "Fuzz", "Example"} {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
 }

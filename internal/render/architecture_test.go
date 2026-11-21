@@ -15,7 +15,7 @@ func cycleIndex() *index.Index {
 			"example.com/cycles/a": {RelPath: "a", ModuleArea: "a", Files: 2, GeneratedFiles: 1, UntrackedFiles: 1},
 		},
 		Symbols: map[string]*index.Symbol{
-			"example.com/cycles.a.Gen": {ID: "example.com/cycles.a.Gen", Name: "Gen", Kind: "func", Cyclomatic: 99, ModuleArea: "a", Generated: true},
+			"example.com/cycles.a.Gen":  {ID: "example.com/cycles.a.Gen", Name: "Gen", Kind: "func", Cyclomatic: 99, ModuleArea: "a", Generated: true},
 			"example.com/cycles.a.Live": {ID: "example.com/cycles.a.Live", Name: "Live", Kind: "func", Cyclomatic: 7, ModuleArea: "a", Untracked: true, File: "a/scratch.go"},
 		},
 		Callers:        map[string][]string{"example.com/cycles.a.Live": {"x", "y", "z"}},

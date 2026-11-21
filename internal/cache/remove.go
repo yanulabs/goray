@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	modernsqlite "modernc.org/sqlite"
@@ -91,6 +92,10 @@ func acquireExclusiveLock(path string) error {
 		}
 	}
 	if err := execConn(ctx, conn, "BEGIN IMMEDIATE", nil); err != nil {
+		// A non-SQLite file cannot be held by goray; treat it as removable.
+		if strings.Contains(strings.ToLower(err.Error()), "not a database") {
+			return nil
+		}
 		return fmt.Errorf("database %s is in use by another process; stop goray serve or pass --force: %w", path, err)
 	}
 	_ = execConn(ctx, conn, "ROLLBACK", nil)
@@ -107,13 +112,17 @@ func RemoveDB(path string, opts RemoveOptions) (RemoveResult, error) {
 	}
 	candidates := []string{path, path + "-wal", path + "-shm"}
 	existing := make([]RemovedFile, 0, len(candidates))
-	for _, candidate := range candidates {
+	mainExists := false
+	for i, candidate := range candidates {
 		info, err := os.Stat(candidate)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return result, err
+		}
+		if i == 0 {
+			mainExists = true
 		}
 		existing = append(existing, RemovedFile{Path: candidate, Size: info.Size()})
 	}
@@ -124,7 +133,7 @@ func RemoveDB(path string, opts RemoveOptions) (RemoveResult, error) {
 	if opts.DryRun {
 		return result, nil
 	}
-	if !opts.Force {
+	if !opts.Force && mainExists {
 		if err := acquireExclusiveLock(path); err != nil {
 			return RemoveResult{}, err
 		}
@@ -146,8 +155,8 @@ type SkippedDB struct {
 
 // PruneResult summarizes a prune pass.
 type PruneResult struct {
-	Removed       []RemovedFile `json:"removed"`
-	Skipped       []SkippedDB   `json:"skipped"`
+	Removed        []RemovedFile `json:"removed"`
+	Skipped        []SkippedDB   `json:"skipped"`
 	ReclaimedBytes int64         `json:"reclaimed_bytes"`
 }
 
@@ -167,7 +176,16 @@ func Prune(opts RemoveOptions) (PruneResult, error) {
 	}
 	for _, path := range matches {
 		root, err := ReadDBMeta(path, canonicalKey)
-		if err != nil || root == "" {
+		if err != nil {
+			reason := "missing canonical_root metadata"
+			message := strings.ToLower(err.Error())
+			if strings.Contains(message, "locked") || strings.Contains(message, "busy") {
+				reason = "database is in use"
+			}
+			result.Skipped = append(result.Skipped, SkippedDB{Path: path, Reason: reason})
+			continue
+		}
+		if root == "" {
 			result.Skipped = append(result.Skipped, SkippedDB{Path: path, Reason: "missing canonical_root metadata"})
 			continue
 		}

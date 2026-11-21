@@ -188,17 +188,33 @@ func isGenerated(name string, src []byte) bool {
 	if strings.HasSuffix(name, ".gen.go") || strings.HasSuffix(name, "_gen.go") {
 		return true
 	}
-	head := src
-	if idx := bytes.Index(src, []byte("package ")); idx >= 0 {
-		head = src[:idx]
-	}
-	for _, raw := range bytes.Split(head, []byte{'\n'}) {
+	inBlock := false
+	for _, raw := range bytes.Split(src, []byte{'\n'}) {
 		line := strings.TrimSpace(string(raw))
+		if !inBlock && strings.HasPrefix(line, "package ") {
+			break
+		}
 		if generatedStandard.MatchString(line) {
 			return true
 		}
-		text := commentText(line)
-		if text == "" {
+		text := ""
+		switch {
+		case inBlock:
+			text = line
+			if strings.HasSuffix(line, "*/") {
+				text = strings.TrimSpace(strings.TrimSuffix(line, "*/"))
+				inBlock = false
+			}
+		case strings.HasPrefix(line, "//"):
+			text = strings.TrimSpace(strings.TrimPrefix(line, "//"))
+		case strings.HasPrefix(line, "/*"):
+			text = strings.TrimSpace(strings.TrimPrefix(line, "/*"))
+			if strings.HasSuffix(text, "*/") {
+				text = strings.TrimSpace(strings.TrimSuffix(text, "*/"))
+			} else {
+				inBlock = true
+			}
+		default:
 			continue
 		}
 		lower := strings.ToLower(text)
@@ -209,18 +225,6 @@ func isGenerated(name string, src []byte) bool {
 		}
 	}
 	return false
-}
-
-// commentText extracts the prose from a leading comment line. Non-comment
-// lines produce an empty string.
-func commentText(line string) string {
-	for _, prefix := range []string{"//", "/*", "*"} {
-		if strings.HasPrefix(line, prefix) {
-			text := strings.TrimSpace(strings.TrimPrefix(line, prefix))
-			return strings.TrimSuffix(strings.TrimSpace(text), "*/")
-		}
-	}
-	return ""
 }
 
 func countLines(src []byte) int {

@@ -86,20 +86,20 @@ type PkgInfo struct {
 
 // ModSummary aggregates the packages under modules/<name>.
 type ModSummary struct {
-	Name         string              `json:"name"`
-	Packages     int                 `json:"packages"`
-	Files        int                 `json:"files"`
-	GeneratedFiles int              `json:"generated_files"`
-	UntrackedFiles int              `json:"untracked_files"`
-	AllUntracked bool                `json:"all_untracked,omitempty"`
-	ProdLOC      int                 `json:"prod_loc"`
-	TestLOC      int                 `json:"test_loc"`
-	RootExported int                 `json:"root_exported"`
-	PortsCalls   int                 `json:"ports_calls"`
-	Goroutines   int                 `json:"goroutines"`
-	OutModules   map[string][]string `json:"out_modules"`
-	InModules    map[string][]string `json:"in_modules"`
-	LargeFiles   []FileMetric        `json:"large_files,omitempty"`
+	Name           string              `json:"name"`
+	Packages       int                 `json:"packages"`
+	Files          int                 `json:"files"`
+	GeneratedFiles int                 `json:"generated_files"`
+	UntrackedFiles int                 `json:"untracked_files"`
+	AllUntracked   bool                `json:"all_untracked,omitempty"`
+	ProdLOC        int                 `json:"prod_loc"`
+	TestLOC        int                 `json:"test_loc"`
+	RootExported   int                 `json:"root_exported"`
+	PortsCalls     int                 `json:"ports_calls"`
+	Goroutines     int                 `json:"goroutines"`
+	OutModules     map[string][]string `json:"out_modules"`
+	InModules      map[string][]string `json:"in_modules"`
+	LargeFiles     []FileMetric        `json:"large_files,omitempty"`
 }
 
 // Index is an immutable snapshot after Build returns.

@@ -148,6 +148,9 @@ func (b *builder) matchInterfaces() {
 			continue // uninstantiated generics: skip types.Implements paths
 		}
 		for _, iface := range b.visibleIfaces {
+			if typ.ptr.Len() < iface.iface.NumMethods() {
+				continue
+			}
 			viaValue := safeImplements(typ.named, iface.iface)
 			viaPtr := !viaValue && safeImplements(types.NewPointer(typ.named), iface.iface)
 			if !viaValue && !viaPtr {
