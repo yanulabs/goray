@@ -70,12 +70,27 @@ auto-invoke it.
 | `-export-html <file>` | Write the self-contained interactive HTML report and exit |
 | `-db <path>` | SQLite path; `:memory:` for ephemeral runs (or `GO_MCP_DB`) |
 | `-db-info` | Print cache path, table counts, staleness counts, and recent summaries, then exit |
+| `-db-path` | Print the effective SQLite path and exit; does not load packages or create the DB |
 | `-no-watch` | Disable automatic file watching/reindexing |
 | `-log-level off\|error\|info` | stderr log level (default `info`, or `GO_MCP_LOG_LEVEL`) |
 
+The optional positional path defaults to `.`. Every mode resolves it to the
+nearest ancestor directory containing `go.mod`; the path may also point at a
+file inside the module. This lets you invoke the server from any subdirectory,
+and nested modules resolve to their own root.
+
 The default database lives outside the repository at
-`<UserCacheDir>/go-mcp-server/<sha256(canonicalProjectPath)[:16]>.db`.
-Symlinks are resolved before hashing, so the same checkout has one default DB.
+`<UserCacheDir>/go-mcp-server/<repo-slug>-<sha256(canonicalRoot)[:12]>.db`.
+The slug comes from the module directory name: lowercase, restricted to
+`a-z0-9._-`, up to 32 characters. Symlinks are resolved before hashing, so the
+same checkout has one default DB. `-db` and `GO_MCP_DB` still take precedence.
+
+Print the effective DB path without building an index or touching the database:
+
+```sh
+go-mcp-server -db-path
+sqlite3 "$(go-mcp-server -db-path)"
+```
 
 Module-level metrics use `modules/<name>` when present; otherwise standard
 layout directories (`cmd/<name>`, `internal/<name>`, `pkg/<name>`) or the
@@ -117,7 +132,7 @@ go-mcp-server -db-info /path/to/go/project
 
 | Tool | Purpose |
 |---|---|
-| `project_info` | Index status, module path, counts, load errors |
+| `project_info` | Index status, module path, DB path, counts, load errors |
 | `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files (Markdown/JSON/DOT/Mermaid) |
 | `get_module_overview` | One module's packages, deps, large files, exported API (Markdown/JSON) |
 | `get_dependency_graph` | Package BFS graph, fan-in/fan-out ranking (JSON/Mermaid/DOT) |

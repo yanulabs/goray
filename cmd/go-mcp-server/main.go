@@ -46,6 +46,7 @@ func run() error {
 	exportHTML := flag.String("export-html", "", "export a self-contained interactive HTML report and exit")
 	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GO_MCP_DB)")
 	dbInfo := flag.Bool("db-info", false, "print populated cache statistics and exit")
+	dbPathOnly := flag.Bool("db-path", false, "print the resolved SQLite cache path and exit")
 	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	logLevelFlag := flag.String("log-level", envOr("GO_MCP_LOG_LEVEL", "info"), "log level: off|error|info")
@@ -56,9 +57,22 @@ func run() error {
 		return nil
 	}
 
-	root := "."
+	inputPath := "."
 	if flag.NArg() > 0 {
-		root = flag.Arg(0)
+		inputPath = flag.Arg(0)
+	}
+	root, err := index.ResolveModuleRoot(inputPath)
+	if err != nil {
+		return err
+	}
+
+	if *dbPathOnly {
+		dbPath, err := cache.ResolvePath(root, *dbFlag)
+		if err != nil {
+			return err
+		}
+		fmt.Println(dbPath)
+		return nil
 	}
 
 	level, err := parseLevel(*logLevelFlag)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/yanulabs/go-mcp-server/internal/cache"
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/render"
 )
@@ -46,5 +47,46 @@ func TestRegistry(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(text), &info); err != nil || info.Tools != len(list) {
 		t.Fatalf("project_info = %s (%v)", text, err)
+	}
+}
+
+type fakeSummaries struct{ path string }
+
+func (f fakeSummaries) Enrich(context.Context, string) (json.RawMessage, cache.SyncState, bool, error) {
+	return nil, "", false, nil
+}
+
+func (f fakeSummaries) ListStale(context.Context, cache.StaleFilter) ([]cache.StaleSymbol, error) {
+	return nil, nil
+}
+
+func (f fakeSummaries) SummaryContext(context.Context, string, *index.Index) (cache.SummaryContext, error) {
+	return cache.SummaryContext{}, nil
+}
+
+func (f fakeSummaries) UpsertSummaries(context.Context, []cache.SummaryInput) ([]cache.UpsertResult, error) {
+	return nil, nil
+}
+
+func (f fakeSummaries) Coverage(context.Context, string) (cache.Coverage, error) {
+	return cache.Coverage{}, nil
+}
+
+func (f fakeSummaries) Path() string { return f.path }
+
+func TestProjectInfoIncludesDBPath(t *testing.T) {
+	list := New(fakeIndexer{}, render.NewRegistry(), fakeSummaries{path: ":memory:"})
+	text, failed := list[0].Run(context.Background(), nil)
+	if failed {
+		t.Fatalf("project_info failed: %s", text)
+	}
+	var info struct {
+		DBPath string `json:"db_path"`
+	}
+	if err := json.Unmarshal([]byte(text), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.DBPath != ":memory:" {
+		t.Fatalf("db_path = %q", info.DBPath)
 	}
 }

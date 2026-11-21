@@ -97,7 +97,7 @@ func (t *toolset) projectInfo() mcp.Tool {
 				index.Status
 				Tools         int    `json:"tools"`
 				Summaries     bool   `json:"summaries_enabled"`
-				DBPath        string `json:"db_path,omitempty"`
+				DBPath        string `json:"db_path"`
 				PromptVersion string `json:"summary_prompt_version,omitempty"`
 			}
 			out := info{Status: t.src.Status(), Tools: t.count, Summaries: t.summaries != nil}

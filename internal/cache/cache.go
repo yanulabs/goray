@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/yanulabs/go-mcp-server/internal/index"
 )
 
 const (
@@ -97,19 +99,44 @@ func Open(path string) (*Cache, error) {
 
 // DefaultPath returns the per-project cache path outside the repository.
 func DefaultPath(projectRoot string) (string, error) {
-	abs, err := filepath.Abs(projectRoot)
+	root, err := index.ResolveModuleRoot(projectRoot)
 	if err != nil {
 		return "", err
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
-	}
-	sum := sha256.Sum256([]byte(abs))
+	sum := sha256.Sum256([]byte(root))
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "go-mcp-server", hex.EncodeToString(sum[:])[:16]+".db"), nil
+	name := repoSlug(root) + "-" + hex.EncodeToString(sum[:])[:12] + ".db"
+	return filepath.Join(base, "go-mcp-server", name), nil
+}
+
+// repoSlug turns a module directory name into a filesystem-friendly label.
+func repoSlug(root string) string {
+	base := strings.ToLower(filepath.Base(root))
+	var b strings.Builder
+	dashed := false
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+			dashed = false
+			continue
+		}
+		if !dashed {
+			b.WriteByte('-')
+			dashed = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if len(slug) > 32 {
+		slug = slug[:32]
+	}
+	slug = strings.Trim(slug, "-")
+	if slug == "" {
+		return "module"
+	}
+	return slug
 }
 
 // ResolvePath applies flag, env, and default precedence.

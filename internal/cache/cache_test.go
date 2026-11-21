@@ -461,6 +461,7 @@ func Leaf() int {
 
 func TestResolvePath(t *testing.T) {
 	project := t.TempDir()
+	writeCacheModule(t, project, map[string]string{})
 	t.Setenv("GO_MCP_DB", "")
 	path, err := ResolvePath(project, "")
 	if err != nil {
@@ -808,6 +809,7 @@ func TestDefaultPathResolvesSymlinks(t *testing.T) {
 	if err := os.MkdirAll(realDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeCacheModule(t, realDir, map[string]string{})
 	link := filepath.Join(root, "link")
 	if err := os.Symlink(realDir, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
@@ -823,9 +825,65 @@ func TestDefaultPathResolvesSymlinks(t *testing.T) {
 	if realPath != linkPath {
 		t.Fatalf("symlink path differs: %s != %s", realPath, linkPath)
 	}
-	if _, err := DefaultPath(filepath.Join(root, "not-created-yet")); err != nil {
-		t.Fatalf("non-existent path should fall back cleanly: %v", err)
+	if _, err := DefaultPath(filepath.Join(root, "not-created-yet")); err == nil {
+		t.Fatal("non-existent path should fail instead of falling back")
 	}
+}
+
+func TestDefaultPathReadableName(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	t.Setenv("HOME", cacheRoot)
+
+	root := filepath.Join(t.TempDir(), "My Repo_v1.2!!!")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCacheModule(t, root, map[string]string{})
+
+	path, err := DefaultPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(path)
+	cut := strings.LastIndex(name, "-")
+	if cut < 0 || name[:cut] != "my-repo_v1.2" {
+		t.Fatalf("cache name = %q", name)
+	}
+	hashPart := strings.TrimSuffix(name[cut+1:], ".db")
+	if len(hashPart) != 12 || !isLowerHex(hashPart) {
+		t.Fatalf("hash suffix = %q", hashPart)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("DefaultPath created a file: %v", err)
+	}
+}
+
+func TestRepoSlug(t *testing.T) {
+	long := strings.Repeat("a", 40)
+	cases := map[string]string{
+		"Simple":           "simple",
+		"My Repo":          "my-repo",
+		"a  b!!c":          "a-b-c",
+		"---":              "module",
+		"Repo_Under.Score": "repo_under.score",
+		long:               long[:32],
+		"Ünicode":          "nicode",
+	}
+	for input, want := range cases {
+		if got := repoSlug(filepath.Join("/tmp", input)); got != want {
+			t.Fatalf("repoSlug(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func isLowerHex(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func TestEditingTestFileKeepsPackageSynced(t *testing.T) {
@@ -896,5 +954,83 @@ func TestTestFileLoadErrorsDoNotAbortProduction(t *testing.T) {
 	}
 	if status.LoadErrors != 0 {
 		t.Fatalf("production load errors should be zero: %+v", status)
+	}
+}
+
+func TestDefaultPathUsesResolvedModuleRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCacheModule(t, root, map[string]string{})
+	deep := filepath.Join(root, "internal", "cache")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(deep, "summary.go")
+	if err := os.WriteFile(file, []byte("package cache\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fromRoot, err := DefaultPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{deep, file} {
+		got, err := DefaultPath(input)
+		if err != nil {
+			t.Fatalf("DefaultPath(%q): %v", input, err)
+		}
+		if got != fromRoot {
+			t.Fatalf("DefaultPath(%q) = %q, want %q", input, got, fromRoot)
+		}
+	}
+
+	rootLink := filepath.Join(base, "root-link")
+	if err := os.Symlink(root, rootLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	deepLink := filepath.Join(base, "deep-link")
+	if err := os.Symlink(deep, deepLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for _, input := range []string{rootLink, deepLink} {
+		got, err := DefaultPath(input)
+		if err != nil {
+			t.Fatalf("DefaultPath(%q): %v", input, err)
+		}
+		if got != fromRoot {
+			t.Fatalf("DefaultPath(%q) = %q, want %q", input, got, fromRoot)
+		}
+	}
+}
+
+func TestDefaultPathNestedModule(t *testing.T) {
+	parent := t.TempDir()
+	writeCacheModule(t, parent, map[string]string{})
+	sub := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCacheModule(t, sub, map[string]string{})
+	deep := filepath.Join(sub, "internal", "deep")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	parentPath, err := DefaultPath(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subPath, err := DefaultPath(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parentPath == subPath {
+		t.Fatalf("nested module reused parent path: %q", parentPath)
+	}
+	if !strings.HasPrefix(filepath.Base(subPath), "sub-") {
+		t.Fatalf("nested module cache name = %q", filepath.Base(subPath))
 	}
 }
