@@ -94,6 +94,7 @@ goray <command> [flags] [path]
 | `goray serve [path]` | Run the MCP stdio server |
 | `goray export <html|md|dot> [path]` | Export an HTML report, Markdown map, or Graphviz DOT graph |
 | `goray db <info|path> [path]` | Inspect cache stats or print the resolved SQLite DB path |
+| `goray index [path]` | Build and sync the semantic index once |
 | `goray version` | Print version (`-v` / `--version` also accepted) |
 | `goray help [command]` | Show help for root or a specific command |
 
@@ -157,6 +158,30 @@ goray db info [path] [--db <path>]
 sqlite3 "$(goray db path)"
 
 ```
+
+### `index`
+
+```sh
+goray index [path] [--db <path>] [--json]
+```
+
+Builds the semantic index exactly once and syncs `working_symbols` and
+`working_edges` to SQLite. It does not start fsnotify, the MCP stdio server, or
+the local report UI.
+
+```sh
+goray index
+goray index /path/to/repo --json
+goray index --db :memory: .
+```
+
+`--json` emits a single object with `root`, `module_path`, `db_path`,
+`packages`, `files`, `symbols`, `edges`, `eligible`, `synced`,
+`coverage_percent`, `warnings`, and `duration_ms`.
+
+Production parse/type errors exit `1` without overwriting an existing healthy
+working snapshot. Errors confined to `*_test.go` files sync production state,
+print warnings to stderr, and exit `0`.
 
 ## Storage and caching
 

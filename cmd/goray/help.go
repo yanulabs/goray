@@ -15,6 +15,7 @@ Commands:
   serve [path]                 Run the MCP stdio server + local report UI (default: .)
   export <html|md|dot> [path]  Export an architecture report or dependency graph
   db <info|path> [path]        Inspect or locate the SQLite summary cache
+  index [path]                 Build and sync the semantic index once
   version                      Print version and exit
   help [command]               Show help for goray or a command
 
@@ -28,6 +29,7 @@ Examples:
   goray export html --open
   goray export html -o report.html
   goray export dot | dot -Tsvg > deps.svg
+  goray index --json .
   sqlite3 "$(goray db path)"
   goray db info
 `)
@@ -104,6 +106,29 @@ Examples:
 `)
 }
 
+func printIndexHelp(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Usage:
+  goray index [flags] [path]
+
+Build the semantic index once, sync working symbols and edges to SQLite, print
+a summary, and exit. This does not start file watching, MCP stdio, or the local
+report UI.
+
+Flags:
+  --db <path>  SQLite cache path (default: user cache directory; env GORAY_DB;
+               supports :memory:)
+  --json       Emit one machine-readable JSON object to stdout
+  -h, --help   Show this help
+
+Examples:
+  goray index
+  goray index /path/to/repo
+  goray index --json .
+  goray index . --db :memory:
+  goray index --db /tmp/goray.db /path/to/repo
+`)
+}
+
 func printVersionHelp(w io.Writer) {
 	_, _ = fmt.Fprint(w, `Usage:
   goray version
@@ -132,6 +157,8 @@ func runHelp(args []string, stdout io.Writer) error {
 		printExportHelp(stdout)
 	case "db":
 		printDBHelp(stdout)
+	case "index":
+		printIndexHelp(stdout)
 	case "version":
 		printVersionHelp(stdout)
 	case "help":

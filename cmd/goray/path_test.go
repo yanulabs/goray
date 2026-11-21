@@ -136,7 +136,7 @@ func TestHelpCommands(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr)
 		}
-		for _, want := range []string{"Usage:", "serve [path]", "export <html|md|dot>", "db <info|path>", "GORAY_DB", "GORAY_LOG_LEVEL", "goray db path"} {
+		for _, want := range []string{"Usage:", "serve [path]", "export <html|md|dot>", "db <info|path>", "index [path]", "GORAY_DB", "GORAY_LOG_LEVEL", "goray db path"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("%v help missing %q:\n%s", args, want, stdout)
 			}

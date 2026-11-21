@@ -211,6 +211,15 @@ func (c *Cache) Close() error {
 		if flushErr := c.FlushTouches(context.Background()); flushErr != nil {
 			err = flushErr
 		}
+		if c.path != ":memory:" {
+			var busy, logFrames, checkpointed int
+			if checkpointErr := c.db.QueryRowContext(context.Background(),
+				"PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); checkpointErr != nil && err == nil {
+				err = checkpointErr
+			} else if busy != 0 && err == nil {
+				err = fmt.Errorf("sqlite WAL checkpoint is busy")
+			}
+		}
 		if closeErr := c.db.Close(); closeErr != nil && err == nil {
 			err = closeErr
 		}
