@@ -39,6 +39,7 @@ otherwise they use the last good snapshot and report `index_state`.
 | `-export-dot <file>` | Write the module graph as Graphviz DOT and exit |
 | `-export-md <file>` | Write the architecture map as Markdown and exit |
 | `-db <path>` | SQLite path; `:memory:` for ephemeral runs (or `GO_MCP_DB`) |
+| `-db-info` | Print cache path, table counts, staleness counts, and recent summaries, then exit |
 | `-no-watch` | Disable automatic file watching/reindexing |
 | `-log-level off\|error\|info` | stderr log level (default `info`, or `GO_MCP_LOG_LEVEL`) |
 
@@ -62,6 +63,12 @@ first path segment form the module group. Root packages are grouped as `root`.
 - Structured JSON validation for `func`/`method` and architecture kinds.
 - Batched summary context retrieval with per-call character budgets.
 - LRU access tracking with batched flushes and periodic garbage collection.
+
+Inspect the populated cache (path, table counts, staleness, recent summaries):
+
+```sh
+./go-mcp-server -db-info /path/to/go/project
+```
 
 ## Tools
 

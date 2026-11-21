@@ -29,6 +29,7 @@ func run() error {
 	exportDOT := flag.String("export-dot", "", "export the module graph as Graphviz DOT and exit")
 	exportMD := flag.String("export-md", "", "export the architecture map as Markdown and exit")
 	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GO_MCP_DB)")
+	dbInfo := flag.Bool("db-info", false, "print populated cache statistics and exit")
 	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
 	logLevelFlag := flag.String("log-level", envOr("GO_MCP_LOG_LEVEL", "info"), "log level: off|error|info")
 	flag.Parse()
@@ -45,6 +46,27 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 	formats := render.NewRegistry()
+
+	if *dbInfo {
+		dbPath, err := cache.ResolvePath(root, *dbFlag)
+		if err != nil {
+			return err
+		}
+		summaries, err := cache.Open(dbPath)
+		if err != nil {
+			return fmt.Errorf("open summary cache: %w", err)
+		}
+		stats, statsErr := summaries.Stats(context.Background())
+		closeErr := summaries.Close()
+		if statsErr != nil {
+			return statsErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		fmt.Println(render.JSON(stats))
+		return nil
+	}
 
 	if *exportDOT != "" || *exportMD != "" {
 		return export(root, *exportDOT, *exportMD, logger, formats)

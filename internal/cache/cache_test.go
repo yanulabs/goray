@@ -765,3 +765,36 @@ func summaryOfID(t *testing.T, idx *index.Index, id string) *index.SummarySymbol
 	}
 	return sym
 }
+
+func TestStats(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{"a/a.go": `package a
+
+func Leaf() int {
+	if true { if true { if true { if true { return 1 } } } }
+	return 0
+}
+`}
+	c := openTestCache(t)
+	idx := buildSync(t, c, dir, files)
+	id := "sym:" + testModule + "/a.Leaf"
+	if result := upsertSummary(t, c, idx, id, testFuncSummary("leaf")); result.Status != "updated" {
+		t.Fatalf("%+v", result)
+	}
+	stats, err := c.Stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.CachedSummaries != 1 || stats.RecentSummaries[0].SummaryJSON == "" {
+		t.Fatalf("cached summaries = %+v", stats.RecentSummaries)
+	}
+	if stats.Tables["working_symbols"] == 0 || stats.Tables["symbol_history"] != 1 {
+		t.Fatalf("tables = %+v", stats.Tables)
+	}
+	if stats.SummaryStates["synced"] != 1 {
+		t.Fatalf("states = %+v", stats.SummaryStates)
+	}
+	if stats.CachedSummariesByKind["func"] != 1 {
+		t.Fatalf("cached by kind = %+v", stats.CachedSummariesByKind)
+	}
+}
