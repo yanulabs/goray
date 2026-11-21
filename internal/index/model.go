@@ -17,6 +17,7 @@ type Symbol struct {
 	RecvType   string `json:"recv_type,omitempty"`
 	RecvPtr    bool   `json:"-"`
 	Methods    int    `json:"-"`
+	Fields     int    `json:"fields,omitempty"`
 	Exported   bool   `json:"exported"`
 	Signature  string `json:"signature"`
 	File       string `json:"file"`
@@ -24,6 +25,14 @@ type Symbol struct {
 	EndLine    int    `json:"end_line,omitempty"`
 	LOC        int    `json:"loc,omitempty"`
 	Cyclomatic int    `json:"cyclomatic,omitempty"`
+
+	// Provenance flags. Generated and Untracked are exposed by audit tools;
+	// IsTest and IsHook are used to suppress false positives but hidden from
+	// default JSON output.
+	Generated bool `json:"generated,omitempty"`
+	Untracked bool `json:"untracked,omitempty"`
+	IsTest    bool `json:"-"`
+	IsHook    bool `json:"-"`
 }
 
 // XRef is one type-checked use of a symbol.
@@ -48,8 +57,10 @@ type ImplMatch struct {
 }
 
 type FileMetric struct {
-	Path string `json:"path"`
-	LOC  int    `json:"loc"`
+	Path      string `json:"path"`
+	LOC       int    `json:"loc"`
+	Generated bool   `json:"generated,omitempty"`
+	Untracked bool   `json:"untracked,omitempty"`
 }
 
 // PkgInfo is the architecture-level summary of one package.
@@ -61,26 +72,34 @@ type PkgInfo struct {
 	ModuleArea string   `json:"module_area"`
 	Imports    []string `json:"imports"` // intra-module only
 	ProdFiles  int      `json:"prod_files"`
+	Files      int      `json:"files"`
 	TestFiles  int      `json:"test_files"`
 	ProdLOC    int      `json:"prod_loc"`
 	TestLOC    int      `json:"test_loc"`
 	Exported   int      `json:"exported"`
 	PortsCalls int      `json:"ports_calls"`
 	Goroutines int      `json:"goroutines"`
+
+	GeneratedFiles int `json:"generated_files,omitempty"`
+	UntrackedFiles int `json:"untracked_files,omitempty"`
 }
 
 // ModSummary aggregates the packages under modules/<name>.
 type ModSummary struct {
-	Name         string              `json:"name"`
-	Packages     int                 `json:"packages"`
-	ProdLOC      int                 `json:"prod_loc"`
-	TestLOC      int                 `json:"test_loc"`
-	RootExported int                 `json:"root_exported"`
-	PortsCalls   int                 `json:"ports_calls"`
-	Goroutines   int                 `json:"goroutines"`
-	OutModules   map[string][]string `json:"out_modules"`
-	InModules    map[string][]string `json:"in_modules"`
-	LargeFiles   []FileMetric        `json:"large_files,omitempty"`
+	Name           string              `json:"name"`
+	Packages       int                 `json:"packages"`
+	Files          int                 `json:"files"`
+	GeneratedFiles int                 `json:"generated_files"`
+	UntrackedFiles int                 `json:"untracked_files"`
+	AllUntracked   bool                `json:"all_untracked,omitempty"`
+	ProdLOC        int                 `json:"prod_loc"`
+	TestLOC        int                 `json:"test_loc"`
+	RootExported   int                 `json:"root_exported"`
+	PortsCalls     int                 `json:"ports_calls"`
+	Goroutines     int                 `json:"goroutines"`
+	OutModules     map[string][]string `json:"out_modules"`
+	InModules      map[string][]string `json:"in_modules"`
+	LargeFiles     []FileMetric        `json:"large_files,omitempty"`
 }
 
 // Index is an immutable snapshot after Build returns.
@@ -92,19 +111,27 @@ type Index struct {
 	LoadErrors     []string
 	TestLoadErrors []string
 
-	Packages      map[string]*PkgInfo
-	RevImports    map[string][]string
-	Symbols       map[string]*Symbol
-	SymbolsByName map[string][]*Symbol
-	XRefs         map[string][]XRef
-	Callers       map[string][]string
-	Callees       map[string][]string
-	IfaceImpls    map[string][]ImplMatch
-	TypeImpls     map[string][]ImplMatch
-	IfaceMethods  map[string]bool
-	Modules       map[string]*ModSummary
-	LargeFiles    []FileMetric
-	Summary       *SummaryData
+	Packages         map[string]*PkgInfo
+	RevImports       map[string][]string
+	Symbols          map[string]*Symbol
+	SymbolsByName    map[string][]*Symbol
+	CanonicalSymbols map[string]*Symbol
+	XRefs            map[string][]XRef
+	Callers          map[string][]string
+	Callees          map[string][]string
+	IfaceImpls       map[string][]ImplMatch
+	TypeImpls        map[string][]ImplMatch
+	IfaceMethods     map[string]bool
+	Modules          map[string]*ModSummary
+	LargeFiles       []FileMetric
+	Summary          *SummaryData
+
+	// TestCovered holds production functions reachable from any *_test.go
+	// function through the indexed call graph. It is computed at build time.
+	TestCovered map[string]bool
+	// UntrackedFiles holds relative paths reported as untracked by git. The
+	// index never excludes these files; callers decide whether to filter them.
+	UntrackedFiles map[string]bool
 }
 
 // TotalXRefs returns the number of recorded references.

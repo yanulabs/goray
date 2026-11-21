@@ -3,9 +3,20 @@ package index
 import (
 	"go/ast"
 	"go/types"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
+
+// fileMeta carries provenance computed once per syntax file and shared by all
+// symbols declared in it.
+type fileMeta struct {
+	generated bool
+	untracked bool
+	isTest    bool
+}
 
 func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo) {
 	if p.Types == nil || p.TypesInfo == nil || p.Fset == nil {
@@ -15,17 +26,18 @@ func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo) {
 		if file == nil {
 			continue
 		}
+		meta := b.fileMetaFor(p, file)
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				b.indexFunc(p, pi, d)
+				b.indexFunc(p, pi, d, meta)
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
 					switch s := spec.(type) {
 					case *ast.TypeSpec:
-						b.indexType(p, pi, s)
+						b.indexType(p, pi, s, meta)
 					case *ast.ValueSpec:
-						b.indexValues(p, pi, s)
+						b.indexValues(p, pi, s, meta)
 					}
 				}
 			}
@@ -33,7 +45,24 @@ func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo) {
 	}
 }
 
-func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl) {
+func (b *builder) fileMetaFor(p *packages.Package, file *ast.File) fileMeta {
+	path := ""
+	if p.Fset != nil && file.Pos().IsValid() {
+		path = p.Fset.Position(file.Pos()).Filename
+	}
+	meta := fileMeta{
+		isTest:    strings.HasSuffix(path, "_test.go"),
+		untracked: b.idx.UntrackedFiles[relFile(b.absRoot, path)],
+	}
+	if path != "" {
+		if src, err := os.ReadFile(path); err == nil {
+			meta.generated = isGenerated(filepath.Base(path), src)
+		}
+	}
+	return meta
+}
+
+func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl, meta fileMeta) {
 	fn, ok := p.TypesInfo.Defs[d.Name].(*types.Func)
 	if !ok || fn.Pkg() == nil {
 		return
@@ -52,9 +81,10 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl) {
 	}
 	pos := p.Fset.Position(d.Pos())
 	end := p.Fset.Position(d.End())
+	name := fn.Name()
 	b.addSymbol(&Symbol{
 		ID:         id,
-		Name:       fn.Name(),
+		Name:       name,
 		Kind:       kind,
 		PkgPath:    p.PkgPath,
 		PkgRel:     pi.RelPath,
@@ -68,10 +98,29 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl) {
 		EndLine:    end.Line,
 		LOC:        end.Line - pos.Line + 1,
 		Cyclomatic: cyclomatic(d.Body),
+		Generated:  meta.generated,
+		Untracked:  meta.untracked,
+		IsTest:     meta.isTest,
+		IsHook:     isHookName(name, meta.isTest) || hasHookDirective(d.Doc),
 	}, pi)
 }
 
-func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec) {
+func isHookName(name string, inTest bool) bool {
+	if name == "main" || name == "init" || isStdHook(name) {
+		return true
+	}
+	if !inTest {
+		return false
+	}
+	for _, prefix := range []string{"Test", "Benchmark", "Fuzz", "Example"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec, meta fileMeta) {
 	tn, ok := p.TypesInfo.Defs[spec.Name].(*types.TypeName)
 	if !ok || tn.Pkg() == nil {
 		return
@@ -80,11 +129,13 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 	pos := p.Fset.Position(spec.Pos())
 	end := p.Fset.Position(spec.End())
 	kind := "type"
-	switch tn.Type().Underlying().(type) {
+	fields := 0
+	switch u := tn.Type().Underlying().(type) {
 	case *types.Interface:
 		kind = "interface"
 	case *types.Struct:
 		kind = "struct"
+		fields = u.NumFields()
 	}
 	sym := &Symbol{
 		ID:         id,
@@ -99,6 +150,10 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 		Line:       pos.Line,
 		EndLine:    end.Line,
 		LOC:        end.Line - pos.Line + 1,
+		Fields:     fields,
+		Generated:  meta.generated,
+		Untracked:  meta.untracked,
+		IsTest:     meta.isTest,
 	}
 	if iface, ok := tn.Type().Underlying().(*types.Interface); ok {
 		sym.Methods = iface.NumMethods()
@@ -114,7 +169,7 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 	}
 }
 
-func (b *builder) indexValues(p *packages.Package, pi *PkgInfo, spec *ast.ValueSpec) {
+func (b *builder) indexValues(p *packages.Package, pi *PkgInfo, spec *ast.ValueSpec, meta fileMeta) {
 	for _, name := range spec.Names {
 		obj := p.TypesInfo.Defs[name]
 		if obj == nil || obj.Pkg() == nil || obj.Parent() != p.Types.Scope() {
@@ -136,6 +191,9 @@ func (b *builder) indexValues(p *packages.Package, pi *PkgInfo, spec *ast.ValueS
 			Signature:  types.TypeString(obj.Type(), qualifier(p.PkgPath)),
 			File:       relFile(b.absRoot, pos.Filename),
 			Line:       pos.Line,
+			Generated:  meta.generated,
+			Untracked:  meta.untracked,
+			IsTest:     meta.isTest,
 		}, pi)
 	}
 }

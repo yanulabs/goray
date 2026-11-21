@@ -854,11 +854,27 @@ func TestDefaultPathReadableName(t *testing.T) {
 	if len(hashPart) != 12 || !isLowerHex(hashPart) {
 		t.Fatalf("hash suffix = %q", hashPart)
 	}
-	if filepath.Base(filepath.Dir(path)) != "goray" {
+	if filepath.Base(filepath.Dir(path)) != "worktrees" {
 		t.Fatalf("cache directory = %q", filepath.Dir(path))
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("DefaultPath created a file: %v", err)
+	}
+
+	summaryPath, err := DefaultSummaryPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaryName := filepath.Base(summaryPath)
+	cut = strings.LastIndex(summaryName, "-")
+	if cut < 0 || summaryName[:cut] != "cachetest" {
+		t.Fatalf("summary cache name = %q", summaryName)
+	}
+	if filepath.Base(filepath.Dir(summaryPath)) != "summaries" {
+		t.Fatalf("summary directory = %q", filepath.Dir(summaryPath))
+	}
+	if _, err := os.Stat(summaryPath); !os.IsNotExist(err) {
+		t.Fatalf("DefaultSummaryPath created a file: %v", err)
 	}
 }
 

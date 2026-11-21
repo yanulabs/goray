@@ -99,76 +99,82 @@ func nodeDirectives(file *ast.File, node ast.Node, docs ...*ast.CommentGroup) []
 
 func (b *builder) canonicalType(t types.Type) string {
 	var sb strings.Builder
-	b.writeCanonicalType(&sb, t, map[types.Type]bool{})
+	b.writeCanonicalType(&sb, t, map[types.Type]int{})
 	return sb.String()
 }
 
-func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, seen map[types.Type]bool) {
+func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, active map[types.Type]int) {
 	if t == nil {
 		sb.WriteString("<nil>")
 		return
 	}
+	if depth, ok := active[t]; ok {
+		fmt.Fprintf(sb, "cycle(%d)", depth)
+		return
+	}
+	depth := len(active)
+	active[t] = depth
+	defer delete(active, t)
+
 	switch typ := t.(type) {
 	case *types.Basic:
 		sb.WriteString(typ.Name())
 	case *types.Named:
-		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), typ, seen)
+		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
 	case *types.Alias:
-		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), typ, seen)
+		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
 	case *types.Pointer:
 		sb.WriteString("*")
-		b.writeCanonicalType(sb, typ.Elem(), seen)
+		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Slice:
 		sb.WriteString("[]")
-		b.writeCanonicalType(sb, typ.Elem(), seen)
+		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Array:
 		fmt.Fprintf(sb, "[%d]", typ.Len())
-		b.writeCanonicalType(sb, typ.Elem(), seen)
+		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Map:
 		sb.WriteString("map[")
-		b.writeCanonicalType(sb, typ.Key(), seen)
+		b.writeCanonicalType(sb, typ.Key(), active)
 		sb.WriteString("]")
-		b.writeCanonicalType(sb, typ.Elem(), seen)
+		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Chan:
-		b.writeChanType(sb, typ, seen)
+		b.writeChanType(sb, typ, active)
 	default:
-		b.writeCanonicalComposite(sb, t, seen)
+		b.writeCanonicalComposite(sb, t, active)
 	}
 }
 
-func (b *builder) writeCanonicalComposite(sb *strings.Builder, t types.Type, seen map[types.Type]bool) {
+func (b *builder) writeCanonicalComposite(sb *strings.Builder, t types.Type, active map[types.Type]int) {
 	switch typ := t.(type) {
 	case *types.Signature:
-		b.writeSignatureType(sb, typ, seen)
+		b.writeSignatureType(sb, typ, active, true)
 	case *types.Struct:
-		b.writeStructType(sb, typ, seen)
+		b.writeStructType(sb, typ, active)
 	case *types.Interface:
-		b.writeInterfaceType(sb, typ, seen)
+		b.writeInterfaceType(sb, typ, active)
 	case *types.Tuple:
-		b.writeTuple(sb, typ, seen)
+		b.writeTuple(sb, typ, active)
 	case *types.TypeParam:
-		b.writeTypeParamType(sb, typ, seen)
+		b.writeTypeParamType(sb, typ, active)
 	case *types.Union:
-		b.writeUnionType(sb, typ, seen)
+		b.writeUnionType(sb, typ, active)
 	default:
 		b.writeFallbackType(sb, t)
 	}
 }
 
-func (b *builder) writeNamedType(sb *strings.Builder, obj *types.TypeName, args *types.TypeList, underlying types.Type, key types.Type, seen map[types.Type]bool) {
+func (b *builder) writeNamedType(sb *strings.Builder, obj *types.TypeName, args *types.TypeList, underlying types.Type, active map[types.Type]int) {
 	sb.WriteString(typeObjectName(obj))
-	b.writeTypeArgs(sb, args, seen)
-	if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) || seen[key] {
+	b.writeTypeArgs(sb, args, active)
+	if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) {
 		return
 	}
-	seen[key] = true
 	sb.WriteString("{")
-	b.writeCanonicalType(sb, underlying, seen)
+	b.writeCanonicalType(sb, underlying, active)
 	sb.WriteString("}")
-	delete(seen, key)
 }
 
-func (b *builder) writeChanType(sb *strings.Builder, typ *types.Chan, seen map[types.Type]bool) {
+func (b *builder) writeChanType(sb *strings.Builder, typ *types.Chan, active map[types.Type]int) {
 	switch typ.Dir() {
 	case types.SendOnly:
 		sb.WriteString("chan<- ")
@@ -177,24 +183,24 @@ func (b *builder) writeChanType(sb *strings.Builder, typ *types.Chan, seen map[t
 	default:
 		sb.WriteString("chan ")
 	}
-	b.writeCanonicalType(sb, typ.Elem(), seen)
+	b.writeCanonicalType(sb, typ.Elem(), active)
 }
 
-func (b *builder) writeSignatureType(sb *strings.Builder, typ *types.Signature, seen map[types.Type]bool) {
-	if typ.Recv() != nil {
+func (b *builder) writeSignatureType(sb *strings.Builder, typ *types.Signature, active map[types.Type]int, includeRecv bool) {
+	if includeRecv && typ.Recv() != nil {
 		sb.WriteString("recv(")
-		b.writeCanonicalType(sb, typ.Recv().Type(), seen)
+		b.writeCanonicalType(sb, typ.Recv().Type(), active)
 		sb.WriteString(") ")
 	}
-	b.writeSignatureTypeParams(sb, typ.TypeParams(), seen)
+	b.writeSignatureTypeParams(sb, typ.TypeParams(), active)
 	sb.WriteString("func(")
-	b.writeParams(sb, typ.Params(), typ.Variadic(), seen)
+	b.writeParams(sb, typ.Params(), typ.Variadic(), active)
 	sb.WriteString(") (")
-	b.writeTuple(sb, typ.Results(), seen)
+	b.writeTuple(sb, typ.Results(), active)
 	sb.WriteString(")")
 }
 
-func (b *builder) writeSignatureTypeParams(sb *strings.Builder, params *types.TypeParamList, seen map[types.Type]bool) {
+func (b *builder) writeSignatureTypeParams(sb *strings.Builder, params *types.TypeParamList, active map[types.Type]int) {
 	if params == nil || params.Len() == 0 {
 		return
 	}
@@ -203,23 +209,23 @@ func (b *builder) writeSignatureTypeParams(sb *strings.Builder, params *types.Ty
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		b.writeCanonicalType(sb, params.At(i), seen)
+		b.writeCanonicalType(sb, params.At(i), active)
 	}
 	sb.WriteString("]")
 }
 
-func (b *builder) writeStructType(sb *strings.Builder, typ *types.Struct, seen map[types.Type]bool) {
+func (b *builder) writeStructType(sb *strings.Builder, typ *types.Struct, active map[types.Type]int) {
 	sb.WriteString("struct{")
 	for i := 0; i < typ.NumFields(); i++ {
 		if i > 0 {
 			sb.WriteString("; ")
 		}
-		b.writeStructField(sb, typ, i, seen)
+		b.writeStructField(sb, typ, i, active)
 	}
 	sb.WriteString("}")
 }
 
-func (b *builder) writeStructField(sb *strings.Builder, typ *types.Struct, i int, seen map[types.Type]bool) {
+func (b *builder) writeStructField(sb *strings.Builder, typ *types.Struct, i int, active map[types.Type]int) {
 	field := typ.Field(i)
 	if field.Embedded() {
 		sb.WriteString("embedded ")
@@ -227,13 +233,13 @@ func (b *builder) writeStructField(sb *strings.Builder, typ *types.Struct, i int
 		sb.WriteString(field.Name())
 		sb.WriteString(" ")
 	}
-	b.writeCanonicalType(sb, field.Type(), seen)
+	b.writeCanonicalType(sb, field.Type(), active)
 	if tag := typ.Tag(i); tag != "" {
 		fmt.Fprintf(sb, " %q", tag)
 	}
 }
 
-func (b *builder) writeInterfaceType(sb *strings.Builder, typ *types.Interface, seen map[types.Type]bool) {
+func (b *builder) writeInterfaceType(sb *strings.Builder, typ *types.Interface, active map[types.Type]int) {
 	sb.WriteString("interface{")
 	for i := 0; i < typ.NumMethods(); i++ {
 		if i > 0 {
@@ -241,28 +247,41 @@ func (b *builder) writeInterfaceType(sb *strings.Builder, typ *types.Interface, 
 		}
 		method := typ.Method(i)
 		sb.WriteString(method.Name())
-		b.writeCanonicalType(sb, method.Type(), seen)
+		if sig, ok := method.Type().(*types.Signature); ok {
+			b.writeInterfaceMethod(sb, sig, active)
+		} else {
+			b.writeCanonicalType(sb, method.Type(), active)
+		}
 	}
 	for i := 0; i < typ.NumEmbeddeds(); i++ {
 		if typ.NumMethods() > 0 || i > 0 {
 			sb.WriteString("; ")
 		}
-		b.writeCanonicalType(sb, typ.EmbeddedType(i), seen)
+		b.writeCanonicalType(sb, typ.EmbeddedType(i), active)
 	}
 	sb.WriteString("}")
 }
 
-func (b *builder) writeTypeParamType(sb *strings.Builder, typ *types.TypeParam, seen map[types.Type]bool) {
+func (b *builder) writeInterfaceMethod(sb *strings.Builder, sig *types.Signature, active map[types.Type]int) {
+	if depth, ok := active[sig]; ok {
+		fmt.Fprintf(sb, "cycle(%d)", depth)
+		return
+	}
+	depth := len(active)
+	active[sig] = depth
+	defer delete(active, sig)
+	b.writeSignatureType(sb, sig, active, false)
+}
+
+func (b *builder) writeTypeParamType(sb *strings.Builder, typ *types.TypeParam, active map[types.Type]int) {
 	sb.WriteString(typ.Obj().Name())
-	if typ.Constraint() != nil && !seen[typ] {
-		seen[typ] = true
+	if typ.Constraint() != nil {
 		sb.WriteString(" ")
-		b.writeCanonicalType(sb, typ.Constraint(), seen)
-		delete(seen, typ)
+		b.writeCanonicalType(sb, typ.Constraint(), active)
 	}
 }
 
-func (b *builder) writeUnionType(sb *strings.Builder, typ *types.Union, seen map[types.Type]bool) {
+func (b *builder) writeUnionType(sb *strings.Builder, typ *types.Union, active map[types.Type]int) {
 	for i := 0; i < typ.Len(); i++ {
 		if i > 0 {
 			sb.WriteString("|")
@@ -271,7 +290,7 @@ func (b *builder) writeUnionType(sb *strings.Builder, typ *types.Union, seen map
 		if term.Tilde() {
 			sb.WriteString("~")
 		}
-		b.writeCanonicalType(sb, term.Type(), seen)
+		b.writeCanonicalType(sb, term.Type(), active)
 	}
 }
 
@@ -284,7 +303,7 @@ func (b *builder) writeFallbackType(sb *strings.Builder, t types.Type) {
 	}))
 }
 
-func (b *builder) writeTypeArgs(sb *strings.Builder, args *types.TypeList, seen map[types.Type]bool) {
+func (b *builder) writeTypeArgs(sb *strings.Builder, args *types.TypeList, active map[types.Type]int) {
 	if args == nil || args.Len() == 0 {
 		return
 	}
@@ -293,12 +312,12 @@ func (b *builder) writeTypeArgs(sb *strings.Builder, args *types.TypeList, seen 
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		b.writeCanonicalType(sb, args.At(i), seen)
+		b.writeCanonicalType(sb, args.At(i), active)
 	}
 	sb.WriteString("]")
 }
 
-func (b *builder) writeTuple(sb *strings.Builder, tuple *types.Tuple, seen map[types.Type]bool) {
+func (b *builder) writeTuple(sb *strings.Builder, tuple *types.Tuple, active map[types.Type]int) {
 	if tuple == nil {
 		return
 	}
@@ -306,11 +325,11 @@ func (b *builder) writeTuple(sb *strings.Builder, tuple *types.Tuple, seen map[t
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		b.writeCanonicalType(sb, tuple.At(i).Type(), seen)
+		b.writeCanonicalType(sb, tuple.At(i).Type(), active)
 	}
 }
 
-func (b *builder) writeParams(sb *strings.Builder, tuple *types.Tuple, variadic bool, seen map[types.Type]bool) {
+func (b *builder) writeParams(sb *strings.Builder, tuple *types.Tuple, variadic bool, active map[types.Type]int) {
 	if tuple == nil {
 		return
 	}
@@ -322,11 +341,11 @@ func (b *builder) writeParams(sb *strings.Builder, tuple *types.Tuple, variadic 
 		if variadic && i == tuple.Len()-1 {
 			if slice, ok := typ.(*types.Slice); ok {
 				sb.WriteString("...")
-				b.writeCanonicalType(sb, slice.Elem(), seen)
+				b.writeCanonicalType(sb, slice.Elem(), active)
 				continue
 			}
 		}
-		b.writeCanonicalType(sb, typ, seen)
+		b.writeCanonicalType(sb, typ, active)
 	}
 }
 

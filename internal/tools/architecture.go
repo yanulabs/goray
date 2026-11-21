@@ -16,10 +16,14 @@ func (t *toolset) codebaseMap() mcp.Tool {
 		Name:        "get_codebase_map",
 		Description: "High-level architecture map: module scorecard (explicit modules or standard layout groups), cross-module dependency graph, symbol coupling, and bloated files.",
 		InputSchema: object(map[string]any{
-			"format": propEnum("Output format (default: markdown)", t.formats.CodebaseMapFormats()...),
+			"format":       propEnum("Output format (default: markdown)", t.formats.CodebaseMapFormats()...),
+			"tracked_only": propBool("Exclude git-untracked files and modules (default: false)"),
 		}),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 			format := strArg(args, "format", "markdown")
+			if boolArg(args, "tracked_only", false) {
+				idx = idx.TrackedView()
+			}
 			out, ok := t.formats.RenderCodebaseMap(format, idx)
 			if !ok {
 				return "unsupported format: " + format, true
@@ -80,10 +84,14 @@ func (t *toolset) moduleOverview() mcp.Tool {
 		Name:        "get_module_overview",
 		Description: "Deep dive on one module: subpackages, incoming/outgoing symbol dependencies, .Ports() calls, large files, and exported root API.",
 		InputSchema: object(map[string]any{
-			"module": propString("Module name (e.g. payments, internal/index)"),
-			"format": propEnum("Output format (default: markdown)", t.formats.ModuleFormats()...),
+			"module":       propString("Module name (e.g. payments, internal/index)"),
+			"format":       propEnum("Output format (default: markdown)", t.formats.ModuleFormats()...),
+			"tracked_only": propBool("Exclude git-untracked files (default: false)"),
 		}, "module"),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
+			if boolArg(args, "tracked_only", false) {
+				idx = idx.TrackedView()
+			}
 			name := strArg(args, "module", "")
 			summary, ok := idx.Modules[name]
 			if !ok {

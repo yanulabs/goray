@@ -83,11 +83,11 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: level}))
 	formats := render.NewRegistry()
 
-	dbPath, err := cache.ResolvePath(root, opts.dbPath)
+	dbPath, summaryDBPath, err := cache.ResolvePaths(root, opts.dbPath)
 	if err != nil {
 		return err
 	}
-	summaries, err := cache.Open(dbPath)
+	summaries, err := cache.OpenSplit(dbPath, summaryDBPath)
 	if err != nil {
 		return fmt.Errorf("open summary cache: %w", err)
 	}
@@ -109,7 +109,7 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 		}
 	}
 
-	logger.Info("summary cache ready", "path", summaries.Path())
+	logger.Info("summary cache ready", "worktree_db", summaries.Path(), "summary_db", summaries.SummaryPath())
 
 	store := index.NewStore(root, logger)
 	store.SetBuildHook(func(idx *index.Index) error {

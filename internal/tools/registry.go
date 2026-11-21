@@ -4,6 +4,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
@@ -27,6 +28,7 @@ type Summaries interface {
 	UpsertSummaries(context.Context, []cache.SummaryInput) ([]cache.UpsertResult, error)
 	Coverage(context.Context, string) (cache.Coverage, error)
 	Path() string
+	SummaryPath() string
 }
 
 type toolset struct {
@@ -54,6 +56,7 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 		t.implementations(),
 		t.impactAnalysis(),
 		t.deadCode(),
+		t.hotspots(),
 		t.functionBody(),
 		t.listStaleSummaries(),
 		t.getSummaryContext(),
@@ -67,10 +70,25 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 	return list
 }
 
+func indexingPayload(err error) (string, bool, bool) {
+	var building *index.IndexingError
+	if errors.As(err, &building) {
+		return render.JSON(map[string]any{
+			"index_state":     "indexing",
+			"elapsed_seconds": building.ElapsedSeconds(),
+			"message":         "index is still building; retry shortly",
+		}), false, true
+	}
+	return "", false, false
+}
+
 func (t *toolset) indexed(run func(*index.Index, map[string]any) (string, bool)) func(context.Context, map[string]any) (string, bool) {
 	return func(ctx context.Context, args map[string]any) (string, bool) {
 		idx, err := t.src.Wait(ctx)
 		if err != nil {
+			if text, failed, ok := indexingPayload(err); ok {
+				return text, failed
+			}
 			return err.Error(), true
 		}
 		return run(idx, args)
@@ -81,6 +99,9 @@ func (t *toolset) indexedCtx(run func(context.Context, *index.Index, map[string]
 	return func(ctx context.Context, args map[string]any) (string, bool) {
 		idx, err := t.src.Wait(ctx)
 		if err != nil {
+			if text, failed, ok := indexingPayload(err); ok {
+				return text, failed
+			}
 			return err.Error(), true
 		}
 		return run(ctx, idx, args)
@@ -98,11 +119,13 @@ func (t *toolset) projectInfo() mcp.Tool {
 				Tools         int    `json:"tools"`
 				Summaries     bool   `json:"summaries_enabled"`
 				DBPath        string `json:"db_path"`
+				SummaryDBPath string `json:"summary_db_path"`
 				PromptVersion string `json:"summary_prompt_version,omitempty"`
 			}
 			out := info{Status: t.src.Status(), Tools: t.count, Summaries: t.summaries != nil}
 			if t.summaries != nil {
 				out.DBPath = t.summaries.Path()
+				out.SummaryDBPath = t.summaries.SummaryPath()
 				out.PromptVersion = cache.PromptVersion
 			}
 			return render.JSON(out), false
@@ -135,6 +158,22 @@ func propBool(desc string) map[string]any {
 
 func propEnum(desc string, values ...string) map[string]any {
 	return map[string]any{"type": "string", "enum": values, "description": desc}
+}
+
+func strListArg(args map[string]any, key string) []string {
+	switch value := args[key].(type) {
+	case []string:
+		return value
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func strArg(args map[string]any, key, fallback string) string {

@@ -1,7 +1,7 @@
 package render
 
 import (
-	"sort"
+	"strings"
 
 	"github.com/yanulabs/goray/internal/index"
 )
@@ -13,30 +13,33 @@ func newJSON() jsonRenderer {
 }
 
 func (jsonRenderer) RenderCodebaseMap(idx *index.Index) string {
-	complex := make([]*index.Symbol, 0)
-	for _, sym := range idx.Symbols {
-		if sym.Cyclomatic >= 10 {
-			complex = append(complex, sym)
+	hotspots := codebaseHotspots(idx, 10)
+	large := make([]index.FileMetric, 0, len(idx.LargeFiles))
+	for _, file := range idx.LargeFiles {
+		if !file.Generated {
+			large = append(large, file)
 		}
 	}
-	sort.Slice(complex, func(i, j int) bool {
-		if complex[i].Cyclomatic != complex[j].Cyclomatic {
-			return complex[i].Cyclomatic > complex[j].Cyclomatic
-		}
-		return complex[i].ID < complex[j].ID
-	})
-	complex = limit(complex, 20)
+	large = limit(large, 10)
 
-	large := append([]index.FileMetric{}, idx.LargeFiles...)
-	large = limit(large, 25)
+	cycles := idx.ModuleCycles()
+	cycleStrings := make([]string, 0, len(cycles))
+	for _, cycle := range cycles {
+		cycleStrings = append(cycleStrings, strings.Join(cycle, " -> "))
+	}
 
 	return JSON(map[string]any{
-		"module_path": idx.ModulePath,
-		"packages":    len(idx.Packages),
-		"symbols":     len(idx.Symbols),
-		"modules":     idx.ModulesByLOC(),
-		"large_files": large,
-		"top_complex": complex,
+		"module_path":        idx.ModulePath,
+		"packages":           len(idx.Packages),
+		"symbols":            len(idx.Symbols),
+		"generated_files":    generatedFileCount(idx),
+		"untracked_files":    untrackedFileCount(idx),
+		"modules":            idx.ModulesByLOC(),
+		"cross_module_edges": moduleEdges(idx),
+		"module_cycles":      cycleStrings,
+		"large_files":        large,
+		"top_complex":        hotspots,
+		"top_hotspots":       hotspots,
 	})
 }
 

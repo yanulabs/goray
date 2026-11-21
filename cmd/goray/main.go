@@ -82,6 +82,12 @@ func execute(args []string, stdout, stderr io.Writer, opener func(string) error)
 			return nil
 		}
 		return runDB(args[1:], stdout)
+	case "index":
+		if len(args) > 1 && wantsHelp(args[1:], indexValueFlags) {
+			printIndexHelp(stdout)
+			return nil
+		}
+		return runIndex(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return usagef("unknown flag %q", args[0])

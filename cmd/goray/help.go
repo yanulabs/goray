@@ -14,7 +14,8 @@ Usage:
 Commands:
   serve [path]                 Run the MCP stdio server + local report UI (default: .)
   export <html|md|dot> [path]  Export an architecture report or dependency graph
-  db <info|path> [path]        Inspect or locate the SQLite summary cache
+  db <info|path|rm|prune>      Inspect, locate, remove, or prune SQLite databases
+  index [path]                 Build and sync the semantic index once
   version                      Print version and exit
   help [command]               Show help for goray or a command
 
@@ -28,8 +29,11 @@ Examples:
   goray export html --open
   goray export html -o report.html
   goray export dot | dot -Tsvg > deps.svg
+  goray index --json .
   sqlite3 "$(goray db path)"
   goray db info
+  goray db rm --dry-run
+  goray db prune
 `)
 }
 
@@ -83,24 +87,67 @@ Examples:
 
 func printDBHelp(w io.Writer) {
 	_, _ = fmt.Fprint(w, `Usage:
-  goray db <info|path> [flags] [path]
+  goray db <info|path|rm|prune> [flags] [path]
 
-Inspect or locate the SQLite summary cache. The path defaults to ".".
+Inspect, locate, remove, or prune the SQLite databases. The path defaults to
+".". By default two databases are used: a per-checkout working database under
+<user-cache>/goray/worktrees/ and a shared summary database under
+<user-cache>/goray/summaries/. Worktrees and clones of the same module share
+summaries while keeping working state isolated.
 
 Subcommands:
-  info   Print cache statistics and recent summaries as JSON
-  path   Print only the resolved cache path
+  info    Print cache statistics and recent summaries as JSON
+  path    Print only the resolved working database path
+  rm      Remove the working DB (default), summary DB, or both
+  prune   Remove worktree DBs whose checkout directory no longer exists
 
 Flags:
-  --db <path>  SQLite cache path override (default: user cache directory; env GORAY_DB)
-  -h, --help   Show this help
+  --db <path>   Single-database override for info/path/rm (env GORAY_DB)
+  --summaries   With "path" or "rm", target only the shared summary database
+  --all         With "rm", remove both working and summary databases
+  --dry-run     Print exact files and sizes without deleting (rm/prune)
+  --force       Remove even if another process holds the DB lock (rm/prune)
+  -h, --help    Show this help
 
 Examples:
   goray db path
-  goray db path /path/to/repo
-  goray db path --db :memory:
+  goray db path --summaries
   goray db info /path/to/repo
+  goray db rm                       # working DB only; summaries untouched
+  goray db rm --summaries           # shared summary DB only
+  goray db rm --all --dry-run
+  goray db rm --db /tmp/goray.db
+  goray db rm --force .
+  goray db prune --dry-run
   sqlite3 "$(goray db path)"
+`)
+}
+
+func printIndexHelp(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Usage:
+  goray index [flags] [path]
+
+Build the semantic index once, sync working symbols and edges to SQLite, print
+a summary, and exit. This does not start file watching, MCP stdio, or the local
+report UI.
+
+By default the working state is written to a per-checkout database under
+<user-cache>/goray/worktrees/ and summaries are read/written in a shared
+database under <user-cache>/goray/summaries/. --db or GORAY_DB switches to a
+single database containing all tables.
+
+Flags:
+  --db <path>  Single SQLite database override (default: user cache directory;
+               env GORAY_DB; supports :memory:)
+  --json       Emit one machine-readable JSON object to stdout
+  -h, --help   Show this help
+
+Examples:
+  goray index
+  goray index /path/to/repo
+  goray index --json .
+  goray index . --db :memory:
+  goray index --db /tmp/goray.db /path/to/repo
 `)
 }
 
@@ -132,6 +179,8 @@ func runHelp(args []string, stdout io.Writer) error {
 		printExportHelp(stdout)
 	case "db":
 		printDBHelp(stdout)
+	case "index":
+		printIndexHelp(stdout)
 	case "version":
 		printVersionHelp(stdout)
 	case "help":

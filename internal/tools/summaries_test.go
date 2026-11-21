@@ -42,7 +42,8 @@ func (batchSummaries) UpsertSummaries(context.Context, []cache.SummaryInput) ([]
 func (batchSummaries) Coverage(context.Context, string) (cache.Coverage, error) {
 	return cache.Coverage{}, nil
 }
-func (batchSummaries) Path() string { return ":memory:" }
+func (batchSummaries) Path() string        { return ":memory:" }
+func (batchSummaries) SummaryPath() string { return ":memory:" }
 
 func summaryContextTool(t *testing.T, summaries Summaries) toolFunc {
 	t.Helper()

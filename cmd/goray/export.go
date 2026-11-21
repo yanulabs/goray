@@ -108,11 +108,11 @@ func renderExport(root string, opts exportOptions) (string, error) {
 	formats := render.NewRegistry()
 	switch opts.format {
 	case "html":
-		dbPath, err := cache.ResolvePath(root, opts.dbPath)
+		workingPath, summaryPath, err := cache.ResolvePaths(root, opts.dbPath)
 		if err != nil {
 			return "", err
 		}
-		return buildHTML(idx, dbPath)
+		return buildHTML(idx, workingPath, summaryPath)
 	case "md":
 		base, ok := formats.RenderCodebaseMap("markdown", idx)
 		if !ok {
@@ -134,11 +134,11 @@ func renderExport(root string, opts exportOptions) (string, error) {
 }
 
 func markdownSummaries(root string, idx *index.Index, dbFlag string) (string, error) {
-	dbPath, err := cache.ResolvePath(root, dbFlag)
+	workingPath, summaryPath, err := cache.ResolvePaths(root, dbFlag)
 	if err != nil {
 		return "", err
 	}
-	summaries, err := cache.Open(dbPath)
+	summaries, err := cache.OpenSplit(workingPath, summaryPath)
 	if err != nil {
 		return "", fmt.Errorf("open summary cache: %w", err)
 	}
@@ -153,8 +153,8 @@ func markdownSummaries(root string, idx *index.Index, dbFlag string) (string, er
 	return section, nil
 }
 
-func buildHTML(idx *index.Index, dbPath string) (string, error) {
-	summaries, err := cache.Open(dbPath)
+func buildHTML(idx *index.Index, workingPath, summaryPath string) (string, error) {
+	summaries, err := cache.OpenSplit(workingPath, summaryPath)
 	if err != nil {
 		return "", fmt.Errorf("open summary cache: %w", err)
 	}

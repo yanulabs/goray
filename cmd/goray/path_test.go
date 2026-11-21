@@ -136,7 +136,7 @@ func TestHelpCommands(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr)
 		}
-		for _, want := range []string{"Usage:", "serve [path]", "export <html|md|dot>", "db <info|path>", "GORAY_DB", "GORAY_LOG_LEVEL", "goray db path"} {
+		for _, want := range []string{"Usage:", "serve [path]", "export <html|md|dot>", "db <info|path|rm|prune>", "index [path]", "GORAY_DB", "GORAY_LOG_LEVEL", "goray db path"} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("%v help missing %q:\n%s", args, want, stdout)
 			}
@@ -563,6 +563,119 @@ func TestDBPathSymlinksAndNestedModules(t *testing.T) {
 	}
 	if subOut == rootOut {
 		t.Fatalf("nested module reused parent path: %q", subOut)
+	}
+}
+
+func TestDBPathSummariesAndSplitLayout(t *testing.T) {
+	isolateCLIEnv(t)
+	root, _, _ := newTestModule(t)
+	other := filepath.Join(t.TempDir(), "Other Repo")
+	writeTestModule(t, other, "example.com/check")
+
+	workCode, workOut, workErr := runDirect(t, "db", "path", root)
+	if workCode != 0 || workErr != "" {
+		t.Fatalf("db path: code=%d stderr=%q", workCode, workErr)
+	}
+	summaryCode, summaryOut, summaryErr := runDirect(t, "db", "path", root, "--summaries")
+	if summaryCode != 0 || summaryErr != "" {
+		t.Fatalf("db path --summaries: code=%d stderr=%q", summaryCode, summaryErr)
+	}
+	for name, out := range map[string]string{"work": workOut, "summary": summaryOut} {
+		if !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
+			t.Fatalf("%s path stdout = %q", name, out)
+		}
+	}
+	workPath := strings.TrimSuffix(workOut, "\n")
+	summaryPath := strings.TrimSuffix(summaryOut, "\n")
+	if filepath.Base(filepath.Dir(workPath)) != "worktrees" {
+		t.Fatalf("working DB directory = %q", filepath.Dir(workPath))
+	}
+	if filepath.Base(filepath.Dir(summaryPath)) != "summaries" {
+		t.Fatalf("summary DB directory = %q", filepath.Dir(summaryPath))
+	}
+	for _, path := range []string{workPath, summaryPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("db path created %q: %v", path, err)
+		}
+	}
+
+	_, otherWork, _ := runDirect(t, "db", "path", other)
+	_, otherSummary, _ := runDirect(t, "db", "path", other, "--summaries")
+	if strings.TrimSuffix(otherWork, "\n") == workPath {
+		t.Fatal("distinct checkouts share a working DB")
+	}
+	if strings.TrimSuffix(otherSummary, "\n") != summaryPath {
+		t.Fatalf("same module summary path = %q, want %q", otherSummary, summaryPath)
+	}
+
+	code, stdout, stderr := runDirect(t, "db", "path", root, "--summaries", "--db", ":memory:")
+	if code != 0 || stdout != ":memory:\n" || stderr != "" {
+		t.Fatalf("summary override: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	code, stdout, stderr = runDirect(t, "db", "info", root)
+	if code != 0 || stderr != "" {
+		t.Fatalf("db info: code=%d stderr=%q", code, stderr)
+	}
+	var stats struct {
+		Path          string `json:"path"`
+		DBPath        string `json:"db_path"`
+		SummaryDBPath string `json:"summary_db_path"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &stats); err != nil {
+		t.Fatalf("db info JSON: %v\n%s", err, stdout)
+	}
+	if stats.Path != workPath || stats.DBPath != workPath || stats.SummaryDBPath != summaryPath {
+		t.Fatalf("db info paths = %+v", stats)
+	}
+	for _, path := range []string{workPath, summaryPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("db info did not create %q: %v", path, err)
+		}
+	}
+}
+
+func TestExplicitDBModeAvoidsSummaryDirectory(t *testing.T) {
+	isolateCLIEnv(t)
+	root, _, _ := newTestModule(t)
+
+	singlePath := filepath.Join(t.TempDir(), "single.db")
+	cases := []struct {
+		name string
+		args []string
+		path string
+	}{
+		{"file", []string{"index", "--json", root, "--db", singlePath}, singlePath},
+		{"memory", []string{"index", "--json", root, "--db", ":memory:"}, ":memory:"},
+	}
+	for _, tc := range cases {
+		code, stdout, stderr := runDirect(t, tc.args...)
+		if code != 0 {
+			t.Fatalf("%s: code=%d stdout=%q stderr=%q", tc.name, code, stdout, stderr)
+		}
+		var result indexResult
+		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+			t.Fatalf("%s JSON: %v\n%s", tc.name, err, stdout)
+		}
+		if result.DBPath != tc.path || result.SummaryDBPath != tc.path {
+			t.Fatalf("%s paths = %q, %q", tc.name, result.DBPath, result.SummaryDBPath)
+		}
+	}
+
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gorayDir := filepath.Join(cacheRoot, "goray")
+	if _, statErr := os.Stat(gorayDir); statErr == nil {
+		if files := dbFilesUnder(t, gorayDir); len(files) > 0 {
+			t.Fatalf("explicit DB mode touched the cache directory: %v", files)
+		}
+	} else if !os.IsNotExist(statErr) {
+		t.Fatal(statErr)
+	}
+	if _, err := os.Stat(filepath.Join(gorayDir, "summaries")); !os.IsNotExist(err) {
+		t.Fatalf("explicit DB mode created summaries directory: %v", err)
 	}
 }
 
