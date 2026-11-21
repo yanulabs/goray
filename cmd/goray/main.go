@@ -1,24 +1,12 @@
 package main
 
 import (
-	"context"
-	"flag"
+	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"syscall"
-
-	"github.com/yanulabs/goray/internal/cache"
-	"github.com/yanulabs/goray/internal/index"
-	"github.com/yanulabs/goray/internal/mcp"
-	"github.com/yanulabs/goray/internal/render"
-	"github.com/yanulabs/goray/internal/report"
-	"github.com/yanulabs/goray/internal/tools"
-	"github.com/yanulabs/goray/internal/watch"
 )
 
 var version = "dev"
@@ -34,234 +22,76 @@ func buildVersion() string {
 }
 
 func main() {
-	if err := run(); err != nil {
-		slog.Error("server failed", "err", err)
-		os.Exit(1)
-	}
+	os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr, openBrowser))
 }
 
-func run() error {
-	exportDOT := flag.String("export-dot", "", "export the module graph as Graphviz DOT and exit")
-	exportMD := flag.String("export-md", "", "export the architecture map as Markdown and exit")
-	exportHTML := flag.String("export-html", "", "export a self-contained interactive HTML report and exit")
-	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GORAY_DB)")
-	dbInfo := flag.Bool("db-info", false, "print populated cache statistics and exit")
-	dbPathOnly := flag.Bool("db-path", false, "print the resolved SQLite cache path and exit")
-	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	logLevelFlag := flag.String("log-level", envOr("GORAY_LOG_LEVEL", "info"), "log level: off|error|info")
-	flag.Parse()
+func runCLI(args []string, stdout, stderr io.Writer, opener func(string) error) int {
+	err := execute(args, stdout, stderr, opener)
+	if err == nil {
+		return 0
+	}
+	var usage *usageError
+	if errors.As(err, &usage) {
+		_, _ = fmt.Fprintf(stderr, "goray: %s\n", usage.Error())
+		_, _ = fmt.Fprintln(stderr, "Run 'goray help <command>' for usage.")
+		return 2
+	}
+	_, _ = fmt.Fprintf(stderr, "goray: %s\n", err)
+	return 1
+}
 
-	if *showVersion {
-		fmt.Printf("goray %s\n", buildVersion())
+func execute(args []string, stdout, stderr io.Writer, opener func(string) error) error {
+	if len(args) == 0 {
+		printRootHelp(stdout)
 		return nil
 	}
-
-	inputPath := "."
-	if flag.NArg() > 0 {
-		inputPath = flag.Arg(0)
-	}
-	root, err := index.ResolveModuleRoot(inputPath)
-	if err != nil {
-		return err
-	}
-
-	if *dbPathOnly {
-		dbPath, err := cache.ResolvePath(root, *dbFlag)
-		if err != nil {
-			return err
-		}
-		fmt.Println(dbPath)
+	switch args[0] {
+	case "-h", "--help", "-help":
+		printRootHelp(stdout)
 		return nil
-	}
-
-	level, err := parseLevel(*logLevelFlag)
-	if err != nil {
-		return err
-	}
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	slog.SetDefault(logger)
-	formats := render.NewRegistry()
-
-	if *dbInfo {
-		dbPath, err := cache.ResolvePath(root, *dbFlag)
-		if err != nil {
-			return err
-		}
-		summaries, err := cache.Open(dbPath)
-		if err != nil {
-			return fmt.Errorf("open summary cache: %w", err)
-		}
-		stats, statsErr := summaries.Stats(context.Background())
-		closeErr := summaries.Close()
-		if statsErr != nil {
-			return statsErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		fmt.Println(render.JSON(stats))
+	case "-v", "--version":
+		printVersion(stdout)
 		return nil
-	}
-
-	if *exportDOT != "" || *exportMD != "" || *exportHTML != "" {
-		dbPath := ""
-		if *exportHTML != "" {
-			dbPath, err = cache.ResolvePath(root, *dbFlag)
-			if err != nil {
-				return err
-			}
+	case "version":
+		if wantsHelp(args[1:], nil) {
+			printVersionHelp(stdout)
+			return nil
 		}
-		return export(root, *exportDOT, *exportMD, *exportHTML, dbPath, logger, formats)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	dbPath, err := cache.ResolvePath(root, *dbFlag)
-	if err != nil {
-		return err
-	}
-	summaries, err := cache.Open(dbPath)
-	if err != nil {
-		return fmt.Errorf("open summary cache: %w", err)
-	}
-	defer func() {
-		if err := summaries.Close(); err != nil {
-			logger.Error("close summary cache", "err", err)
+		if len(args) > 1 {
+			return usagef("version takes no arguments")
 		}
-	}()
-	logger.Info("summary cache ready", "path", summaries.Path())
-
-	store := index.NewStore(root, logger)
-	store.SetBuildHook(func(idx *index.Index) error {
-		return summaries.Sync(context.Background(), idx)
-	})
-	store.Start()
-	defer store.WaitForBuild()
-
-	if !*noWatch {
-		watcher, err := watch.New(root, logger, store.MarkDirty)
-		if err != nil {
-			logger.Warn("file watcher unavailable", "err", err)
-		} else {
-			defer func() { _ = watcher.Close() }()
-			store.StartAutoRebuild(ctx)
-			defer store.WaitForAuto()
+		printVersion(stdout)
+		return nil
+	case "help":
+		return runHelp(args[1:], stdout)
+	case "serve":
+		if wantsHelp(args[1:], serveValueFlags) {
+			printServeHelp(stdout)
+			return nil
 		}
-	}
-
-	server := mcp.NewServer(os.Stdin, os.Stdout, tools.New(store, formats, summaries))
-	server.SetVersion(buildVersion())
-	err = server.Serve(ctx)
-	stop()
-	return err
-}
-
-func export(root, dotPath, mdPath, htmlPath, dbPath string, logger *slog.Logger, formats *render.Registry) error {
-	idx, err := index.Build(root)
-	if err != nil {
-		return err
-	}
-	if dotPath != "" {
-		content, ok := formats.RenderCodebaseMap("dot", idx)
-		if !ok {
-			return fmt.Errorf("dot renderer is not registered")
+		return runServe(args[1:], stderr, opener)
+	case "export":
+		if len(args) > 1 && wantsHelp(args[1:], exportValueFlags) {
+			printExportHelp(stdout)
+			return nil
 		}
-		if err := os.WriteFile(dotPath, []byte(content), 0o644); err != nil {
-			return err
+		return runExport(args[1:], stdout, stderr, opener)
+	case "db":
+		if len(args) > 1 && wantsHelp(args[1:], dbValueFlags) {
+			printDBHelp(stdout)
+			return nil
 		}
-		logger.Info("wrote DOT", "path", dotPath, "modules", len(idx.Modules))
-	}
-	if mdPath != "" {
-		content, ok := formats.RenderCodebaseMap("markdown", idx)
-		if !ok {
-			return fmt.Errorf("markdown renderer is not registered")
-		}
-		if err := os.WriteFile(mdPath, []byte(content), 0o644); err != nil {
-			return err
-		}
-		logger.Info("wrote Markdown", "path", mdPath, "modules", len(idx.Modules))
-	}
-	if htmlPath != "" {
-		html, reportData, err := buildHTML(idx, dbPath)
-		if err != nil {
-			return err
-		}
-		if err := writeAtomic(htmlPath, []byte(html)); err != nil {
-			return err
-		}
-		cachedSummaries := 0
-		for _, symbol := range reportData.Symbols {
-			if symbol.Summary != nil {
-				cachedSummaries++
-			}
-		}
-		logger.Info("wrote HTML", "path", htmlPath, "bytes", len(html), "symbols", len(reportData.Symbols), "summaries", cachedSummaries)
-	}
-	return nil
-}
-
-func buildHTML(idx *index.Index, dbPath string) (string, render.HTMLReport, error) {
-	summaries, err := cache.Open(dbPath)
-	if err != nil {
-		return "", render.HTMLReport{}, fmt.Errorf("open summary cache: %w", err)
-	}
-	reportData, err := report.Build(context.Background(), idx, summaries)
-	if err != nil {
-		_ = summaries.Close()
-		return "", render.HTMLReport{}, err
-	}
-	html, err := render.RenderHTML(reportData)
-	closeErr := summaries.Close()
-	if err != nil {
-		return "", render.HTMLReport{}, err
-	}
-	if closeErr != nil {
-		return "", render.HTMLReport{}, closeErr
-	}
-	return html, reportData, nil
-}
-
-func writeAtomic(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".goray-report-*.html")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-	if err = tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err = tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}
-
-func parseLevel(value string) (slog.Level, error) {
-	switch strings.ToLower(value) {
-	case "", "info":
-		return slog.LevelInfo, nil
-	case "error":
-		return slog.LevelError, nil
-	case "off":
-		return slog.Level(127), nil
+		return runDB(args[1:], stdout)
 	default:
-		return 0, fmt.Errorf("invalid log level %q (use off, error, or info)", value)
+		if strings.HasPrefix(args[0], "-") {
+			return usagef("unknown flag %q", args[0])
+		}
+		return usagef("unknown command %q", args[0])
 	}
+}
+
+func printVersion(w io.Writer) {
+	_, _ = fmt.Fprintf(w, "goray %s\n", buildVersion())
 }
 
 func envOr(key, fallback string) string {

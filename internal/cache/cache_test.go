@@ -874,7 +874,7 @@ func TestRepoSlug(t *testing.T) {
 		"Ünicode":          "nicode",
 	}
 	for input, want := range cases {
-		if got := repoSlug(filepath.Join("/tmp", input)); got != want {
+		if got := RepoSlug(filepath.Join("/tmp", input)); got != want {
 			t.Fatalf("repoSlug(%q) = %q, want %q", input, got, want)
 		}
 	}

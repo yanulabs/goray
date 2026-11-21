@@ -16,7 +16,6 @@ const oneToOneModules = (() => {
   return modules.length > 0 && modules.every((m) => (m.packages || 0) <= 1);
 })();
 
-// Cross-reference maps built once on boot for O(1) inspector lookups.
 const implsByTypeId = new Map();
 const ifaceById = new Map();
 for (const iface of DATA.interfaces || []) {
@@ -37,7 +36,6 @@ for (const s of symbols) {
   methodsByTypeKey.get(typeId).push(s);
 }
 
-// Deterministic module color palette (HSL).
 const moduleColorCache = new Map();
 function moduleColor(name) {
   if (!name) return "var(--line-strong)";
@@ -47,10 +45,17 @@ function moduleColor(name) {
     hash ^= name.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
-  const hue = Math.abs(hash) % 360;
-  const color = "hsl(" + hue + " 62% 48%)";
+  const color = "hsl(" + (Math.abs(hash) % 360) + " 62% 48%)";
   moduleColorCache.set(name, color);
   return color;
+}
+
+function debounce(fn, wait = 110) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
 }
 
 function el(tag, className, text) {
@@ -61,7 +66,7 @@ function el(tag, className, text) {
 }
 
 function clear(node) {
-  while (node.firstChild) node.removeChild(node.firstChild);
+  node.textContent = "";
 }
 
 function button(text, className, onClick) {
@@ -83,18 +88,18 @@ function showToast(message) {
   toast.textContent = message;
   toast.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 1800);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 1700);
 }
 
 function copyText(text, label) {
   const fallback = () => {
     const area = el("textarea");
     area.value = text;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
+    area.style.cssText = "position:fixed;opacity:0";
     document.body.appendChild(area);
     area.select();
-    try { document.execCommand("copy"); showToast("Copied " + label); } catch (_) { showToast("Copy failed"); }
+    try { document.execCommand("copy"); showToast("Copied " + label); }
+    catch (_) { showToast("Copy failed"); }
     document.body.removeChild(area);
   };
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -169,9 +174,13 @@ function makeMeter(value, maxVal, warnAt, badAt) {
   return wrap;
 }
 
-/* ==================== Inspector with History & Blast Radius ==================== */
+/* ==================== Inspector Drawer ==================== */
 
 const inspectorHistory = { stack: [], index: -1 };
+
+function isInspectorOpen() {
+  return $("#inspector").classList.contains("open");
+}
 
 function computeBlastRadius(startId, maxDepth = 6) {
   const visited = new Set([startId]);
@@ -200,9 +209,9 @@ function computeBlastRadius(startId, maxDepth = 6) {
 
 function summaryNode(summary, fallbackState) {
   const section = el("div", "section");
-  section.appendChild(el("h3", null, "Structured summary"));
+  section.appendChild(el("h3", null, "Summary"));
   if (!summary) {
-    section.appendChild(el("div", "summary-empty", "No cached LLM summary. Static semantic index data is shown above."));
+    section.appendChild(el("div", "summary-empty", "No cached LLM summary."));
     if (fallbackState) {
       const row = el("div", "pills");
       row.style.marginTop = "6px";
@@ -216,7 +225,7 @@ function summaryNode(summary, fallbackState) {
   if (effects.length) {
     addPills(section, effects, "warn");
   } else if (Array.isArray(summary.side_effects) && summary.side_effects.includes("none")) {
-    addPills(section, ["no side effects reported"]);
+    addPills(section, ["no side effects"]);
   }
   addList(section, "Invariants", summary.invariants || summary.key_invariants);
   if (summary.concurrency) {
@@ -226,14 +235,34 @@ function summaryNode(summary, fallbackState) {
   addList(section, "Boundaries", summary.boundaries);
   if (summary.model_id) {
     const meta = el("div", "pills");
-    meta.style.marginTop = "8px";
+    meta.style.marginTop = "6px";
     meta.appendChild(el("span", "pill mono", summary.model_id));
     section.appendChild(meta);
   }
   if (summary.deps_changed) {
-    section.appendChild(el("div", "notice", "Direct dependencies or children changed; this cached summary is soft-stale."));
+    section.appendChild(el("div", "notice", "Dependencies changed; cached summary is soft-stale."));
   }
   return section;
+}
+
+function addExpandableRelations(parent, title, items, renderButton, initialCap = 60) {
+  if (!items || !items.length) return;
+  const section = el("div", "section");
+  section.appendChild(el("h3", null, title + " (" + items.length + ")"));
+  const row = el("div", "relation");
+  const appendRange = (start, end) => {
+    for (let i = start; i < end; i++) row.appendChild(renderButton(items[i]));
+  };
+  appendRange(0, Math.min(items.length, initialCap));
+  section.appendChild(row);
+  if (items.length > initialCap) {
+    const moreBtn = button("Show all " + items.length, "ghost btn-xs", () => {
+      appendRange(initialCap, items.length);
+      moreBtn.remove();
+    });
+    section.appendChild(moreBtn);
+  }
+  parent.appendChild(section);
 }
 
 function updateInspectorNavButtons() {
@@ -262,11 +291,21 @@ function openInspector(id, pushHistory = true) {
   $("#inspector-subtitle").textContent = [symbol.kind, symbol.pkg_path || symbol.module].filter(Boolean).join(" · ");
   clear(body);
 
-  // Copyable ID bar
-  const idBar = el("div", "id-bar");
-  idBar.appendChild(el("span", "id", symbol.id));
-  idBar.appendChild(button("Copy ID", "ghost btn-xs", () => copyText(symbol.id, "symbol ID")));
-  body.appendChild(idBar);
+  // Compact copyable chips for ID & Source location
+  const chips = el("div", "copy-chips");
+  const idChip = button("", "copy-chip mono", () => copyText(symbol.id, "symbol ID"));
+  idChip.title = "Copy symbol ID: " + symbol.id;
+  idChip.appendChild(el("span", null, symbol.id));
+  chips.appendChild(idChip);
+
+  if (symbol.file) {
+    const loc = symbol.file + (symbol.start_line ? ":" + symbol.start_line + (symbol.end_line ? "-" + symbol.end_line : "") : "");
+    const srcChip = button("", "copy-chip mono", () => copyText(symbol.file + ":" + (symbol.start_line || 1), "source location"));
+    srcChip.title = "Copy source location";
+    srcChip.appendChild(el("span", null, loc));
+    chips.appendChild(srcChip);
+  }
+  body.appendChild(chips);
 
   // Stat strip
   const strip = el("div", "stat-strip");
@@ -282,131 +321,81 @@ function openInspector(id, pushHistory = true) {
   addStat("Risk", riskScore(symbol).toFixed(1));
   body.appendChild(strip);
 
-  // Metadata KV
-  const facts = el("div", "kv");
-  const addFact = (key, valueNodeOrText) => {
-    facts.appendChild(el("div", "k", key));
-    const v = el("div", "v");
-    if (typeof valueNodeOrText === "string") v.textContent = valueNodeOrText;
-    else v.appendChild(valueNodeOrText);
-    facts.appendChild(v);
-  };
-  if (symbol.file) {
-    const locStr = symbol.file + (symbol.start_line ? ":" + symbol.start_line + (symbol.end_line ? "-" + symbol.end_line : "") : "");
-    const locWrap = el("span", "pills");
-    locWrap.appendChild(el("span", "mono", locStr));
-    locWrap.appendChild(button("Copy", "ghost btn-xs", () => copyText(symbol.file + ":" + (symbol.start_line || 1), "source location")));
-    addFact("Source", locWrap);
-  }
-  addFact("Package", symbol.pkg_path || "—");
+  // Status & Module pills
+  const metaRow = el("div", "meta-row");
   if (symbol.module) {
     const modPill = el("span", "pill");
     const dot = el("span", "dot");
     dot.style.background = moduleColor(symbol.module);
     modPill.appendChild(dot);
     modPill.appendChild(document.createTextNode(symbol.module));
-    addFact("Module", modPill);
+    metaRow.appendChild(modPill);
   }
-  const flagRow = el("div", "pills");
-  if (symbol.exported) flagRow.appendChild(el("span", "pill accent", "exported"));
-  if (symbol.dead) flagRow.appendChild(el("span", "pill bad", "dead code"));
-  flagRow.appendChild(el("span", "pill", symbol.eligible ? "eligible" : "not eligible"));
-  flagRow.appendChild(stateBadge(symbol.sync_state));
-  addFact("Status", flagRow);
-  body.appendChild(facts);
+  if (symbol.exported) metaRow.appendChild(el("span", "pill accent", "exported"));
+  if (symbol.dead) metaRow.appendChild(el("span", "pill bad", "dead code"));
+  metaRow.appendChild(el("span", "pill", symbol.eligible ? "eligible" : "not eligible"));
+  metaRow.appendChild(stateBadge(symbol.sync_state));
+  body.appendChild(metaRow);
 
-  // Structured Summary
   body.appendChild(summaryNode(symbol.summary, symbol.sync_state));
 
-  // Blast Radius (when callers exist)
+  // Blast Radius
   if (symbol.callers && symbol.callers.length) {
     const blast = computeBlastRadius(symbol.id);
     const section = el("div", "section");
-    section.appendChild(el("h3", null, "Upstream Blast Radius"));
-    const box = el("div", "blast-box");
-    box.textContent = fmt(blast.direct.length) + " direct callers · " +
-      fmt(blast.transitive.length) + " transitive callers · " +
-      fmt(blast.affectedPkgs.length) + " impacted package(s)";
-    section.appendChild(box);
+    section.appendChild(el("h3", null, "Blast Radius"));
+    section.appendChild(el("div", "blast-box",
+      fmt(blast.direct.length) + " direct · " +
+      fmt(blast.transitive.length) + " transitive · " +
+      fmt(blast.affectedPkgs.length) + " package(s)"
+    ));
     if (blast.affectedPkgs.length) addPills(section, blast.affectedPkgs.slice(0, 12), "mono");
     body.appendChild(section);
   }
 
-  // Call Relations
-  const addRelationSection = (title, ids) => {
-    if (!ids || !ids.length) return;
-    const section = el("div", "section");
-    section.appendChild(el("h3", null, title + " (" + ids.length + ")"));
-    const row = el("div", "relation");
-    for (const target of ids.slice(0, 80)) {
-      const targetSym = symbolById.get(target);
-      row.appendChild(button(targetSym ? targetSym.name : target, "linkish mono", () => openInspector(target)));
-    }
-    section.appendChild(row);
-    if (ids.length > 80) section.appendChild(el("div", "muted", "Showing 80 of " + ids.length));
-    body.appendChild(section);
-  };
-  addRelationSection("Direct Callers", symbol.callers);
-  addRelationSection("Direct Callees", symbol.callees);
+  addExpandableRelations(body, "Direct Callers", symbol.callers, (target) => {
+    const sym = symbolById.get(target);
+    return button(sym ? sym.name : target, "linkish mono", () => openInspector(target));
+  });
+  addExpandableRelations(body, "Direct Callees", symbol.callees, (target) => {
+    const sym = symbolById.get(target);
+    return button(sym ? sym.name : target, "linkish mono", () => openInspector(target));
+  });
 
-  // Type Methods & Interface Cross-References
   if (symbol.kind === "type") {
-    const methods = methodsByTypeKey.get(symbol.id) || [];
-    if (methods.length) {
-      const section = el("div", "section");
-      section.appendChild(el("h3", null, "Methods (" + methods.length + ")"));
-      const row = el("div", "relation");
-      for (const m of methods) {
-        row.appendChild(button(m.name, "linkish mono", () => openInspector(m.id)));
-      }
-      section.appendChild(row);
-      body.appendChild(section);
-    }
+    addExpandableRelations(body, "Methods", methodsByTypeKey.get(symbol.id), (m) =>
+      button(m.name, "linkish mono", () => openInspector(m.id))
+    );
+
     const ifaceInfo = ifaceById.get(symbol.id);
     if (ifaceInfo) {
-      const section = el("div", "section");
-      section.appendChild(el("h3", null, "Concrete Implementations (" + (ifaceInfo.implementations || []).length + ")"));
-      const row = el("div", "relation");
       if (ifaceInfo.implementations && ifaceInfo.implementations.length) {
-        for (const impl of ifaceInfo.implementations) {
-          row.appendChild(button(impl.name + (impl.via_ptr ? " (*ptr)" : ""), "linkish mono", () => openInspector(impl.id)));
-        }
+        addExpandableRelations(body, "Concrete Implementations", ifaceInfo.implementations, (impl) =>
+          button(impl.name + (impl.via_ptr ? " (*ptr)" : ""), "linkish mono", () => openInspector(impl.id))
+        );
       } else {
-        row.appendChild(el("span", "summary-empty", "No concrete types implement this interface."));
+        const sec = el("div", "section");
+        sec.appendChild(el("h3", null, "Concrete Implementations (0)"));
+        sec.appendChild(el("span", "summary-empty", "No concrete types implement this interface."));
+        body.appendChild(sec);
       }
-      section.appendChild(row);
-      body.appendChild(section);
     }
-    const implemented = implsByTypeId.get(symbol.id);
-    if (implemented && implemented.length) {
-      const section = el("div", "section");
-      section.appendChild(el("h3", null, "Implements Interfaces (" + implemented.length + ")"));
-      const row = el("div", "relation");
-      for (const entry of implemented) {
-        row.appendChild(button(entry.iface.name + (entry.via_ptr ? " (*ptr)" : ""), "linkish mono", () => openInspector(entry.iface.id)));
-      }
-      section.appendChild(row);
-      body.appendChild(section);
-    }
+
+    addExpandableRelations(body, "Implements Interfaces", implsByTypeId.get(symbol.id), (entry) =>
+      button(entry.iface.name + (entry.via_ptr ? " (*ptr)" : ""), "linkish mono", () => openInspector(entry.iface.id))
+    );
   }
 
-  // Exported API for containers
-  const api = apiSymbols(symbol);
-  if (api.length) {
-    const section = el("div", "section");
-    section.appendChild(el("h3", null, "Exported API (" + api.length + ")"));
-    const row = el("div", "relation");
-    for (const item of api.slice(0, 100)) {
-      const label = item.kind === "method" ? "(" + (item.pkg_path || "").split("/").pop() + ")." + item.name : item.name;
-      row.appendChild(button(label, "linkish mono", () => openInspector(item.id)));
-    }
-    section.appendChild(row);
-    if (api.length > 100) section.appendChild(el("div", "muted", "Showing 100 of " + api.length));
-    body.appendChild(section);
-  }
+  addExpandableRelations(body, "Exported API", apiSymbols(symbol), (item) => {
+    const label = item.kind === "method" ? "(" + (item.pkg_path || "").split("/").pop() + ")." + item.name : item.name;
+    return button(label, "linkish mono", () => openInspector(item.id));
+  }, 80);
 
-  inspector.hidden = false;
-  $("#inspector-backdrop").hidden = false;
+  inspector.removeAttribute("inert");
+  inspector.setAttribute("aria-hidden", "false");
+  inspector.classList.add("open");
+  $("#inspector-backdrop").classList.add("open");
+  if (window.innerWidth <= 640) document.body.classList.add("drawer-open-mobile");
   body.scrollTop = 0;
 }
 
@@ -422,14 +411,22 @@ function apiSymbols(symbol) {
 }
 
 function closeInspector() {
-  $("#inspector").hidden = true;
-  $("#inspector-backdrop").hidden = true;
+  const inspector = $("#inspector");
+  inspector.classList.remove("open");
+  inspector.setAttribute("aria-hidden", "true");
+  inspector.setAttribute("inert", "");
+  $("#inspector-backdrop").classList.remove("open");
+  document.body.classList.remove("drawer-open-mobile");
   syncUrlHash(activeTab(), null);
 }
 
 /* ==================== Overview Tab ==================== */
 
-const overviewState = { query: "", sort: "loc" };
+const overviewState = {
+  query: "",
+  sort: "loc",
+  archTab: (!oneToOneModules && (DATA.modules || []).length > 0) ? "modules" : "packages",
+};
 
 function renderOverview() {
   const root = $("#overview-content");
@@ -437,7 +434,7 @@ function renderOverview() {
   const metrics = DATA.metrics || {};
   const coverage = DATA.coverage || {};
 
-  // Top KPI Grid (actionable)
+  // Compact 6-card KPI strip
   const grid = el("div", "grid");
   const addMetric = (label, value, sub, tone, onClick) => {
     const card = el("div", "metric" + (tone ? " tone-" + tone : "") + (onClick ? " actionable" : ""));
@@ -447,39 +444,30 @@ function renderOverview() {
     if (sub) card.appendChild(el("div", "s", sub));
     grid.appendChild(card);
   };
-  addMetric("Modules", fmt(metrics.modules), "View dependency graph →", null, () => {
+
+  addMetric("Packages", fmt(metrics.packages), fmt(metrics.modules) + " modules · graph →", null, () => {
     graphState.mode = oneToOneModules ? "packages" : "modules";
     switchTab("graph");
   });
-  addMetric("Packages", fmt(metrics.packages), "View package graph →", null, () => {
-    graphState.mode = "packages";
-    switchTab("graph");
-  });
-  addMetric("Files", fmt(metrics.files), "Browse hierarchy →", null, () => switchTab("tree"));
-  addMetric("Types", fmt(metrics.types), fmt((DATA.interfaces || []).length) + " interfaces →", null, () => switchTab("interfaces"));
+  addMetric("Files", fmt(metrics.files), fmt(metrics.loc) + " prod LOC · tree →", null, () => switchTab("tree"));
   addMetric("Functions", fmt((metrics.funcs || 0) + (metrics.methods || 0)), fmt(metrics.funcs) + " funcs · " + fmt(metrics.methods) + " methods", null, () => {
     resetHotspotFilters();
     switchTab("hotspots");
   });
-  addMetric("Production LOC", fmt(metrics.loc), "Indexed production lines");
-  addMetric("Dead code", fmt(metrics.dead), "Inspect unreferenced →", metrics.dead > 0 ? "bad" : "good", () => {
+  addMetric("Types", fmt(metrics.types), fmt((DATA.interfaces || []).length) + " interfaces →", null, () => switchTab("interfaces"));
+  addMetric("Dead Code", fmt(metrics.dead), metrics.dead > 0 ? "Inspect unreferenced →" : "None detected", metrics.dead > 0 ? "bad" : "good", () => {
     resetHotspotFilters({ dead: true });
     switchTab("hotspots");
   });
-  addMetric("Summary coverage", (coverage.percent || 0) + "%", fmt(coverage.synced) + " / " + fmt(coverage.eligible) + " eligible", (coverage.percent || 0) >= 80 ? "good" : null, () => {
+  addMetric("Coverage", (coverage.percent || 0) + "%", fmt(coverage.synced) + " / " + fmt(coverage.eligible) + " eligible", (coverage.percent || 0) >= 80 ? "good" : null, () => {
     resetHotspotFilters({ eligible: true });
     switchTab("hotspots");
   });
   root.appendChild(grid);
 
-  // Multi-Segment Summary Coverage Panel
-  const covPanel = el("div", "panel");
-  covPanel.style.marginTop = "14px";
-  const covHead = el("div", "card-head");
-  covHead.appendChild(el("h2", null, "Summary Cache Health"));
-  covHead.appendChild(el("span", "muted", fmt(coverage.eligible) + " eligible of " + fmt((coverage.eligible || 0) + (coverage.not_eligible || 0)) + " total symbols"));
-  covPanel.appendChild(covHead);
-
+  // Compact interactive Summary Cache Strip
+  const cacheStrip = el("div", "cache-strip");
+  cacheStrip.appendChild(el("span", "cache-label", "Summary Cache"));
   const denom = Math.max(1, Number(coverage.eligible || 0));
   const bar = el("div", "coverage-bar");
   const addSeg = (cls, count, label) => {
@@ -493,24 +481,32 @@ function renderOverview() {
   addSeg("seg-warn", coverage.soft_stale, "Soft stale");
   addSeg("seg-bad", coverage.hard_stale, "Hard stale");
   addSeg("seg-missing", coverage.missing, "Missing");
-  covPanel.appendChild(bar);
+  cacheStrip.appendChild(bar);
 
-  const covPills = el("div", "pills");
-  covPills.appendChild(el("span", "pill good", "synced " + fmt(coverage.synced)));
-  covPills.appendChild(el("span", "pill warn", "soft stale " + fmt(coverage.soft_stale)));
-  covPills.appendChild(el("span", "pill bad", "hard stale " + fmt(coverage.hard_stale)));
-  covPills.appendChild(el("span", "pill accent", "missing " + fmt(coverage.missing)));
-  covPills.appendChild(el("span", "pill", "not eligible " + fmt(coverage.not_eligible)));
-  covPanel.appendChild(covPills);
-  root.appendChild(covPanel);
+  const pills = el("div", "pills");
+  const addFilterPill = (stateKey, cls, label, count) => {
+    const p = button(label + " " + fmt(count), "pill " + cls, () => {
+      resetHotspotFilters({ state: stateKey });
+      switchTab("hotspots");
+    });
+    p.title = "Filter Hotspots by " + label;
+    pills.appendChild(p);
+  };
+  addFilterPill("synced", "good", "synced", coverage.synced);
+  if (coverage.soft_stale) addFilterPill("soft_stale", "warn", "soft stale", coverage.soft_stale);
+  if (coverage.hard_stale) addFilterPill("hard_stale", "bad", "hard stale", coverage.hard_stale);
+  if (coverage.missing) addFilterPill("missing", "accent", "missing", coverage.missing);
+  addFilterPill("not_eligible", "", "not eligible", coverage.not_eligible);
+  cacheStrip.appendChild(pills);
+  root.appendChild(cacheStrip);
 
-  // Two-column Risk Hotspots + Most Coupled Packages
+  // Two-column Risk Hotspots + Coupled Packages
   const columns = el("div", "two-col");
 
   const riskPanel = el("div", "panel");
   const riskHeader = el("div", "card-head");
   riskHeader.appendChild(el("h2", null, "Top Risk Hotspots"));
-  riskHeader.appendChild(button("All hotspots →", "ghost btn-xs", () => {
+  riskHeader.appendChild(button("All →", "ghost btn-xs", () => {
     resetHotspotFilters({ high: true });
     switchTab("hotspots");
   }));
@@ -518,15 +514,22 @@ function renderOverview() {
   const hotspots = DATA.hotspots || [];
   if (hotspots.length) {
     const maxC = Math.max(10, ...hotspots.map((s) => s.complexity || 0));
+    const wrap = el("div", "table-wrap");
     const table = el("table");
     const head = el("tr");
-    for (const label of ["Symbol", "Kind", "Complexity", "Fan-in"]) head.appendChild(el("th", label === "Complexity" || label === "Fan-in" ? "num" : null, label));
+    for (const label of ["Symbol", "Kind", "Complexity", "Fan-in"]) {
+      head.appendChild(el("th", label === "Complexity" || label === "Fan-in" ? "num" : null, label));
+    }
     table.appendChild(el("thead")).appendChild(head);
     const tbody = el("tbody");
     for (const symbol of hotspots) {
       const row = el("tr", "clickable");
       row.addEventListener("click", () => openInspector(symbol.id));
-      row.appendChild(el("td", "mono", symbol.name));
+      const symTd = el("td", "mono");
+      const symBox = el("div", "cell-sym");
+      symBox.appendChild(el("span", "cell-sym-name", symbol.name));
+      symTd.appendChild(symBox);
+      row.appendChild(symTd);
       row.appendChild(el("td", null, symbol.kind));
       const cCell = el("td", "num");
       cCell.appendChild(makeMeter(symbol.complexity || 0, maxC, 10, 20));
@@ -535,7 +538,8 @@ function renderOverview() {
       tbody.appendChild(row);
     }
     table.appendChild(tbody);
-    riskPanel.appendChild(table);
+    wrap.appendChild(table);
+    riskPanel.appendChild(wrap);
   } else {
     riskPanel.appendChild(el("div", "empty", "No complexity hotspots detected."));
   }
@@ -551,9 +555,10 @@ function renderOverview() {
   coupledPanel.appendChild(coupledHeader);
   const coupled = DATA.coupled_packages || [];
   if (coupled.length) {
+    const wrap = el("div", "table-wrap");
     const table = el("table");
     const head = el("tr");
-    for (const label of ["Package", "Fan-in", "Fan-out", "Instability"]) {
+    for (const label of ["Package", "In", "Out", "Instability"]) {
       head.appendChild(el("th", label === "Package" ? null : "num", label));
     }
     table.appendChild(el("thead")).appendChild(head);
@@ -562,36 +567,61 @@ function renderOverview() {
       const row = el("tr", "clickable");
       const targetId = symbolById.has("pkg:" + pkg.pkg) ? "pkg:" + pkg.pkg : (packageByPath.get(pkg.pkg) || {}).id || ("pkg:" + pkg.pkg);
       row.addEventListener("click", () => openInspector(targetId));
-      row.appendChild(el("td", "mono", pkg.pkg));
+      row.appendChild(el("td", "mono cell-pkg", pkg.pkg));
       row.appendChild(el("td", "num", fmt(pkg.fan_in)));
       row.appendChild(el("td", "num", fmt(pkg.fan_out)));
       const total = (pkg.fan_in || 0) + (pkg.fan_out || 0);
-      const instability = total > 0 ? ((pkg.fan_out || 0) / total).toFixed(2) : "0.00";
-      row.appendChild(el("td", "num muted", instability));
+      row.appendChild(el("td", "num muted", total > 0 ? ((pkg.fan_out || 0) / total).toFixed(2) : "0.00"));
       tbody.appendChild(row);
     }
     table.appendChild(tbody);
-    coupledPanel.appendChild(table);
+    wrap.appendChild(table);
+    coupledPanel.appendChild(wrap);
   } else {
     coupledPanel.appendChild(el("div", "empty", "No package coupling data."));
   }
   columns.appendChild(coupledPanel);
   root.appendChild(columns);
 
-  // Architecture Cards Filter Bar
+  // Architecture Breakdown with segmented switcher
   const archHeader = el("div", "section-header");
-  archHeader.appendChild(el("h2", null, "Architecture Breakdown"));
+  const leftGroup = el("div", "section-tools");
+  leftGroup.appendChild(el("h2", null, "Architecture"));
+
+  const hasModules = !oneToOneModules && (DATA.modules || []).length > 0;
+  if (hasModules) {
+    const seg = el("div", "segmented");
+    const modBtn = button("Modules (" + (DATA.modules || []).length + ")", overviewState.archTab === "modules" ? "active" : "", () => {
+      overviewState.archTab = "modules";
+      modBtn.classList.add("active");
+      pkgBtn.classList.remove("active");
+      renderArchitectureCards(archContainer);
+    });
+    const pkgBtn = button("Packages (" + (DATA.packages || []).length + ")", overviewState.archTab === "packages" ? "active" : "", () => {
+      overviewState.archTab = "packages";
+      pkgBtn.classList.add("active");
+      modBtn.classList.remove("active");
+      renderArchitectureCards(archContainer);
+    });
+    seg.appendChild(modBtn);
+    seg.appendChild(pkgBtn);
+    leftGroup.appendChild(seg);
+  }
+  archHeader.appendChild(leftGroup);
+
   const archTools = el("div", "section-tools");
   const archSearch = el("input");
   archSearch.type = "search";
-  archSearch.placeholder = "Filter modules & packages…";
+  archSearch.placeholder = "Filter…";
   archSearch.value = overviewState.query;
-  archSearch.addEventListener("input", () => {
-    overviewState.query = archSearch.value.toLowerCase();
+  const onArchInput = debounce(() => {
+    overviewState.query = archSearch.value.trim().toLowerCase();
     renderArchitectureCards(archContainer);
   });
+  archSearch.addEventListener("input", onArchInput);
+
   const archSort = el("select");
-  archSort.appendChild(new Option("Sort: Prod LOC", "loc"));
+  archSort.appendChild(new Option("Sort: LOC", "loc"));
   archSort.appendChild(new Option("Sort: Coupling", "coupling"));
   archSort.appendChild(new Option("Sort: Name", "name"));
   archSort.value = overviewState.sort;
@@ -618,22 +648,25 @@ function renderArchitectureCards(container) {
     return ((b[locKey] || 0) - (a[locKey] || 0)) || nameA.localeCompare(nameB);
   };
 
-  const modules = (oneToOneModules ? [] : (DATA.modules || []))
-    .filter((m) => !q || (m.name + " " + (m.summary && m.summary.intent || "")).toLowerCase().includes(q))
-    .slice()
-    .sort((a, b) => sortFn(a, b, "prod_loc", (a.in_modules || 0) + (a.out_modules || 0), (b.in_modules || 0) + (b.out_modules || 0), a.name, b.name));
+  if (overviewState.archTab === "modules" && !oneToOneModules) {
+    const modules = (DATA.modules || [])
+      .filter((m) => !q || (m.name + " " + (m.summary && m.summary.intent || "")).toLowerCase().includes(q))
+      .slice()
+      .sort((a, b) => sortFn(a, b, "prod_loc", (a.in_modules || 0) + (a.out_modules || 0), (b.in_modules || 0) + (b.out_modules || 0), a.name, b.name));
 
-  if (modules.length) {
-    const mh = el("h3", "muted", "Modules (" + modules.length + ")");
-    mh.style.marginTop = "8px";
-    container.appendChild(mh);
-    const modGrid = el("div", "cards");
+    if (!modules.length) {
+      container.appendChild(el("div", "empty", "No matching modules."));
+      return;
+    }
+    const grid = el("div", "cards");
     for (const mod of modules) {
       const card = el("div", "card clickable");
       card.style.setProperty("--card-accent", moduleColor(mod.name));
       card.addEventListener("click", () => openInspector(mod.id));
       const head = el("div", "card-head");
-      head.appendChild(el("span", "card-title mono", mod.name));
+      const title = el("span", "card-title mono", mod.name);
+      title.title = mod.name;
+      head.appendChild(title);
       head.appendChild(stateBadge(mod.sync_state));
       card.appendChild(head);
       card.appendChild(el("div", "card-stats", fmt(mod.packages) + " pkgs · " + fmt(mod.prod_loc) + " LOC · " + fmt(mod.in_modules) + " in / " + fmt(mod.out_modules) + " out"));
@@ -641,11 +674,12 @@ function renderArchitectureCards(container) {
         card.appendChild(el("div", "intent", mod.summary.intent));
         addPills(card, mod.summary.boundaries);
       } else {
-        card.appendChild(el("div", "summary-empty", "No cached module summary."));
+        card.appendChild(el("div", "summary-empty", "No cached summary."));
       }
-      modGrid.appendChild(card);
+      grid.appendChild(card);
     }
-    container.appendChild(modGrid);
+    container.appendChild(grid);
+    return;
   }
 
   const packages = (DATA.packages || [])
@@ -653,41 +687,38 @@ function renderArchitectureCards(container) {
     .slice()
     .sort((a, b) => sortFn(a, b, "prod_loc", (a.fan_in || 0) + (a.fan_out || 0), (b.fan_in || 0) + (b.fan_out || 0), a.rel_path, b.rel_path));
 
-  if (packages.length) {
-    const ph = el("h3", "muted", "Packages (" + packages.length + ")");
-    ph.style.marginTop = "16px";
-    container.appendChild(ph);
-    const pkgGrid = el("div", "cards");
-    for (const pkg of packages) {
-      const sym = symbolById.get(pkg.id);
-      const card = el("div", "card clickable");
-      card.style.setProperty("--card-accent", moduleColor(sym ? sym.module : ""));
-      card.addEventListener("click", () => openInspector(pkg.id));
-      const head = el("div", "card-head");
-      head.appendChild(el("span", "card-title mono", pkg.rel_path));
-      head.appendChild(stateBadge(pkg.sync_state));
-      card.appendChild(head);
-      card.appendChild(el("div", "card-stats", fmt(pkg.prod_loc) + " LOC · " + fmt(pkg.exported) + " exported · " + fmt(pkg.fan_in) + " in / " + fmt(pkg.fan_out) + " out"));
-      if (pkg.summary && pkg.summary.intent) {
-        card.appendChild(el("div", "intent", pkg.summary.intent));
-        addPills(card, pkg.summary.boundaries);
-      } else {
-        card.appendChild(el("div", "summary-empty", "No cached package summary."));
-      }
-      pkgGrid.appendChild(card);
+  if (!packages.length) {
+    container.appendChild(el("div", "empty", "No matching packages."));
+    return;
+  }
+  const grid = el("div", "cards");
+  for (const pkg of packages) {
+    const sym = symbolById.get(pkg.id);
+    const card = el("div", "card clickable");
+    card.style.setProperty("--card-accent", moduleColor(sym ? sym.module : ""));
+    card.addEventListener("click", () => openInspector(pkg.id));
+    const head = el("div", "card-head");
+    const title = el("span", "card-title mono", pkg.rel_path);
+    title.title = pkg.rel_path;
+    head.appendChild(title);
+    head.appendChild(stateBadge(pkg.sync_state));
+    card.appendChild(head);
+    card.appendChild(el("div", "card-stats", fmt(pkg.prod_loc) + " LOC · " + fmt(pkg.exported) + " exp · " + fmt(pkg.fan_in) + " in / " + fmt(pkg.fan_out) + " out"));
+    if (pkg.summary && pkg.summary.intent) {
+      card.appendChild(el("div", "intent", pkg.summary.intent));
+      addPills(card, pkg.summary.boundaries);
+    } else {
+      card.appendChild(el("div", "summary-empty", "No cached summary."));
     }
-    container.appendChild(pkgGrid);
+    grid.appendChild(card);
   }
-
-  if (!modules.length && !packages.length) {
-    container.appendChild(el("div", "empty", "No modules or packages match \"" + q + "\"."));
-  }
+  container.appendChild(grid);
 }
 
-/* ==================== Hotspots & Tech Debt Table ==================== */
+/* ==================== Hotspots Table ==================== */
 
 const PAGE_SIZE = 200;
-const hotspotState = {
+const DEFAULT_HOTSPOT_FILTERS = {
   query: "",
   kind: "all",
   module: "",
@@ -698,25 +729,19 @@ const hotspotState = {
   exported: false,
   sideEffects: false,
   includeTests: false,
-  sort: "risk",
-  direction: -1,
-  limit: PAGE_SIZE,
 };
+const hotspotState = { ...DEFAULT_HOTSPOT_FILTERS, sort: "risk", direction: -1, limit: PAGE_SIZE };
 let lastFilteredHotspots = [];
 
+function hasActiveHotspotFilters() {
+  for (const key of Object.keys(DEFAULT_HOTSPOT_FILTERS)) {
+    if (hotspotState[key] !== DEFAULT_HOTSPOT_FILTERS[key]) return true;
+  }
+  return false;
+}
+
 function resetHotspotFilters(overrides = {}) {
-  hotspotState.query = "";
-  hotspotState.kind = "all";
-  hotspotState.module = "";
-  hotspotState.state = "all";
-  hotspotState.eligible = false;
-  hotspotState.dead = false;
-  hotspotState.high = false;
-  hotspotState.exported = false;
-  hotspotState.sideEffects = false;
-  hotspotState.includeTests = false;
-  hotspotState.limit = PAGE_SIZE;
-  Object.assign(hotspotState, overrides);
+  Object.assign(hotspotState, DEFAULT_HOTSPOT_FILTERS, { limit: PAGE_SIZE }, overrides);
   setupHotspots();
 }
 
@@ -728,11 +753,13 @@ function setupHotspots() {
   search.type = "search";
   search.placeholder = "Filter symbol, package, file…";
   search.value = hotspotState.query;
-  search.addEventListener("input", () => {
-    hotspotState.query = search.value.toLowerCase();
+  const onSearch = debounce(() => {
+    hotspotState.query = search.value.trim().toLowerCase();
     hotspotState.limit = PAGE_SIZE;
+    updateResetBtn();
     renderHotspots();
   });
+  search.addEventListener("input", onSearch);
   controls.appendChild(search);
 
   const kindSel = el("select");
@@ -742,6 +769,7 @@ function setupHotspots() {
   kindSel.addEventListener("change", () => {
     hotspotState.kind = kindSel.value;
     hotspotState.limit = PAGE_SIZE;
+    updateResetBtn();
     renderHotspots();
   });
   controls.appendChild(kindSel);
@@ -754,13 +782,14 @@ function setupHotspots() {
     modSel.addEventListener("change", () => {
       hotspotState.module = modSel.value;
       hotspotState.limit = PAGE_SIZE;
+      updateResetBtn();
       renderHotspots();
     });
     controls.appendChild(modSel);
   }
 
   const stateSel = el("select");
-  stateSel.appendChild(new Option("All summary states", "all"));
+  stateSel.appendChild(new Option("All states", "all"));
   for (const st of ["synced", "soft_stale", "hard_stale", "missing", "not_eligible"]) {
     stateSel.appendChild(new Option(st, st));
   }
@@ -768,27 +797,30 @@ function setupHotspots() {
   stateSel.addEventListener("change", () => {
     hotspotState.state = stateSel.value;
     hotspotState.limit = PAGE_SIZE;
+    updateResetBtn();
     renderHotspots();
   });
   controls.appendChild(stateSel);
 
   const toggles = [
-    ["eligible", "Eligible"],
-    ["dead", "Dead code"],
-    ["high", "Complexity ≥10"],
+    ["dead", "Dead"],
+    ["high", "C ≥10"],
     ["exported", "Exported"],
+    ["eligible", "Eligible"],
     ["sideEffects", "Side effects"],
-    ["includeTests", "Include tests"],
+    ["includeTests", "Tests"],
   ];
   for (const [key, label] of toggles) {
     const wrapper = el("label", "toggle-chip");
-    if (key === "includeTests") wrapper.title = "Include test and generated symbols";
+    if (key === "high") wrapper.title = "Complexity ≥ 10";
+    if (key === "includeTests") wrapper.title = "Include test & generated symbols";
     const input = el("input");
     input.type = "checkbox";
     input.checked = Boolean(hotspotState[key]);
     input.addEventListener("change", () => {
       hotspotState[key] = input.checked;
       hotspotState.limit = PAGE_SIZE;
+      updateResetBtn();
       renderHotspots();
     });
     wrapper.appendChild(input);
@@ -797,7 +829,12 @@ function setupHotspots() {
   }
 
   controls.appendChild(el("div", "spacer"));
-  controls.appendChild(button("Export CSV", "ghost", exportHotspotsCSV));
+  const resetBtn = button("Reset", "ghost", () => resetHotspotFilters());
+  const updateResetBtn = () => { resetBtn.hidden = !hasActiveHotspotFilters(); };
+  updateResetBtn();
+  controls.appendChild(resetBtn);
+  controls.appendChild(button("CSV", "ghost", exportHotspotsCSV));
+
   renderHotspots();
 }
 
@@ -824,7 +861,7 @@ function exportHotspotsCSV() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  showToast("Exported " + fmt(lastFilteredHotspots.length) + " rows to CSV");
+  showToast("Exported " + fmt(lastFilteredHotspots.length) + " rows");
 }
 
 function renderHotspots() {
@@ -856,7 +893,6 @@ function renderHotspots() {
       case "complexity": return s.complexity || 0;
       case "fanIn": return s.fan_in || 0;
       case "risk": return riskScore(s);
-      case "dead": return s.dead ? 1 : 0;
       case "state": return s.sync_state || "";
       case "sideEffects": return realSideEffects(s.summary).join(",");
       default: return "";
@@ -879,7 +915,7 @@ function renderHotspots() {
   const maxComplexity = Math.max(10, ...rows.slice(0, 50).map((s) => s.complexity || 0));
 
   const scroller = el("div", "table-scroll");
-  const table = el("table");
+  const table = el("table", "sticky-col");
   const thead = el("thead");
   const headRow = el("tr");
   const cols = [
@@ -890,7 +926,6 @@ function renderHotspots() {
     ["loc", "LOC", true],
     ["complexity", "Complexity", true],
     ["fanIn", "Fan-In", true],
-    ["dead", "Dead", false],
     ["state", "State", false],
     ["sideEffects", "Side Effects", false],
   ];
@@ -898,11 +933,12 @@ function renderHotspots() {
     const isSorted = hotspotState.sort === key;
     const arrow = isSorted ? (hotspotState.direction > 0 ? " ▲" : " ▼") : "";
     const th = el("th", "sortable" + (numeric ? " num" : "") + (isSorted ? " sort-active" : ""), label + arrow);
+    th.setAttribute("aria-sort", isSorted ? (hotspotState.direction > 0 ? "ascending" : "descending") : "none");
     th.addEventListener("click", () => {
       if (hotspotState.sort === key) hotspotState.direction *= -1;
       else {
         hotspotState.sort = key;
-        hotspotState.direction = numeric || key === "dead" ? -1 : 1;
+        hotspotState.direction = numeric ? -1 : 1;
       }
       renderHotspots();
     });
@@ -916,9 +952,20 @@ function renderHotspots() {
   for (const s of visible) {
     const row = el("tr", "clickable");
     row.addEventListener("click", () => openInspector(s.id));
-    row.appendChild(el("td", "mono", s.name || s.id));
+
+    const symTd = el("td", "mono");
+    const symBox = el("div", "cell-sym");
+    const symName = el("span", "cell-sym-name", s.name || s.id);
+    symName.title = s.name || s.id;
+    symBox.appendChild(symName);
+    if (s.dead) symBox.appendChild(el("span", "pill bad", "dead"));
+    symTd.appendChild(symBox);
+    row.appendChild(symTd);
+
     row.appendChild(el("td", null, s.kind));
-    row.appendChild(el("td", "mono muted", s.pkg_path || s.module || "—"));
+    const pkgTd = el("td", "mono muted cell-pkg", s.pkg_path || s.module || "—");
+    pkgTd.title = s.pkg_path || s.module || "";
+    row.appendChild(pkgTd);
 
     const riskCell = el("td", "num");
     riskCell.appendChild(makeMeter(riskScore(s), maxRisk, 12, 28));
@@ -931,10 +978,6 @@ function renderHotspots() {
     row.appendChild(cCell);
 
     row.appendChild(el("td", "num", fmt(s.fan_in)));
-
-    const deadCell = el("td");
-    deadCell.appendChild(s.dead ? el("span", "pill bad", "dead") : el("span", "muted", "—"));
-    row.appendChild(deadCell);
 
     const stateCell = el("td");
     stateCell.appendChild(stateBadge(s.sync_state));
@@ -953,14 +996,14 @@ function renderHotspots() {
   root.appendChild(scroller);
 
   const footer = el("div", "table-footer");
-  footer.appendChild(el("span", null, "Showing " + fmt(visible.length) + " of " + fmt(rows.length) + " matching symbols"));
+  footer.appendChild(el("span", null, "Showing " + fmt(visible.length) + " of " + fmt(rows.length)));
   if (rows.length > visible.length) {
     const actions = el("div", "pills");
-    actions.appendChild(button("Load +" + PAGE_SIZE, "ghost btn-xs", () => {
+    actions.appendChild(button("+" + PAGE_SIZE, "ghost btn-xs", () => {
       hotspotState.limit += PAGE_SIZE;
       renderHotspots();
     }));
-    actions.appendChild(button("Show all (" + fmt(rows.length) + ")", "ghost btn-xs", () => {
+    actions.appendChild(button("All (" + fmt(rows.length) + ")", "ghost btn-xs", () => {
       hotspotState.limit = rows.length;
       renderHotspots();
     }));
@@ -974,7 +1017,7 @@ function renderHotspots() {
 function renderInterfaces() {
   const root = $("#interfaces-content");
   clear(root);
-  const query = ($("#interface-search").value || "").toLowerCase();
+  const query = ($("#interface-search").value || "").trim().toLowerCase();
   const mode = $("#interface-filter").value || "all";
 
   const items = (DATA.interfaces || []).filter((iface) => {
@@ -989,7 +1032,7 @@ function renderInterfaces() {
     return hay.includes(query);
   });
 
-  $("#interface-count").textContent = fmt(items.length) + " of " + fmt((DATA.interfaces || []).length) + " interfaces";
+  $("#interface-count").textContent = fmt(items.length) + " / " + fmt((DATA.interfaces || []).length);
   if (!items.length) {
     root.appendChild(el("div", "empty", "No matching interfaces."));
     return;
@@ -1003,23 +1046,22 @@ function renderInterfaces() {
     const head = el("div", "card-head");
     head.appendChild(button(iface.name, "linkish mono", () => openInspector(iface.id)));
     const badges = el("div", "pills");
-    badges.appendChild(el("span", "pill", iface.methods + " methods"));
+    badges.appendChild(el("span", "pill", iface.methods + "m"));
     const implCount = (iface.implementations || []).length;
-    badges.appendChild(el("span", "pill " + (implCount ? "good" : "warn"), implCount + " impls"));
+    badges.appendChild(el("span", "pill " + (implCount ? "good" : "warn"), implCount + " impl"));
     head.appendChild(badges);
     card.appendChild(head);
-    card.appendChild(el("div", "muted mono", iface.pkg_path));
+    card.appendChild(el("div", "muted mono card-stats", iface.pkg_path));
 
     const impls = el("div", "relation");
     if (implCount) {
       for (const impl of iface.implementations) {
-        const label = impl.name + (impl.via_ptr ? " (*ptr)" : "");
-        const btn = button(label, "linkish mono", () => openInspector(impl.id));
+        const btn = button(impl.name + (impl.via_ptr ? " (*ptr)" : ""), "linkish mono", () => openInspector(impl.id));
         btn.title = impl.pkg_path;
         impls.appendChild(btn);
       }
     } else {
-      impls.appendChild(el("span", "summary-empty", "No concrete implementations indexed."));
+      impls.appendChild(el("span", "summary-empty", "No concrete implementations."));
     }
     card.appendChild(impls);
     cards.appendChild(card);
@@ -1027,13 +1069,66 @@ function renderInterfaces() {
   root.appendChild(cards);
 }
 
-/* ==================== Hierarchy Tree ==================== */
+/* ==================== Lazy Hierarchy Tree ==================== */
 
+const treeLeafCounts = new WeakMap();
 function countLeaves(node) {
-  if (!node.children || !node.children.length) return 1;
+  if (treeLeafCounts.has(node)) return treeLeafCounts.get(node);
   let total = 0;
-  for (const c of node.children) total += countLeaves(c);
+  if (!node.children || !node.children.length) total = 1;
+  else for (const c of node.children) total += countLeaves(c);
+  treeLeafCounts.set(node, total);
   return total;
+}
+
+const treeNodeMap = new WeakMap();
+
+function walkTree(nodes, visit) {
+  for (const node of nodes || []) {
+    visit(node);
+    walkTree(node.children, visit);
+  }
+}
+
+function hydrateDetails(details) {
+  if (details.dataset.hydrated === "1") return;
+  details.dataset.hydrated = "1";
+  const node = treeNodeMap.get(details);
+  if (!node || !node.children) return;
+  const frag = document.createDocumentFragment();
+  for (const child of node.children) frag.appendChild(treeElement(child));
+  details.appendChild(frag);
+}
+
+function treeElement(node) {
+  if (!node.children || !node.children.length) {
+    const row = el("div", "leaf");
+    row.appendChild(button(node.label, "tree-link mono", () => openInspector(node.id)));
+    row.appendChild(el("span", "pill", node.kind));
+    row.appendChild(stateBadge(node.sync_state));
+    return row;
+  }
+  const details = el("details");
+  treeNodeMap.set(details, node);
+  const summary = el("summary");
+  summary.appendChild(button(node.label, "tree-link mono", (event) => {
+    event.stopPropagation();
+    openInspector(node.id);
+  }));
+  summary.appendChild(el("span", "pill", node.kind));
+  summary.appendChild(el("span", "muted", "(" + countLeaves(node) + ")"));
+  summary.appendChild(stateBadge(node.sync_state));
+  details.appendChild(summary);
+
+  details.addEventListener("toggle", () => {
+    if (details.open) hydrateDetails(details);
+  });
+
+  if (node.kind === "module") {
+    details.open = true;
+    hydrateDetails(details);
+  }
+  return details;
 }
 
 function renderTree() {
@@ -1051,18 +1146,20 @@ function renderTree() {
     });
     $("#tree-count").textContent = fmt(matches.length) + " matches";
     if (!matches.length) {
-      root.appendChild(el("div", "empty", "No hierarchy nodes match \"" + query + "\"."));
+      root.appendChild(el("div", "empty", "No matching hierarchy nodes."));
       return;
     }
+    const frag = document.createDocumentFragment();
     for (const node of matches.slice(0, 300)) {
       const row = el("div", "leaf");
       row.appendChild(button(node.label, "tree-link mono", () => openInspector(node.id)));
       row.appendChild(el("span", "pill", node.kind));
       row.appendChild(stateBadge(node.sync_state));
-      root.appendChild(row);
+      frag.appendChild(row);
     }
+    root.appendChild(frag);
     if (matches.length > 300) {
-      root.appendChild(el("div", "muted", "Showing first 300 of " + fmt(matches.length) + " matches."));
+      root.appendChild(el("div", "muted", "Showing first 300 of " + fmt(matches.length)));
     }
     return;
   }
@@ -1070,37 +1167,9 @@ function renderTree() {
   let totalNodes = 0;
   walkTree(tree, () => { totalNodes++; });
   $("#tree-count").textContent = fmt(totalNodes) + " nodes";
-  for (const node of tree) root.appendChild(treeElement(node));
-}
-
-function walkTree(nodes, visit) {
-  for (const node of nodes || []) {
-    visit(node);
-    walkTree(node.children, visit);
-  }
-}
-
-function treeElement(node) {
-  if (!node.children || !node.children.length) {
-    const row = el("div", "leaf");
-    row.appendChild(button(node.label, "tree-link mono", () => openInspector(node.id)));
-    row.appendChild(el("span", "pill", node.kind));
-    row.appendChild(stateBadge(node.sync_state));
-    return row;
-  }
-  const details = el("details");
-  details.open = node.kind === "module" || node.kind === "package";
-  const summary = el("summary");
-  summary.appendChild(button(node.label, "tree-link mono", (event) => {
-    event.stopPropagation();
-    openInspector(node.id);
-  }));
-  summary.appendChild(el("span", "pill", node.kind));
-  summary.appendChild(el("span", "muted", "(" + countLeaves(node) + ")"));
-  summary.appendChild(stateBadge(node.sync_state));
-  details.appendChild(summary);
-  for (const child of node.children) details.appendChild(treeElement(child));
-  return details;
+  const frag = document.createDocumentFragment();
+  for (const node of tree) frag.appendChild(treeElement(node));
+  root.appendChild(frag);
 }
 
 /* ==================== Interactive Dependency Graph ==================== */
@@ -1115,6 +1184,8 @@ const graphState = {
   ty: 24,
   selected: null,
   bounds: { width: 800, height: 500 },
+  outMap: new Map(),
+  inMap: new Map(),
   interactionsBound: false,
 };
 
@@ -1124,8 +1195,8 @@ function setupGraph() {
 
   const mode = el("select");
   mode.id = "graph-mode-select";
-  mode.appendChild(new Option("Modules graph", "modules"));
-  mode.appendChild(new Option("Packages graph", "packages"));
+  mode.appendChild(new Option("Modules", "modules"));
+  mode.appendChild(new Option("Packages", "packages"));
   mode.value = graphState.mode;
   mode.addEventListener("change", () => {
     graphState.mode = mode.value;
@@ -1149,10 +1220,10 @@ function setupGraph() {
   search.placeholder = "Highlight nodes…";
   search.id = "graph-search";
   search.value = graphState.query;
-  search.addEventListener("input", () => {
-    graphState.query = search.value.toLowerCase();
+  search.addEventListener("input", debounce(() => {
+    graphState.query = search.value.trim().toLowerCase();
     applyGraphSearch($("#graph-svg"));
-  });
+  }));
   controls.appendChild(search);
 
   const transLabel = el("label", "toggle-chip");
@@ -1161,21 +1232,27 @@ function setupGraph() {
   transCheck.checked = graphState.transitive;
   transCheck.addEventListener("change", () => {
     graphState.transitive = transCheck.checked;
-    if (graphState.selected) renderGraph(false);
+    if (graphState.selected) {
+      highlightGraph($("#graph-svg"), graphState.selected, graphState.outMap, graphState.inMap);
+    }
   });
   transLabel.appendChild(transCheck);
-  transLabel.appendChild(document.createTextNode("Transitive highlight"));
+  transLabel.appendChild(document.createTextNode("Transitive"));
   controls.appendChild(transLabel);
 
-  controls.appendChild(el("div", "spacer"));
-  controls.appendChild(button("−", "icon-btn", () => zoomGraphBy(0.8)));
-  controls.appendChild(button("+", "icon-btn", () => zoomGraphBy(1.25)));
-  controls.appendChild(button("Fit", "ghost", () => fitGraphToViewport()));
-  controls.appendChild(button("Reset", "ghost", () => {
+  // Floating canvas zoom controls
+  const zoomTools = $("#graph-zoom-tools");
+  clear(zoomTools);
+  zoomTools.appendChild(button("−", null, () => zoomGraphBy(0.8)));
+  zoomTools.appendChild(button("+", null, () => zoomGraphBy(1.25)));
+  zoomTools.appendChild(button("Fit", null, () => fitGraphToViewport()));
+  zoomTools.appendChild(button("Reset", null, () => {
     graphState.selected = null;
     graphState.query = "";
     search.value = "";
-    renderGraph(true);
+    clearGraphHighlight($("#graph-svg"));
+    applyGraphSearch($("#graph-svg"));
+    fitGraphToViewport();
   }));
 
   updateGraphControls();
@@ -1226,12 +1303,12 @@ function fitGraphToViewport() {
   const svg = $("#graph-svg");
   const rect = svg.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
-  const pad = 40;
+  const pad = 36;
   const scaleX = (rect.width - pad * 2) / Math.max(1, graphState.bounds.width);
   const scaleY = (rect.height - pad * 2) / Math.max(1, graphState.bounds.height);
   graphState.scale = Math.max(0.2, Math.min(1.25, Math.min(scaleX, scaleY)));
   graphState.tx = (rect.width - graphState.bounds.width * graphState.scale) / 2;
-  graphState.ty = Math.max(24, (rect.height - graphState.bounds.height * graphState.scale) / 2);
+  graphState.ty = Math.max(20, (rect.height - graphState.bounds.height * graphState.scale) / 2);
   applyViewportTransform();
 }
 
@@ -1246,38 +1323,64 @@ function bindGraphInteractions() {
     zoomGraphBy(event.deltaY < 0 ? 1.12 : 0.89, event.clientX - rect.left, event.clientY - rect.top);
   }, { passive: false });
 
-  let dragging = false, moved = false, lastX = 0, lastY = 0;
+  const pointers = new Map();
+  let moved = false;
+  let lastPinchDist = 0;
+
   svg.addEventListener("pointerdown", (event) => {
     if (event.target.closest && event.target.closest(".graph-node")) return;
-    dragging = true;
-    moved = false;
-    lastX = event.clientX;
-    lastY = event.clientY;
-    svg.classList.add("dragging");
-    svg.setPointerCapture(event.pointerId);
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 1) {
+      moved = false;
+      svg.classList.add("dragging");
+    } else if (pointers.size === 2) {
+      const [a, b] = Array.from(pointers.values());
+      lastPinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+      moved = true;
+    }
+    try { svg.setPointerCapture(event.pointerId); } catch (_) {}
   });
+
   svg.addEventListener("pointermove", (event) => {
-    if (!dragging) return;
-    const dx = event.clientX - lastX;
-    const dy = event.clientY - lastY;
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
-    graphState.tx += dx;
-    graphState.ty += dy;
-    lastX = event.clientX;
-    lastY = event.clientY;
-    applyViewportTransform();
+    if (!pointers.has(event.pointerId)) return;
+    const prev = pointers.get(event.pointerId);
+    const cur = { x: event.clientX, y: event.clientY };
+    pointers.set(event.pointerId, cur);
+
+    if (pointers.size === 1) {
+      const dx = cur.x - prev.x;
+      const dy = cur.y - prev.y;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+      graphState.tx += dx;
+      graphState.ty += dy;
+      applyViewportTransform();
+    } else if (pointers.size === 2) {
+      const [a, b] = Array.from(pointers.values());
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (lastPinchDist > 0 && dist > 0) {
+        const rect = svg.getBoundingClientRect();
+        const cx = (a.x + b.x) / 2 - rect.left;
+        const cy = (a.y + b.y) / 2 - rect.top;
+        zoomGraphBy(dist / lastPinchDist, cx, cy);
+      }
+      lastPinchDist = dist;
+    }
   });
-  const endDrag = () => {
-    if (!dragging) return;
-    dragging = false;
-    svg.classList.remove("dragging");
-    if (!moved && graphState.selected) {
-      graphState.selected = null;
-      clearGraphHighlight(svg);
+
+  const endPointer = (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.delete(event.pointerId);
+    if (pointers.size < 2) lastPinchDist = 0;
+    if (pointers.size === 0) {
+      svg.classList.remove("dragging");
+      if (!moved && graphState.selected) {
+        graphState.selected = null;
+        clearGraphHighlight(svg);
+      }
     }
   };
-  svg.addEventListener("pointerup", endDrag);
-  svg.addEventListener("pointercancel", endDrag);
+  svg.addEventListener("pointerup", endPointer);
+  svg.addEventListener("pointercancel", endPointer);
 }
 
 function addArrowMarker(defs, id, color) {
@@ -1297,7 +1400,7 @@ function renderGraph(autoFit = true) {
 
   const graph = currentGraph();
   if (!graph.nodes.length) {
-    svg.appendChild(svgElement("text", { x: 28, y: 44, fill: "var(--muted)" })).textContent = "No nodes match the current filter.";
+    svg.appendChild(svgElement("text", { x: 24, y: 40, fill: "var(--muted)" })).textContent = "No nodes match the current filter.";
     return;
   }
 
@@ -1308,7 +1411,7 @@ function renderGraph(autoFit = true) {
   addArrowMarker(defs, "arrow-cycle", "var(--bad)");
   svg.appendChild(defs);
 
-  const nodeWidth = 196, nodeHeight = 46, columnGap = 272, rowGap = 72;
+  const nodeWidth = 192, nodeHeight = 44, columnGap = 264, rowGap = 68;
   const maxLayer = Math.max(0, ...graph.nodes.map((n) => n.layer || 0));
   const maxOrder = Math.max(0, ...graph.nodes.map((n) => n.order || 0));
   graphState.bounds = {
@@ -1333,7 +1436,6 @@ function renderGraph(autoFit = true) {
   const inMap = new Map();
   let cycleCount = 0;
 
-  // Edge layer first (behind nodes)
   const edgeLayer = svgElement("g", { class: "edge-layer" });
   for (const edge of graph.edges) {
     const fromPos = positions.get(edge.from);
@@ -1351,14 +1453,14 @@ function renderGraph(autoFit = true) {
       const y1 = fromPos.y;
       const x2 = toPos.x + nodeWidth / 2;
       const y2 = toPos.y;
-      const arch = 34 + Math.abs(x1 - x2) * 0.14;
+      const arch = 32 + Math.abs(x1 - x2) * 0.14;
       d = "M " + x1 + " " + y1 + " C " + x1 + " " + (y1 - arch) + ", " + x2 + " " + (y2 - arch) + ", " + x2 + " " + (y2 - 2);
     } else {
       const x1 = fromPos.x + nodeWidth;
       const y1 = fromPos.y + nodeHeight / 2;
       const x2 = toPos.x - 2;
       const y2 = toPos.y + nodeHeight / 2;
-      const dx = Math.max(36, (x2 - x1) * 0.45);
+      const dx = Math.max(34, (x2 - x1) * 0.45);
       d = "M " + x1 + " " + y1 + " C " + (x1 + dx) + " " + y1 + ", " + (x2 - dx) + " " + y2 + ", " + x2 + " " + y2;
     }
 
@@ -1377,9 +1479,10 @@ function renderGraph(autoFit = true) {
     outMap.get(edge.from).push(edge.to);
     inMap.get(edge.to).push(edge.from);
   }
+  graphState.outMap = outMap;
+  graphState.inMap = inMap;
   viewport.appendChild(edgeLayer);
 
-  // Node layer
   const nodeLayer = svgElement("g", { class: "node-layer" });
   for (const node of graph.nodes) {
     const pos = positions.get(node.id);
@@ -1391,19 +1494,17 @@ function renderGraph(autoFit = true) {
     });
 
     group.appendChild(svgElement("rect", { class: "node-bg", width: nodeWidth, height: nodeHeight, rx: 7 }));
-    // Module color accent stripe
     group.appendChild(svgElement("rect", {
-      x: 0, y: 0, width: 5, height: nodeHeight, rx: 2,
+      x: 0, y: 0, width: 4, height: nodeHeight, rx: 2,
       fill: moduleColor(node.module || node.label),
     }));
-    // Sync state dot
     group.appendChild(svgElement("circle", {
-      cx: nodeWidth - 11, cy: 13, r: 3.5,
+      cx: nodeWidth - 10, cy: 12, r: 3.2,
       fill: stateColor(node.sync_state),
     }));
 
-    const label = node.label.length > 23 ? "…" + node.label.slice(-22) : node.label;
-    const titleEl = svgElement("text", { class: "node-title", x: 12, y: 19 });
+    const label = node.label.length > 22 ? "…" + node.label.slice(-21) : node.label;
+    const titleEl = svgElement("text", { class: "node-title", x: 11, y: 18 });
     titleEl.textContent = label;
     group.appendChild(titleEl);
 
@@ -1411,7 +1512,7 @@ function renderGraph(autoFit = true) {
     const degOut = (outMap.get(node.id) || []).length;
     const subParts = ["in " + degIn + " · out " + degOut];
     if (sym && sym.loc) subParts.push(fmt(sym.loc) + " LOC");
-    const subEl = svgElement("text", { class: "node-sub", x: 12, y: 35 });
+    const subEl = svgElement("text", { class: "node-sub", x: 11, y: 34 });
     subEl.textContent = subParts.join(" · ");
     group.appendChild(subEl);
 
@@ -1439,7 +1540,6 @@ function renderGraph(autoFit = true) {
   }
   viewport.appendChild(nodeLayer);
 
-  // HUD Pills
   hud.appendChild(el("span", "pill", fmt(graph.nodes.length) + " nodes"));
   hud.appendChild(el("span", "pill", fmt(graph.edges.length) + " edges"));
   if (cycleCount > 0) hud.appendChild(el("span", "pill bad", fmt(cycleCount) + " back-edges"));
@@ -1499,15 +1599,10 @@ function highlightGraph(svg, id, outMap, inMap) {
     edge.classList.toggle("active-in", !isOut && isIn);
     edge.classList.toggle("dim", !isOut && !isIn);
 
-    if (edge.dataset.cycle === "1") {
-      edge.setAttribute("marker-end", "url(#arrow-cycle)");
-    } else if (isOut) {
-      edge.setAttribute("marker-end", "url(#arrow-out)");
-    } else if (isIn) {
-      edge.setAttribute("marker-end", "url(#arrow-in)");
-    } else {
-      edge.setAttribute("marker-end", "url(#arrow-muted)");
-    }
+    if (edge.dataset.cycle === "1") edge.setAttribute("marker-end", "url(#arrow-cycle)");
+    else if (isOut) edge.setAttribute("marker-end", "url(#arrow-out)");
+    else if (isIn) edge.setAttribute("marker-end", "url(#arrow-in)");
+    else edge.setAttribute("marker-end", "url(#arrow-muted)");
   }
 }
 
@@ -1518,7 +1613,7 @@ function applyGraphSearch(svg) {
   }
 }
 
-/* ==================== Global Search with Ranking & Keyboard Nav ==================== */
+/* ==================== Global Search ==================== */
 
 let searchMatches = [];
 let searchCursor = -1;
@@ -1534,6 +1629,11 @@ function scoreMatch(symbol, query) {
   return 0;
 }
 
+function closeSearchResults() {
+  $("#search-results").hidden = true;
+  $("#global-search").setAttribute("aria-expanded", "false");
+}
+
 function globalSearch(raw) {
   const results = $("#search-results");
   clear(results);
@@ -1541,7 +1641,7 @@ function globalSearch(raw) {
   searchCursor = -1;
   if (!query) {
     searchMatches = [];
-    results.hidden = true;
+    closeSearchResults();
     return;
   }
   searchMatches = symbols
@@ -1552,6 +1652,7 @@ function globalSearch(raw) {
     .map((x) => x.s);
 
   results.hidden = false;
+  $("#global-search").setAttribute("aria-expanded", "true");
   if (!searchMatches.length) {
     results.appendChild(el("div", "empty", "No matching symbols."));
     return;
@@ -1588,13 +1689,13 @@ function setSearchCursor(idx) {
 function selectSearchItem(idx) {
   const symbol = searchMatches[idx];
   if (!symbol) return;
-  $("#search-results").hidden = true;
+  closeSearchResults();
   $("#global-search").value = "";
   $("#global-search").blur();
   openInspector(symbol.id);
 }
 
-/* ==================== Tabs, Hash State & Shortcuts ==================== */
+/* ==================== Navigation, Hash & Shortcuts ==================== */
 
 function activeTab() {
   const cur = $(".tab.active");
@@ -1608,20 +1709,20 @@ function switchTab(tabName) {
     tab.setAttribute("aria-selected", on ? "true" : "false");
   }
   for (const view of $$(".view")) view.classList.toggle("active", view.dataset.view === tabName);
-  $("#search-results").hidden = true;
+  closeSearchResults();
   if (tabName === "graph") {
     if (!$("#graph-controls").childNodes.length) setupGraph();
     else updateGraphControls();
     renderGraph(true);
   }
-  const openId = $("#inspector").hidden ? null : inspectorHistory.stack[inspectorHistory.index];
+  const openId = isInspectorOpen() ? inspectorHistory.stack[inspectorHistory.index] : null;
   syncUrlHash(tabName, openId);
 }
 
 function syncUrlHash(tab, symbolId) {
   const next = "#" + encodeURIComponent(tab) + (symbolId ? "?id=" + encodeURIComponent(symbolId) : "");
   if (window.location.hash !== next) {
-    try { history.replaceState(null, "", next); } catch (_) { /* ignore on restricted file:// */ }
+    try { history.replaceState(null, "", next); } catch (_) {}
   }
 }
 
@@ -1634,8 +1735,7 @@ function restoreFromHash() {
     switchTab(tab);
   }
   if (queryPart) {
-    const params = new URLSearchParams(queryPart);
-    const id = params.get("id");
+    const id = new URLSearchParams(queryPart).get("id");
     if (id && symbolById.has(id)) openInspector(id);
   }
 }
@@ -1644,11 +1744,15 @@ function setupTheme() {
   const saved = localStorage.getItem("goray-theme");
   const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = saved || (prefersDark ? "dark" : "light");
+  const btn = $("#theme-toggle");
   const syncLabel = () => {
-    $("#theme-toggle").textContent = document.documentElement.dataset.theme === "dark" ? "Light mode" : "Dark mode";
+    const dark = document.documentElement.dataset.theme === "dark";
+    btn.textContent = dark ? "☀" : "☾";
+    btn.title = dark ? "Switch to light theme" : "Switch to dark theme";
+    btn.setAttribute("aria-label", btn.title);
   };
   syncLabel();
-  $("#theme-toggle").addEventListener("click", () => {
+  btn.addEventListener("click", () => {
     document.documentElement.dataset.theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     localStorage.setItem("goray-theme", document.documentElement.dataset.theme);
     syncLabel();
@@ -1657,7 +1761,11 @@ function setupTheme() {
 
 function setupShortcuts() {
   const input = $("#global-search");
-  input.addEventListener("input", () => globalSearch(input.value));
+  const debouncedGlobal = debounce((v) => globalSearch(v), 90);
+  input.addEventListener("input", () => {
+    if (!input.value.trim()) globalSearch("");
+    else debouncedGlobal(input.value);
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") { event.preventDefault(); setSearchCursor(searchCursor + 1); }
     else if (event.key === "ArrowUp") { event.preventDefault(); setSearchCursor(searchCursor - 1); }
@@ -1668,7 +1776,7 @@ function setupShortcuts() {
   document.addEventListener("click", (event) => {
     const results = $("#search-results");
     if (!results.hidden && !results.contains(event.target) && event.target !== input) {
-      results.hidden = true;
+      closeSearchResults();
     }
   });
 
@@ -1676,21 +1784,15 @@ function setupShortcuts() {
     const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
     const editing = tag === "input" || tag === "textarea" || tag === "select";
 
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-      event.preventDefault();
-      input.focus();
-      input.select();
-      return;
-    }
-    if (event.key === "/" && !editing) {
+    if (((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") || (event.key === "/" && !editing)) {
       event.preventDefault();
       input.focus();
       input.select();
       return;
     }
     if (event.key === "Escape") {
-      if (!$("#search-results").hidden) $("#search-results").hidden = true;
-      else if (!$("#inspector").hidden) closeInspector();
+      if (!$("#search-results").hidden) closeSearchResults();
+      else if (isInspectorOpen()) closeInspector();
       return;
     }
     if (event.altKey && event.key === "ArrowLeft" && inspectorHistory.index > 0) {
@@ -1724,28 +1826,38 @@ function setupPanels() {
       openInspector(inspectorHistory.stack[inspectorHistory.index], false);
     }
   });
-  $("#interface-search").addEventListener("input", renderInterfaces);
+
+  $("#interface-search").addEventListener("input", debounce(renderInterfaces));
   $("#interface-filter").addEventListener("change", renderInterfaces);
-  $("#tree-search").addEventListener("input", renderTree);
+  $("#tree-search").addEventListener("input", debounce(renderTree));
+
   $("#tree-expand").addEventListener("click", () => {
-    for (const d of $$("#tree-content details")) d.open = true;
+    let pending = $$("#tree-content details");
+    while (pending.length) {
+      const next = [];
+      for (const d of pending) {
+        hydrateDetails(d);
+        d.open = true;
+        for (const child of d.children) {
+          if (child.tagName === "DETAILS" && child.dataset.hydrated !== "1") next.push(child);
+        }
+      }
+      pending = next;
+    }
   });
   $("#tree-collapse").addEventListener("click", () => {
     for (const d of $$("#tree-content details")) d.open = false;
     for (const d of $$("#tree-content > details")) d.open = true;
   });
+
+  window.addEventListener("resize", debounce(() => {
+    if (activeTab() === "graph") fitGraphToViewport();
+  }, 180));
 }
 
 function init() {
   document.title = (DATA.repo || "goray") + " · Architecture Report";
-  $("#repo-meta").textContent = [DATA.repo, DATA.module_path, "generated " + DATA.generated_at].filter(Boolean).join(" · ");
-
-  const cov = DATA.coverage || {};
-  const badge = $("#tab-summary-badge");
-  badge.appendChild(el("span", "pill " + ((cov.percent || 0) >= 80 ? "good" : "accent"), "Coverage " + (cov.percent || 0) + "%"));
-  if (DATA.metrics && DATA.metrics.dead > 0) {
-    badge.appendChild(el("span", "pill bad", fmt(DATA.metrics.dead) + " dead"));
-  }
+  $("#repo-meta").textContent = [DATA.repo, DATA.module_path, DATA.generated_at].filter(Boolean).join(" · ");
 
   setupTheme();
   setupShortcuts();

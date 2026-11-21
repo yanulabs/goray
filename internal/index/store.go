@@ -84,7 +84,11 @@ func (s *Store) SetBuildHook(hook func(*Index) error) {
 
 // Start builds the index in the background.
 func (s *Store) Start() {
-	go func() { _ = s.Rebuild() }()
+	s.buildWG.Add(1)
+	go func() {
+		defer s.buildWG.Done()
+		_ = s.Rebuild()
+	}()
 }
 
 // Root is the project directory being indexed.

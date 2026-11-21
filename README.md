@@ -1,192 +1,244 @@
 # goray
 
-An MCP stdio server that builds a semantic index of a Go module with
-`go/packages` and `go/types`, then exposes architecture, symbol, call-graph,
-impact-analysis, and cached-summary tools to an LLM client.
+Static semantic indexer, MCP stdio server, and offline architecture reporter for Go modules.
 
-The server never calls an LLM. The connected MCP client produces summaries and
-submits them with `upsert_summaries`; the server validates, hashes, and caches
-them deterministically in SQLite.
+`goray` loads a Go module with `go/packages` and `go/types` to compute dependency graphs, call graphs, interface implementations, dead code, complexity hotspots, and blast radius. It ships as a single pure-Go binary (no CGO) and exposes the index either as a self-contained HTML/Markdown/DOT export or over MCP for coding agents.
+
+`goray` never calls an LLM. If a connected MCP client submits structured symbol summaries via `upsert_summaries`, `goray` validates, hashes, and caches them in an external SQLite database. Every command and report works with an empty cache.
 
 ## Install
 
 ```sh
-make install
-make install-skill   # optional: install the OpenCode skill globally
-goray -version
-```
-
-`make install` uses `GOBIN` (or `GOPATH/bin`) and embeds the version from
-`git describe`. Alternatively:
-
-```sh
 go install github.com/yanulabs/goray/cmd/goray@latest
+
 ```
 
-Or build a local binary:
+From a local checkout:
 
 ```sh
-make build                    # bin/goray
-go build -o goray ./cmd/goray
+make install          # installs to GOBIN (or GOPATH/bin) with git version
+make build            # builds ./bin/goray
+make install-skill    # optional: installs the OpenCode skill to ~/.config/opencode/skills
+
 ```
 
-## Connect an MCP client
+## Quick start
 
-OpenCode, project-local:
+Generate and open an offline architecture report for the current module:
 
 ```sh
-opencode mcp add goray -- goray .
-opencode mcp list
+goray export html --open
+
 ```
 
-Generic MCP client configuration:
+Connect `goray` to a Claude/Cursor-style MCP client:
 
 ```json
 {
   "mcpServers": {
     "goray": {
       "command": "goray",
-      "args": ["/absolute/path/to/go/project"]
+      "args": ["serve", "/absolute/path/to/go/project"]
+    }
+  }
+}
+
+```
+
+With OpenCode (project-local):
+
+```sh
+opencode mcp add goray -- goray serve .
+
+```
+
+Install globally into OpenCode with the Makefile target:
+
+```sh
+make install-mcp
+# or explicitly:
+opencode mcp add goray --global -- goray serve
+```
+
+OpenCode V2 reads servers from `mcp.servers` (not directly under `mcp`). The generated configuration looks like:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "goray": {
+        "type": "local",
+        "command": ["goray", "serve"]
+      }
     }
   }
 }
 ```
 
-The index builds in the background. File changes are watched automatically and
-coalesced into debounced rebuilds. Queries wait briefly for an active rebuild;
-otherwise they use the last good snapshot and report `index_state`.
+The local server's `cwd` defaults to the OpenCode workspace. Set `"cwd": "/path/to/repo"` only if you want a fixed repository.
 
-The project skill in `.opencode/skills/goray/SKILL.md` is discovered
-automatically by OpenCode and describes the recommended navigation and summary
-workflow. Mention `@goray` to load it explicitly, or let OpenCode
-auto-invoke it.
+The repository also includes `.opencode/skills/goray/SKILL.md`, which OpenCode discovers automatically (or loads via `@goray`).
 
-### CLI flags
+## CLI
 
-| Flag | Meaning |
-|---|---|
-| `-version` | Print the build version and exit |
-| `-export-dot <file>` | Write the module graph as Graphviz DOT and exit |
-| `-export-md <file>` | Write the architecture map as Markdown and exit |
-| `-export-html <file>` | Write the self-contained interactive HTML report and exit |
-| `-db <path>` | SQLite path; `:memory:` for ephemeral runs (or `GORAY_DB`) |
-| `-db-info` | Print cache path, table counts, staleness counts, and recent summaries, then exit |
-| `-db-path` | Print the effective SQLite path and exit; does not load packages or create the DB |
-| `-no-watch` | Disable automatic file watching/reindexing |
-| `-log-level off\|error\|info` | stderr log level (default `info`, or `GORAY_LOG_LEVEL`) |
+```text
+goray <command> [flags] [path]
 
-The optional positional path defaults to `.`. Every mode resolves it to the
-nearest ancestor directory containing `go.mod`; the path may also point at a
-file inside the module. This lets you invoke the server from any subdirectory,
-and nested modules resolve to their own root.
-
-The default database lives outside the repository at
-`<UserCacheDir>/goray/<repo-slug>-<sha256(canonicalRoot)[:12]>.db`.
-The slug comes from the module directory name: lowercase, restricted to
-`a-z0-9._-`, up to 32 characters. Symlinks are resolved before hashing, so the
-same checkout has one default DB. `-db` and `GORAY_DB` still take precedence.
-
-Print the effective DB path without building an index or touching the database:
-
-```sh
-goray -db-path
-sqlite3 "$(goray -db-path)"
 ```
 
-Module-level metrics use `modules/<name>` when present; otherwise standard
-layout directories (`cmd/<name>`, `internal/<name>`, `pkg/<name>`) or the
-first path segment form the module group. Root packages are grouped as `root`.
+`[path]` defaults to `.` and is resolved upward to the nearest directory containing `go.mod` (file paths inside the module work as well). Commands can be run from any subdirectory, and nested Go modules resolve to their own root. Flags may appear before or after `[path]`.
 
-## Summary cache
+| Command | Description |
+| --- | --- |
+| `goray serve [path]` | Run the MCP stdio server |
+| `goray export <html|md|dot> [path]` | Export an HTML report, Markdown map, or Graphviz DOT graph |
+| `goray db <info|path> [path]` | Inspect cache stats or print the resolved SQLite DB path |
+| `goray version` | Print version (`-v` / `--version` also accepted) |
+| `goray help [command]` | Show help for root or a specific command |
 
-- Canonical, line-independent IDs: `mod:`, `pkg:`, `file:`, and `sym:`.
-- Normalized AST plus resolved `go/types` signatures and directives.
-- Cycle-safe `sig_hash`/`self_hash`/`dep_hash`/`content_hash` model.
-- Two-tier staleness: `synced`, `soft_stale`, `hard_stale`, `missing`, and
-  `not_eligible`.
-- Content-addressed summaries survive branch switches and function moves.
-- Generated and `_test.go` symbols stay indexed but are never summary-eligible.
-- Test-only compile errors are reported as warnings without blocking production.
-- Parse/type errors in production keep the last healthy snapshot.
-- Structured JSON validation for `func`/`method` and architecture kinds.
-- Batched summary context retrieval with per-call character budgets.
-- LRU access tracking with batched flushes and periodic garbage collection.
-
-Generate a single-file offline HTML report (static analysis plus cached summaries):
+### `serve`
 
 ```sh
-goray -export-html report.html /path/to/go/project
+goray serve [path] [--db <path>] [--log-level off|error|info] [--port <n>] [--open] [--no-watch]
+
 ```
 
-The report includes an executive scorecard, deterministic layered dependency graph,
-sortable hotspots/debt table, interface implementation matrix, hierarchy explorer,
-and a detail inspector. It embeds all CSS/JS and data; no network or frontend build
-is required, and it remains useful with an empty summary cache.
+* `--db <path>` — SQLite cache path (default: user cache dir; env `GORAY_DB`; supports `:memory:`).
+* `--log-level <level>` — stderr verbosity: `off`, `error`, or `info` (default: `info`; env `GORAY_LOG_LEVEL`).
+* `--port <n>` — local report UI port (default: `4321`; `0` picks a free port). Busy ports auto-increment.
+* `--open` — open the local report URL in the default browser.
+* `--no-watch` — disable `fsnotify` watching and background reindexing.
 
-Inspect the populated cache:
+`serve` also runs a local read-only report UI and prints a Vite-style banner to **stderr**, keeping stdout reserved for MCP JSON-RPC:
+
+```text
+  goray dev
+
+  ➜  Local:   http://127.0.0.1:4321/
+  ➜  MCP:     stdio
+  ➜  Press Ctrl+C to stop
+```
+
+The report reflects the current index snapshot and summary cache, and refreshes on each page load after rebuilds. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
+
+### `export`
 
 ```sh
-goray -db-info /path/to/go/project
+goray export <html|md|dot> [path] [-o <file>] [--db <path>] [--open]
+
 ```
 
-## Tools
+* `-o, --out <file>` — write to a file instead of `stdout`.
+* `--db <path>` — SQLite cache path used to enrich `html`/`md` exports with cached summaries.
+* `--open` — open the generated report in the default browser (`html` only). Without `-o`, writes to `$TMPDIR/goray-<repo-slug>-report.html` and prints the path to `stderr`.
+
+```sh
+goray export html --open
+goray export html -o report.html /path/to/repo
+goray export md -o ARCHITECTURE.md
+goray export dot | dot -T svg > deps.svg
+
+```
+
+The HTML export is a single offline file with all CSS, JS, and indexed metadata embedded (no external assets, no source dumps). It includes overview metrics, a layered dependency graph with cycle/back-edge detection, a sortable complexity/fan-in hotspots table, an interface implementation matrix, a hierarchy explorer, and a symbol inspector with upstream blast radius.
+
+### `db`
+
+```sh
+goray db path [path] [--db <path>]
+goray db info [path] [--db <path>]
+
+```
+
+`db path` prints only the resolved path to `stdout` without indexing or creating the file:
+
+```sh
+sqlite3 "$(goray db path)"
+
+```
+
+## Storage and caching
+
+By default, the SQLite database lives outside the repository so nothing needs to be gitignored:
+
+```text
+<os.UserCacheDir()>/goray/<repo-slug>-<sha256(canonicalRoot)[:12]>.db
+
+```
+
+Symlinks are resolved before hashing. `<repo-slug>` is derived from the module directory name (lowercase `a-z0-9._-`, max 32 chars). `--db` and `GORAY_DB` override this path.
+
+* **Canonical IDs:** line-independent identifiers (`mod:`, `pkg:`, `file:`, `sym:`) so cached entries survive line shifts, file moves, and branch switches.
+* **Semantic hashing:** normalized AST combined with resolved `go/types` signatures and compiler directives, using a cycle-safe `sig_hash` / `self_hash` / `dep_hash` / `content_hash` chain.
+* **Staleness states:** `synced`, `soft_stale` (dependencies changed), `hard_stale` (symbol changed), `missing`, and `not_eligible`.
+* **Eligibility:** generated files and `*_test.go` symbols remain indexed for navigation and impact analysis, but are excluded from summary eligibility and production risk hotspots.
+* **Module grouping:** uses `modules/<name>` when present; otherwise `cmd/<name>`, `internal/<name>`, `pkg/<name>`, or the first path segment (`root` for top-level packages).
+* **Maintenance:** batched LRU access tracking with periodic garbage collection and optimistic hash checks on write.
+
+## MCP tools
+
+### Architecture and dependencies
 
 | Tool | Purpose |
-|---|---|
-| `project_info` | Index status, module path, DB path, counts, load errors |
-| `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files (Markdown/JSON/DOT/Mermaid) |
-| `get_module_overview` | One module's packages, deps, large files, exported API (Markdown/JSON) |
-| `get_dependency_graph` | Package BFS graph, fan-in/fan-out ranking (JSON/Mermaid/DOT) |
-| `lookup_symbol` | Exact/fuzzy symbol lookup with summary enrichment |
-| `get_api_surface` | Exported symbols with summary enrichment |
-| `get_references` | Type-checked references with caller and `file:line` |
-| `get_call_graph` | BFS callers/callees |
-| `find_implementations` | `go/types.Implements` interface/type matrix |
-| `get_impact_analysis` | Blast radius and test packages to run |
-| `get_dead_code` | Unreferenced functions/methods |
-| `get_function_body` | Source, LOC, and cyclomatic complexity |
-| `list_stale_summaries` | Eligible symbols needing summaries, ordered bottom-up |
-| `get_summary_context` | Single/batched schema, hashes, staleness, source, and dependency context (max 25) |
-| `upsert_summaries` | Validate and store summaries with optimistic hash checks |
-| `get_summary_coverage` | Coverage counts by kind and module |
-| `run_tests` | `go test -race -count=1` |
-| `run_lint` | `golangci-lint run`, falling back to `go vet` |
-| `reindex` | Rebuild the index and sync working state explicitly |
+| --- | --- |
+| `project_info` | Index state, module path, DB path, symbol counts, load errors |
+| `get_codebase_map` | Module scorecard, cross-module graph, coupling, large files (`md`/`json`/`dot`/`mermaid`) |
+| `get_module_overview` | Single module packages, dependencies, large files, exported API (`md`/`json`) |
+| `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
 
-## Make targets
+### Symbols, calls, and impact
 
-| Target | Meaning |
-|---|---|
-| `make build` | Build `bin/goray` with version metadata |
-| `make install` | Install to `GOBIN`/`GOPATH/bin` |
-| `make install-skill` | Install the OpenCode skill under `~/.config/opencode/skills` |
-| `make test` | Run tests |
-| `make test-race` | Run tests with `-race -count=1` |
-| `make vet` | Run `go vet` |
-| `make lint` | Run `golangci-lint` |
-| `make fmt` | Format Go sources |
-| `make verify` | Format check, vet, race tests, and lint |
-| `make db-info` | Inspect the populated cache (`ROOT=.` by default) |
-| `make clean` | Remove `bin/` |
+| Tool | Purpose |
+| --- | --- |
+| `lookup_symbol` | Exact or fuzzy symbol lookup with cached summary metadata |
+| `get_api_surface` | Exported symbols with cached summary metadata |
+| `get_references` | Type-checked references with enclosing caller and `file:line` |
+| `get_call_graph` | BFS callers and callees |
+| `find_implementations` | `go/types.Implements` interface-to-type matrix |
+| `get_impact_analysis` | Transitive blast radius and affected test packages |
+| `get_dead_code` | Unreferenced functions and methods |
+| `get_function_body` | Source body, LOC, and cyclomatic complexity |
+
+### Summary cache
+
+| Tool | Purpose |
+| --- | --- |
+| `list_stale_summaries` | Eligible symbols missing or stale, ordered bottom-up |
+| `get_summary_context` | Schema, hashes, staleness, source, and dependency context (batched up to 25) |
+| `upsert_summaries` | Validate and store structured JSON summaries with hash conflict checks |
+| `get_summary_coverage` | Coverage breakdown by kind and module |
+
+### Verification and control
+
+| Tool | Purpose |
+| --- | --- |
+| `run_tests` | Run `go test -race -count=1` |
+| `run_lint` | Run `golangci-lint run`, falling back to `go vet` |
+| `reindex` | Force a full index rebuild and working-state sync |
 
 ## Layout
 
-```
-cmd/goray                     CLI wiring and versioning
-internal/index                semantic index, hashing, summary metadata, store
-internal/cache                SQLite schema, working state, summaries, GC
-internal/watch                fsnotify-based project watcher
-internal/mcp                  JSON-RPC 2.0 stdio transport and tool protocol
-internal/tools                tool registry and handlers
-internal/report               HTML report view-model assembler
-internal/render               renderer registry + embedded HTML/CSS/JS report
-.opencode/skills/goray        provider-agnostic usage skill for OpenCode
+```text
+cmd/goray                CLI entrypoint, subcommand routing, versioning
+internal/index           go/packages + go/types indexer, hashing, eligibility
+internal/cache           SQLite schema, working state, summary store, GC
+internal/watch           fsnotify watcher with debounced rebuilds
+internal/mcp             JSON-RPC 2.0 stdio transport
+internal/tools           MCP tool registry and handlers
+internal/report          HTML report view-model builder
+internal/render          Markdown/DOT/HTML renderers and embedded web assets
+.opencode/skills/goray   OpenCode skill definition
+
 ```
 
 ## Development
 
 ```sh
-make verify
+make verify   # gofmt check, go vet, go test -race -count=1, golangci-lint
+
 ```
 
-CI runs the same checks on pushes and pull requests.
+## License
+
+MIT

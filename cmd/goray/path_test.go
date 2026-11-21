@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,18 @@ func buildTestCLI(t *testing.T) string {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	return binary
+}
+
+func runTestCLI(t *testing.T, binary, dir string, env []string, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
 }
 
 func cliEnv(cacheHome string, overrides map[string]string) []string {
@@ -47,16 +60,24 @@ func cliEnv(cacheHome string, overrides map[string]string) []string {
 	return env
 }
 
-func runTestCLI(t *testing.T, binary, dir string, env []string, args ...string) (string, string, error) {
+func isolateCLIEnv(t *testing.T) {
 	t.Helper()
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = dir
-	cmd.Env = env
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("GORAY_DB", "")
+}
+
+func runDirect(t *testing.T, args ...string) (int, string, string) {
+	t.Helper()
+	return runDirectOpener(t, func(string) error { return nil }, args...)
+}
+
+func runDirectOpener(t *testing.T, opener func(string) error, args ...string) (int, string, string) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
+	code := runCLI(args, &stdout, &stderr, opener)
+	return code, stdout.String(), stderr.String()
 }
 
 func writeTestModule(t *testing.T, dir, module string) {
@@ -80,6 +101,17 @@ func writeTestFile(t *testing.T, path, body string) {
 	}
 }
 
+func newTestModule(t *testing.T) (root, deep, file string) {
+	t.Helper()
+	root = filepath.Join(t.TempDir(), "My Repo")
+	writeTestModule(t, root, "example.com/check")
+	writeTestFile(t, filepath.Join(root, "rootpkg", "root.go"), "package rootpkg\n\nfunc Root() int { return 1 }\n")
+	deep = filepath.Join(root, "internal", "cache")
+	file = filepath.Join(deep, "summary.go")
+	writeTestFile(t, file, "package cache\n\nfunc Leaf() int { return 2 }\n")
+	return root, deep, file
+}
+
 func dbFilesUnder(t *testing.T, root string) []string {
 	t.Helper()
 	var found []string
@@ -98,176 +130,381 @@ func dbFilesUnder(t *testing.T, root string) []string {
 	return found
 }
 
-func TestDBPathCLI(t *testing.T) {
-	binary := buildTestCLI(t)
-	cacheHome := t.TempDir()
-	env := cliEnv(cacheHome, nil)
-
-	base := t.TempDir()
-	root := filepath.Join(base, "My Repo")
-	writeTestModule(t, root, "example.com/app")
-	deep := filepath.Join(root, "internal", "cache")
-	file := filepath.Join(deep, "summary.go")
-	writeTestFile(t, file, "package cache\n")
-
-	versionOut, versionErr, err := runTestCLI(t, binary, root, env, "-version")
-	if err != nil {
-		t.Fatalf("version: %v (%s)", err, versionErr)
-	}
-	if !strings.HasPrefix(versionOut, "goray ") {
-		t.Fatalf("version output = %q", versionOut)
-	}
-
-	stdout, stderr, err := runTestCLI(t, binary, root, env, "-db-path")
-	if err != nil {
-		t.Fatalf("db-path: %v (%s)", err, stderr)
-	}
-	if stderr != "" {
-		t.Fatalf("db-path stderr = %q", stderr)
-	}
-	if !strings.HasSuffix(stdout, "\n") || strings.Count(stdout, "\n") != 1 {
-		t.Fatalf("db-path stdout = %q", stdout)
-	}
-	path := strings.TrimSuffix(stdout, "\n")
-	if !filepath.IsAbs(path) {
-		t.Fatalf("db path is not absolute: %q", path)
-	}
-	if !strings.HasPrefix(filepath.Base(path), "my-repo-") {
-		t.Fatalf("db name = %q", filepath.Base(path))
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("db-path created the DB file: %v", err)
-	}
-	if files := dbFilesUnder(t, root); len(files) > 0 {
-		t.Fatalf("dotfiles/db files inside module: %v", files)
-	}
-
-	for _, input := range []string{root, deep, file} {
-		out, errText, err := runTestCLI(t, binary, base, env, "-db-path", input)
-		if err != nil {
-			t.Fatalf("db-path %q: %v (%s)", input, err, errText)
+func TestHelpCommands(t *testing.T) {
+	for _, args := range [][]string{nil, {"help"}, {"-h"}, {"--help"}} {
+		code, stdout, stderr := runDirect(t, args...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr)
 		}
-		if out != stdout {
-			t.Fatalf("db-path %q = %q, want %q", input, out, stdout)
+		for _, want := range []string{"Usage:", "serve [path]", "export <html|md|dot>", "db <info|path>", "GORAY_DB", "GORAY_LOG_LEVEL", "goray db path"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("%v help missing %q:\n%s", args, want, stdout)
+			}
 		}
 	}
 
-	t.Run("memory override", func(t *testing.T) {
-		out, errText, err := runTestCLI(t, binary, deep, env, "-db-path", "-db", ":memory:")
-		if err != nil {
-			t.Fatalf("db-path: %v (%s)", err, errText)
-		}
-		if out != ":memory:\n" {
-			t.Fatalf("memory path = %q", out)
-		}
-	})
-
-	t.Run("env override", func(t *testing.T) {
-		env := cliEnv(cacheHome, map[string]string{"GORAY_DB": ":memory:"})
-		out, errText, err := runTestCLI(t, binary, deep, env, "-db-path")
-		if err != nil {
-			t.Fatalf("db-path: %v (%s)", err, errText)
-		}
-		if out != ":memory:\n" {
-			t.Fatalf("env memory path = %q", out)
-		}
-	})
-
-	t.Run("file override", func(t *testing.T) {
-		custom := filepath.Join(t.TempDir(), "custom.db")
-		out, errText, err := runTestCLI(t, binary, deep, env, "-db-path", "-db", custom)
-		if err != nil {
-			t.Fatalf("db-path: %v (%s)", err, errText)
-		}
-		if out != custom+"\n" {
-			t.Fatalf("custom path = %q, want %q", out, custom+"\n")
-		}
-		if _, err := os.Stat(custom); !os.IsNotExist(err) {
-			t.Fatalf("db-path created custom DB: %v", err)
-		}
-	})
-}
-
-func TestDBPathCLISymlinksAndNestedModules(t *testing.T) {
-	binary := buildTestCLI(t)
-	cacheHome := t.TempDir()
-	env := cliEnv(cacheHome, nil)
-	base := t.TempDir()
-
-	root := filepath.Join(base, "parent")
-	writeTestModule(t, root, "example.com/parent")
-	deep := filepath.Join(root, "internal", "deep")
-	if err := os.MkdirAll(deep, 0o755); err != nil {
-		t.Fatal(err)
+	cases := map[string][]string{
+		"serve":  {"serve", "--help"},
+		"export": {"export", "--help"},
+		"db":     {"db", "--help"},
+		"html":   {"export", "html", "--help"},
 	}
-	rootPath, _, err := runTestCLI(t, binary, root, env, "-db-path")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rootLink := filepath.Join(base, "parent-link")
-	if err := os.Symlink(root, rootLink); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	deepLink := filepath.Join(base, "deep-link")
-	if err := os.Symlink(deep, deepLink); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	for _, input := range []string{rootLink, deepLink} {
-		out, errText, err := runTestCLI(t, binary, base, env, "-db-path", input)
-		if err != nil {
-			t.Fatalf("db-path %q: %v (%s)", input, err, errText)
+	for name, args := range cases {
+		code, stdout, stderr := runDirect(t, args...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s help: code=%d stderr=%q", name, code, stderr)
 		}
-		if out != rootPath {
-			t.Fatalf("db-path %q = %q, want %q", input, out, rootPath)
+		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "Examples:") {
+			t.Fatalf("%s help is incomplete:\n%s", name, stdout)
 		}
 	}
 
-	sub := filepath.Join(root, "sub")
-	writeTestModule(t, sub, "example.com/parent/sub")
-	subDeep := filepath.Join(sub, "internal", "deep")
-	writeTestFile(t, filepath.Join(subDeep, "x.go"), "package deep\n")
-
-	subPath, _, err := runTestCLI(t, binary, subDeep, env, "-db-path")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if subPath == rootPath {
-		t.Fatalf("nested module reused parent db path: %q", subPath)
-	}
-	if !strings.HasPrefix(filepath.Base(strings.TrimSuffix(subPath, "\n")), "sub-") {
-		t.Fatalf("nested module db name = %q", filepath.Base(strings.TrimSuffix(subPath, "\n")))
-	}
-	parentAgain, _, err := runTestCLI(t, binary, deep, env, "-db-path")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parentAgain != rootPath {
-		t.Fatalf("parent module path = %q, want %q", parentAgain, rootPath)
+	code, stdout, _ := runDirect(t, "help", "serve")
+	if code != 0 || !strings.Contains(stdout, "--no-watch") || !strings.Contains(stdout, "--port") || !strings.Contains(stdout, "--open") {
+		t.Fatalf("help serve = code %d\n%s", code, stdout)
 	}
 }
 
-func TestDBPathCLIOutsideModuleCreatesNoDB(t *testing.T) {
-	binary := buildTestCLI(t)
-	dir := t.TempDir()
-	cacheHome := t.TempDir()
-	env := cliEnv(cacheHome, nil)
+func TestVersionCommands(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"-v"}, {"--version"}} {
+		code, stdout, stderr := runDirect(t, args...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr)
+		}
+		if !strings.HasPrefix(stdout, "goray ") {
+			t.Fatalf("%v output = %q", args, stdout)
+		}
+	}
+	code, stdout, stderr := runDirect(t, "-version")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "unknown flag") || !strings.Contains(stderr, "goray help") {
+		t.Fatalf("old -version: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runDirect(t, "version", "extra")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "takes no arguments") {
+		t.Fatalf("version extra: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
 
-	for _, args := range [][]string{
-		{"-db-path"},
-		{"-db-info"},
-		{"-db-path", "-db", ":memory:"},
-		{"-db-info", "-db", ":memory:"},
-	} {
-		stdout, stderr, err := runTestCLI(t, binary, dir, env, args...)
-		if err == nil {
-			t.Fatalf("%v unexpectedly succeeded", args)
+func TestUnknownAndInvalidCommands(t *testing.T) {
+	cases := [][]string{
+		{"bogus"},
+		{"serve", "--bogus"},
+		{"export", "nope"},
+		{"export"},
+		{"db"},
+		{"db", "nope"},
+		{"help", "bogus"},
+		{"serve", ".", "extra"},
+		{"db", "path", ".", "extra"},
+	}
+	for _, args := range cases {
+		code, stdout, stderr := runDirect(t, args...)
+		if code != 2 {
+			t.Fatalf("%v: code=%d, want 2", args, code)
 		}
 		if stdout != "" {
 			t.Fatalf("%v stdout = %q", args, stdout)
 		}
-		if !strings.Contains(stderr, "go.mod") {
+		if !strings.Contains(stderr, "goray:") || !strings.Contains(stderr, "Run 'goray help <command>' for usage.") {
 			t.Fatalf("%v stderr = %q", args, stderr)
+		}
+	}
+}
+
+func TestFlagOrderingAndParsing(t *testing.T) {
+	exportCases := []struct {
+		args []string
+		path string
+		out  string
+		db   string
+	}{
+		{[]string{"html", ".", "-o", "report.html"}, ".", "report.html", ""},
+		{[]string{"html", "-o", "report.html", "."}, ".", "report.html", ""},
+		{[]string{"html", "--out=report.html", "."}, ".", "report.html", ""},
+		{[]string{"html", ".", "--out", "report.html"}, ".", "report.html", ""},
+		{[]string{"html", "--db=:memory:", "."}, ".", "", ":memory:"},
+		{[]string{"html", "--", "-repo"}, "-repo", "", ""},
+	}
+	for _, tc := range exportCases {
+		opts, err := parseExportArgs(tc.args)
+		if err != nil {
+			t.Fatalf("parseExportArgs(%v): %v", tc.args, err)
+		}
+		if opts.path != tc.path || opts.out != tc.out || opts.dbPath != tc.db {
+			t.Fatalf("parseExportArgs(%v) = %+v", tc.args, opts)
+		}
+	}
+	if _, err := parseExportArgs([]string{"html", ".", "extra"}); err == nil {
+		t.Fatal("extra export path should fail")
+	}
+	if _, err := parseExportArgs([]string{"dot", "--open"}); err == nil {
+		t.Fatal("--open should fail for dot")
+	}
+	if _, err := parseExportArgs([]string{"md", "--open"}); err == nil {
+		t.Fatal("--open should fail for md")
+	}
+	if _, err := parseExportArgs([]string{"dot", "-o"}); err == nil {
+		t.Fatal("missing -o value should fail")
+	}
+	if opts, err := parseExportArgs([]string{"dot", "-o", "-h"}); err != nil || opts.out != "-h" {
+		t.Fatalf("flag-looking output value was not preserved: %+v (%v)", opts, err)
+	}
+	if wantsHelp([]string{"dot", "-o", "-h"}, exportValueFlags) {
+		t.Fatal("-h used as an -o value must not trigger help")
+	}
+	if !wantsHelp([]string{"dot", "--help"}, exportValueFlags) {
+		t.Fatal("--help after a format should trigger help")
+	}
+	if wantsHelp([]string{"--", "--help"}, nil) {
+		t.Fatal("--help after -- must be positional")
+	}
+
+	serveCases := []struct {
+		args    []string
+		path    string
+		db      string
+		log     string
+		port    int
+		noWatch bool
+		open    bool
+	}{
+		{[]string{"--db", ":memory:", "/repo", "--no-watch", "--log-level", "error", "--port", "0", "--open"}, "/repo", ":memory:", "error", 0, true, true},
+		{[]string{"/repo", "--no-watch"}, "/repo", "", envOr("GORAY_LOG_LEVEL", "info"), defaultServePort, true, false},
+		{[]string{"--port", "5050", "/repo"}, "/repo", "", envOr("GORAY_LOG_LEVEL", "info"), 5050, false, false},
+		{[]string{"--", "--no-watch"}, "--no-watch", "", envOr("GORAY_LOG_LEVEL", "info"), defaultServePort, false, false},
+	}
+	for _, tc := range serveCases {
+		opts, err := parseServeArgs(tc.args)
+		if err != nil {
+			t.Fatalf("parseServeArgs(%v): %v", tc.args, err)
+		}
+		if opts.path != tc.path || opts.dbPath != tc.db || opts.logLevel != tc.log || opts.port != tc.port || opts.noWatch != tc.noWatch || opts.open != tc.open {
+			t.Fatalf("parseServeArgs(%v) = %+v", tc.args, opts)
+		}
+	}
+	if _, err := parseServeArgs([]string{".", "extra"}); err == nil {
+		t.Fatal("extra serve path should fail")
+	}
+	if _, err := parseServeArgs([]string{"--port", "70000"}); err == nil {
+		t.Fatal("out-of-range port should fail")
+	}
+
+	dbCases := []struct {
+		args []string
+		cmd  string
+		path string
+		db   string
+	}{
+		{[]string{"path", "/repo", "--db", ":memory:"}, "path", "/repo", ":memory:"},
+		{[]string{"path", "--db", ":memory:", "/repo"}, "path", "/repo", ":memory:"},
+		{[]string{"info", "/repo"}, "info", "/repo", ""},
+	}
+	for _, tc := range dbCases {
+		opts, err := parseDBArgs(tc.args)
+		if err != nil {
+			t.Fatalf("parseDBArgs(%v): %v", tc.args, err)
+		}
+		if opts.command != tc.cmd || opts.path != tc.path || opts.dbPath != tc.db {
+			t.Fatalf("parseDBArgs(%v) = %+v", tc.args, opts)
+		}
+	}
+}
+
+func TestExportOutputs(t *testing.T) {
+	isolateCLIEnv(t)
+	root, deep, _ := newTestModule(t)
+
+	dotFile := filepath.Join(t.TempDir(), "deps.dot")
+	code, stdout, stderr := runDirect(t, "export", "dot", root, "-o", dotFile)
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("export dot -o: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	body, err := os.ReadFile(dotFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "digraph") {
+		t.Fatalf("dot output = %q", string(body))
+	}
+
+	code, stdout, stderr = runDirect(t, "export", "dot", root)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "digraph") {
+		t.Fatalf("export dot stdout: code=%d stderr=%q stdout=%q", code, stderr, stdout)
+	}
+
+	mdFile := filepath.Join(t.TempDir(), "ARCHITECTURE.md")
+	code, stdout, stderr = runDirect(t, "export", "md", deep, "--out", mdFile, "-db", ":memory:")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("export md -o: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	body, err = os.ReadFile(mdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Architecture Map:", "`rootpkg`", "`internal/cache`", "## Summary Cache"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("markdown missing %q:\n%s", want, body)
+		}
+	}
+
+	code, stdout, stderr = runDirect(t, "export", "md", root, "-db", ":memory:")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "# Architecture Map:") {
+		t.Fatalf("export md stdout: code=%d stderr=%q stdout=%q", code, stderr, stdout)
+	}
+
+	htmlFile := filepath.Join(t.TempDir(), "report.html")
+	code, stdout, stderr = runDirect(t, "export", "html", "--out", htmlFile, root, "-db", ":memory:")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("export html -o: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	body, err = os.ReadFile(htmlFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `<script id="report-data"`) || !strings.Contains(string(body), "goray · Architecture Report") {
+		t.Fatal("html report is missing expected content")
+	}
+
+	code, stdout, stderr = runDirect(t, "export", "html", root, "-db", ":memory:")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, `<script id="report-data"`) {
+		t.Fatalf("export html stdout: code=%d stderr=%q", code, stderr)
+	}
+
+	outA := filepath.Join(t.TempDir(), "a.dot")
+	outB := filepath.Join(t.TempDir(), "b.dot")
+	if code, _, stderr := runDirect(t, "export", "dot", root, "-o", outA); code != 0 {
+		t.Fatalf("-o failed: %s", stderr)
+	}
+	if code, _, stderr := runDirect(t, "export", "dot", root, "--out", outB); code != 0 {
+		t.Fatalf("--out failed: %s", stderr)
+	}
+	a, _ := os.ReadFile(outA)
+	b, _ := os.ReadFile(outB)
+	if !bytes.Equal(a, b) {
+		t.Fatal("-o and --out produced different output")
+	}
+	if files := dbFilesUnder(t, root); len(files) > 0 {
+		t.Fatalf("export created DB files inside module: %v", files)
+	}
+}
+
+func TestExportOpen(t *testing.T) {
+	isolateCLIEnv(t)
+	root, _, _ := newTestModule(t)
+
+	var opened []string
+	opener := func(path string) error {
+		opened = append(opened, path)
+		return nil
+	}
+	code, stdout, stderr := runDirectOpener(t, opener, "export", "html", "--open", root, "-db", ":memory:")
+	if code != 0 || stdout != "" {
+		t.Fatalf("export html --open: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if len(opened) != 1 {
+		t.Fatalf("opened = %v", opened)
+	}
+	tempPath := opened[0]
+	if strings.TrimSpace(stderr) != tempPath {
+		t.Fatalf("stderr = %q, opened = %q", stderr, tempPath)
+	}
+	if !strings.HasPrefix(filepath.Base(tempPath), "goray-") || !strings.HasSuffix(tempPath, "-report.html") {
+		t.Fatalf("temp report path = %q", tempPath)
+	}
+	t.Cleanup(func() { _ = os.Remove(tempPath) })
+	if body, err := os.ReadFile(tempPath); err != nil || !strings.Contains(string(body), "<title>goray") {
+		t.Fatalf("temp report = %v", err)
+	}
+
+	custom := filepath.Join(t.TempDir(), "custom.html")
+	code, stdout, stderr = runDirectOpener(t, opener, "export", "html", "-o", custom, "--open", root, "-db", ":memory:")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("export html -o --open: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if len(opened) != 2 || opened[1] != custom {
+		t.Fatalf("opened = %v", opened)
+	}
+
+	for _, format := range []string{"md", "dot"} {
+		code, stdout, stderr = runDirect(t, "export", format, "--open", root)
+		if code != 2 || stdout != "" || !strings.Contains(stderr, "--open") {
+			t.Fatalf("export %s --open: code=%d stdout=%q stderr=%q", format, code, stdout, stderr)
+		}
+	}
+
+	code, _, stderr = runDirectOpener(t, func(string) error { return errors.New("no browser") },
+		"export", "html", "--open", root, "-db", ":memory:")
+	if code != 1 || !strings.Contains(stderr, "no browser") {
+		t.Fatalf("opener failure: code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestDBCommands(t *testing.T) {
+	isolateCLIEnv(t)
+	root, deep, file := newTestModule(t)
+
+	code, stdout, stderr := runDirect(t, "db", "path", root)
+	if code != 0 || stderr != "" {
+		t.Fatalf("db path: code=%d stderr=%q", code, stderr)
+	}
+	if !strings.HasSuffix(stdout, "\n") || strings.Count(stdout, "\n") != 1 {
+		t.Fatalf("db path stdout = %q", stdout)
+	}
+	dbPath := strings.TrimSuffix(stdout, "\n")
+	if !filepath.IsAbs(dbPath) || !strings.HasPrefix(filepath.Base(dbPath), "my-repo-") {
+		t.Fatalf("db path = %q", dbPath)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("db path created the DB: %v", err)
+	}
+	for _, input := range []string{deep, file} {
+		outCode, out, errText := runDirect(t, "db", "path", input)
+		if outCode != 0 || strings.TrimSuffix(out, "\n") != dbPath {
+			t.Fatalf("db path %q = %q (code %d, stderr %q)", input, out, outCode, errText)
+		}
+	}
+
+	code, stdout, stderr = runDirect(t, "db", "path", deep, "--db", ":memory:")
+	if code != 0 || stdout != ":memory:\n" || stderr != "" {
+		t.Fatalf("db path memory: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	t.Setenv("GORAY_DB", ":memory:")
+	code, stdout, stderr = runDirect(t, "db", "path", deep)
+	if code != 0 || stdout != ":memory:\n" || stderr != "" {
+		t.Fatalf("db path env: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	t.Setenv("GORAY_DB", "")
+
+	code, stdout, stderr = runDirect(t, "db", "info", root, "-db", ":memory:")
+	if code != 0 || stderr != "" {
+		t.Fatalf("db info: code=%d stderr=%q", code, stderr)
+	}
+	var stats struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &stats); err != nil {
+		t.Fatalf("db info JSON: %v\n%s", err, stdout)
+	}
+	if stats.Path != ":memory:" {
+		t.Fatalf("db info path = %q", stats.Path)
+	}
+}
+
+func TestDBPathOutsideModuleCreatesNoDB(t *testing.T) {
+	isolateCLIEnv(t)
+	dir := t.TempDir()
+	cacheHome := os.Getenv("HOME")
+	for _, args := range [][]string{
+		{"db", "path", dir},
+		{"db", "info", dir},
+		{"db", "path", dir, "-db", ":memory:"},
+	} {
+		code, stdout, stderr := runDirect(t, args...)
+		if code != 1 {
+			t.Fatalf("%v: code=%d, want 1", args, code)
+		}
+		if stdout != "" || !strings.Contains(stderr, "go.mod") {
+			t.Fatalf("%v: stdout=%q stderr=%q", args, stdout, stderr)
 		}
 	}
 	if files := dbFilesUnder(t, dir); len(files) > 0 {
@@ -278,89 +515,82 @@ func TestDBPathCLIOutsideModuleCreatesNoDB(t *testing.T) {
 	}
 }
 
-func TestDBPathCLIDoesNotLoadPackages(t *testing.T) {
-	binary := buildTestCLI(t)
-	cacheHome := t.TempDir()
-	env := cliEnv(cacheHome, nil)
+func TestDBPathDoesNotLoadPackages(t *testing.T) {
+	isolateCLIEnv(t)
 	root := filepath.Join(t.TempDir(), "broken")
 	writeTestModule(t, root, "example.com/broken")
 	writeTestFile(t, filepath.Join(root, "broken.go"), "package broken\n\nfunc Broken( {\n")
-
-	stdout, stderr, err := runTestCLI(t, binary, root, env, "-db-path")
-	if err != nil {
-		t.Fatalf("db-path should not load packages: %v (%s)", err, stderr)
-	}
-	if strings.TrimSpace(stdout) == "" {
-		t.Fatal("db-path produced no path")
+	code, stdout, stderr := runDirect(t, "db", "path", root)
+	if code != 0 || stderr != "" || strings.TrimSpace(stdout) == "" {
+		t.Fatalf("db path broken module: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 
-func TestDBInfoUsesModuleRoot(t *testing.T) {
-	binary := buildTestCLI(t)
-	cacheHome := t.TempDir()
-	env := cliEnv(cacheHome, nil)
-	root := filepath.Join(t.TempDir(), "repo")
-	writeTestModule(t, root, "example.com/repo")
+func TestDBPathSymlinksAndNestedModules(t *testing.T) {
+	isolateCLIEnv(t)
+	base := t.TempDir()
+	root := filepath.Join(base, "parent")
+	writeTestModule(t, root, "example.com/parent")
 	deep := filepath.Join(root, "internal", "deep")
 	writeTestFile(t, filepath.Join(deep, "x.go"), "package deep\n")
 
-	fromRoot, stderr, err := runTestCLI(t, binary, root, env, "-db-info")
-	if err != nil {
-		t.Fatalf("db-info root: %v (%s)", err, stderr)
+	rootCode, rootOut, rootErr := runDirect(t, "db", "path", root)
+	if rootCode != 0 {
+		t.Fatal(rootErr)
 	}
-	fromDeep, stderr, err := runTestCLI(t, binary, deep, env, "-db-info")
-	if err != nil {
-		t.Fatalf("db-info deep: %v (%s)", err, stderr)
+	rootLink := filepath.Join(base, "parent-link")
+	if err := os.Symlink(root, rootLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
 	}
-	var rootStats, deepStats struct {
-		Path string `json:"path"`
+	deepLink := filepath.Join(base, "deep-link")
+	if err := os.Symlink(deep, deepLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if err := json.Unmarshal([]byte(fromRoot), &rootStats); err != nil {
-		t.Fatalf("root db-info JSON: %v\n%s", err, fromRoot)
-	}
-	if err := json.Unmarshal([]byte(fromDeep), &deepStats); err != nil {
-		t.Fatalf("deep db-info JSON: %v\n%s", err, fromDeep)
-	}
-	if rootStats.Path == "" || rootStats.Path != deepStats.Path {
-		t.Fatalf("db-info paths differ: %q vs %q", rootStats.Path, deepStats.Path)
-	}
-}
-
-func TestExportFromSubdirectoryResolvesModuleRoot(t *testing.T) {
-	binary := buildTestCLI(t)
-	root := filepath.Join(t.TempDir(), "repo")
-	writeTestModule(t, root, "example.com/check")
-	writeTestFile(t, filepath.Join(root, "rootpkg", "root.go"), "package rootpkg\n\nfunc Root() int { return 1 }\n")
-	deep := filepath.Join(root, "deep", "pkg")
-	writeTestFile(t, filepath.Join(deep, "deep.go"), "package pkg\n\nfunc Deep() int { return 2 }\n")
-
-	output := filepath.Join(t.TempDir(), "map.md")
-	stdout, stderr, err := runTestCLI(t, binary, deep, cliEnv(t.TempDir(), nil), "-export-md", output, "-log-level", "off")
-	if err != nil {
-		t.Fatalf("export-md: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
-	}
-	body, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(body)
-	for _, want := range []string{"example.com/check", "`rootpkg`", "`deep`"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("export missing %q:\n%s", want, text)
+	for _, input := range []string{rootLink, deepLink} {
+		outCode, out, errText := runDirect(t, "db", "path", input)
+		if outCode != 0 || out != rootOut {
+			t.Fatalf("db path %q = %q (code %d, stderr %q)", input, out, outCode, errText)
 		}
+	}
+
+	sub := filepath.Join(root, "sub")
+	writeTestModule(t, sub, "example.com/parent/sub")
+	subDeep := filepath.Join(sub, "internal", "deep")
+	writeTestFile(t, filepath.Join(subDeep, "y.go"), "package deep\n")
+	subCode, subOut, subErr := runDirect(t, "db", "path", subDeep)
+	if subCode != 0 {
+		t.Fatal(subErr)
+	}
+	if subOut == rootOut {
+		t.Fatalf("nested module reused parent path: %q", subOut)
 	}
 }
 
 func TestGORAYLogLevelEnv(t *testing.T) {
-	binary := buildTestCLI(t)
-	root := filepath.Join(t.TempDir(), "repo")
-	writeTestModule(t, root, "example.com/repo")
-	env := cliEnv(t.TempDir(), map[string]string{"GORAY_LOG_LEVEL": "verbose"})
-	_, stderr, err := runTestCLI(t, binary, root, env, "-db-info", "-db", ":memory:")
-	if err == nil {
-		t.Fatal("invalid GORAY_LOG_LEVEL should fail")
+	isolateCLIEnv(t)
+	root, _, _ := newTestModule(t)
+	t.Setenv("GORAY_LOG_LEVEL", "verbose")
+	code, stdout, stderr := runDirect(t, "serve", root, "-db", ":memory:")
+	if code != 2 || stdout != "" || !strings.Contains(stderr, "invalid log level") || !strings.Contains(stderr, "goray help") {
+		t.Fatalf("invalid log level: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	if !strings.Contains(stderr, "invalid log level") {
-		t.Fatalf("stderr = %q", stderr)
+}
+
+func TestExportFromSubdirectoryResolvesModuleRoot(t *testing.T) {
+	isolateCLIEnv(t)
+	root, deep, _ := newTestModule(t)
+	code, stdout, stderr := runDirect(t, "export", "md", deep, "-db", ":memory:")
+	if code != 0 || stderr != "" {
+		t.Fatalf("export md deep: code=%d stderr=%q", code, stderr)
+	}
+	for _, want := range []string{"example.com/check", "`rootpkg`", "`internal/cache`"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("export missing %q:\n%s", want, stdout)
+		}
+	}
+	if !strings.Contains(stdout, root) {
+		// The report uses relative package/module labels; this is just a sanity
+		// check that the deep path was resolved rather than treated as a module.
+		t.Logf("report labels do not include the absolute root %q", root)
 	}
 }

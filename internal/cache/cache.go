@@ -108,12 +108,12 @@ func DefaultPath(projectRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := repoSlug(root) + "-" + hex.EncodeToString(sum[:])[:12] + ".db"
+	name := RepoSlug(root) + "-" + hex.EncodeToString(sum[:])[:12] + ".db"
 	return filepath.Join(base, "goray", name), nil
 }
 
-// repoSlug turns a module directory name into a filesystem-friendly label.
-func repoSlug(root string) string {
+// RepoSlug turns a module directory name into a filesystem-friendly label.
+func RepoSlug(root string) string {
 	base := strings.ToLower(filepath.Base(root))
 	var b strings.Builder
 	dashed := false

@@ -15,24 +15,16 @@ func TestExportHTMLCLI(t *testing.T) {
 	}
 	repoRoot := filepath.Clean(filepath.Join(cwd, "..", ".."))
 	project := filepath.Join(repoRoot, "internal", "index", "testdata", "standard")
-	tmp := t.TempDir()
-	binary := filepath.Join(tmp, "goray")
-	build := exec.Command("go", "build", "-o", binary, ".")
-	build.Dir = cwd
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	binary := buildTestCLI(t)
+	env := cliEnv(t.TempDir(), map[string]string{"GORAY_DB": ":memory:"})
 
-	output := filepath.Join(tmp, "report.html")
-	cmd := exec.Command(binary,
-		"-export-html", output,
-		"-db", ":memory:",
-		"-log-level", "off",
-		project,
-	)
-	cmd.Dir = cwd
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("export-html: %v\n%s", err, out)
+	output := filepath.Join(t.TempDir(), "report.html")
+	stdout, stderr, err := runTestCLI(t, binary, cwd, env, "export", "html", project, "-o", output)
+	if err != nil {
+		t.Fatalf("export html: %v\nstdout=%s\nstderr=%s", err, stdout, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("export html stdout = %q", stdout)
 	}
 	body, err := os.ReadFile(output)
 	if err != nil {
@@ -50,5 +42,34 @@ func TestExportHTMLCLI(t *testing.T) {
 	}
 	if strings.Contains(html, "</script><img") {
 		t.Fatal("report contains an unescaped script breakout")
+	}
+}
+
+func TestCLIProcessExitCodes(t *testing.T) {
+	binary := buildTestCLI(t)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := cliEnv(t.TempDir(), nil)
+
+	stdout, stderr, err := runTestCLI(t, binary, cwd, env, "version")
+	if err != nil || !strings.HasPrefix(stdout, "goray ") || stderr != "" {
+		t.Fatalf("version: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	stdout, stderr, err = runTestCLI(t, binary, cwd, env, "--help")
+	if err != nil || !strings.Contains(stdout, "Usage:") || stderr != "" {
+		t.Fatalf("--help: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	stdout, stderr, err = runTestCLI(t, binary, cwd, env, "bogus")
+	if err == nil {
+		t.Fatal("unknown command should fail")
+	}
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 2 {
+		t.Fatalf("unknown command error = %v", err)
+	}
+	if stdout != "" || !strings.Contains(stderr, `unknown command "bogus"`) {
+		t.Fatalf("unknown command stdout=%q stderr=%q", stdout, stderr)
 	}
 }

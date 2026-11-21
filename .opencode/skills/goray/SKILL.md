@@ -16,7 +16,7 @@ tools are named `goray_<tool>` directly or live under
 
    ```sh
    make install
-   opencode mcp add goray -- goray .
+   opencode mcp add goray --global -- goray serve
    opencode mcp list
    ```
 
@@ -140,12 +140,12 @@ Generated files and `_test.go` symbols are never summary-eligible.
 - Inspect the cache outside MCP with:
 
   ```sh
-  goray -db-info /path/to/project
-  goray -db-path /path/to/project
+  goray db info /path/to/project
+  goray db path /path/to/project
   ```
 
 - Generate the interactive offline report with:
 
   ```sh
-  goray -export-html report.html /path/to/project
+  goray export html -o report.html /path/to/project
   ```
