@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"github.com/yanulabs/go-mcp-server/internal/index"
 	"github.com/yanulabs/go-mcp-server/internal/mcp"
 	"github.com/yanulabs/go-mcp-server/internal/render"
+	"github.com/yanulabs/go-mcp-server/internal/report"
 	"github.com/yanulabs/go-mcp-server/internal/tools"
 	"github.com/yanulabs/go-mcp-server/internal/watch"
 )
@@ -41,6 +43,7 @@ func main() {
 func run() error {
 	exportDOT := flag.String("export-dot", "", "export the module graph as Graphviz DOT and exit")
 	exportMD := flag.String("export-md", "", "export the architecture map as Markdown and exit")
+	exportHTML := flag.String("export-html", "", "export a self-contained interactive HTML report and exit")
 	dbFlag := flag.String("db", "", "SQLite cache path (default: user cache dir; env GO_MCP_DB)")
 	dbInfo := flag.Bool("db-info", false, "print populated cache statistics and exit")
 	noWatch := flag.Bool("no-watch", false, "disable automatic file watching and reindexing")
@@ -87,8 +90,15 @@ func run() error {
 		return nil
 	}
 
-	if *exportDOT != "" || *exportMD != "" {
-		return export(root, *exportDOT, *exportMD, logger, formats)
+	if *exportDOT != "" || *exportMD != "" || *exportHTML != "" {
+		dbPath := ""
+		if *exportHTML != "" {
+			dbPath, err = cache.ResolvePath(root, *dbFlag)
+			if err != nil {
+				return err
+			}
+		}
+		return export(root, *exportDOT, *exportMD, *exportHTML, dbPath, logger, formats)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -134,7 +144,7 @@ func run() error {
 	return err
 }
 
-func export(root, dotPath, mdPath string, logger *slog.Logger, formats *render.Registry) error {
+func export(root, dotPath, mdPath, htmlPath, dbPath string, logger *slog.Logger, formats *render.Registry) error {
 	idx, err := index.Build(root)
 	if err != nil {
 		return err
@@ -159,7 +169,72 @@ func export(root, dotPath, mdPath string, logger *slog.Logger, formats *render.R
 		}
 		logger.Info("wrote Markdown", "path", mdPath, "modules", len(idx.Modules))
 	}
+	if htmlPath != "" {
+		html, reportData, err := buildHTML(idx, dbPath)
+		if err != nil {
+			return err
+		}
+		if err := writeAtomic(htmlPath, []byte(html)); err != nil {
+			return err
+		}
+		cachedSummaries := 0
+		for _, symbol := range reportData.Symbols {
+			if symbol.Summary != nil {
+				cachedSummaries++
+			}
+		}
+		logger.Info("wrote HTML", "path", htmlPath, "bytes", len(html), "symbols", len(reportData.Symbols), "summaries", cachedSummaries)
+	}
 	return nil
+}
+
+func buildHTML(idx *index.Index, dbPath string) (string, render.HTMLReport, error) {
+	summaries, err := cache.Open(dbPath)
+	if err != nil {
+		return "", render.HTMLReport{}, fmt.Errorf("open summary cache: %w", err)
+	}
+	reportData, err := report.Build(context.Background(), idx, summaries)
+	if err != nil {
+		_ = summaries.Close()
+		return "", render.HTMLReport{}, err
+	}
+	html, err := render.RenderHTML(reportData)
+	closeErr := summaries.Close()
+	if err != nil {
+		return "", render.HTMLReport{}, err
+	}
+	if closeErr != nil {
+		return "", render.HTMLReport{}, closeErr
+	}
+	return html, reportData, nil
+}
+
+func writeAtomic(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".go-mcp-report-*.html")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if err = tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func parseLevel(value string) (slog.Level, error) {

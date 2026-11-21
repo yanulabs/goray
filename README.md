@@ -67,6 +67,7 @@ auto-invoke it.
 | `-version` | Print the build version and exit |
 | `-export-dot <file>` | Write the module graph as Graphviz DOT and exit |
 | `-export-md <file>` | Write the architecture map as Markdown and exit |
+| `-export-html <file>` | Write the self-contained interactive HTML report and exit |
 | `-db <path>` | SQLite path; `:memory:` for ephemeral runs (or `GO_MCP_DB`) |
 | `-db-info` | Print cache path, table counts, staleness counts, and recent summaries, then exit |
 | `-no-watch` | Disable automatic file watching/reindexing |
@@ -94,6 +95,19 @@ first path segment form the module group. Root packages are grouped as `root`.
 - Structured JSON validation for `func`/`method` and architecture kinds.
 - Batched summary context retrieval with per-call character budgets.
 - LRU access tracking with batched flushes and periodic garbage collection.
+
+Generate a single-file offline HTML report (static analysis plus cached summaries):
+
+```sh
+go-mcp-server -export-html report.html /path/to/go/project
+# or
+make report ROOT=/path/to/go/project REPORT=report.html
+```
+
+The report includes an executive scorecard, deterministic layered dependency graph,
+sortable hotspots/debt table, interface implementation matrix, hierarchy explorer,
+and a detail inspector. It embeds all CSS/JS and data; no network or frontend build
+is required, and it remains useful with an empty summary cache.
 
 Inspect the populated cache:
 
@@ -139,6 +153,7 @@ go-mcp-server -db-info /path/to/go/project
 | `make fmt` | Format Go sources |
 | `make verify` | Format check, vet, race tests, and lint |
 | `make db-info` | Inspect the populated cache (`ROOT=.` by default) |
+| `make report` | Generate `bin/report.html` from `ROOT=.` |
 | `make clean` | Remove `bin/` |
 
 ## Layout
@@ -150,7 +165,8 @@ internal/cache                SQLite schema, working state, summaries, GC
 internal/watch                fsnotify-based project watcher
 internal/mcp                  JSON-RPC 2.0 stdio transport and tool protocol
 internal/tools                tool registry and handlers
-internal/render               renderer registry: Markdown, JSON, Mermaid, DOT
+internal/report               HTML report view-model assembler
+internal/render               renderer registry + embedded HTML/CSS/JS report
 .opencode/skills/go-mcp-server  provider-agnostic usage skill for OpenCode
 ```
 

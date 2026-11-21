@@ -16,6 +16,7 @@ type Symbol struct {
 	ModuleArea string `json:"module_area"`
 	RecvType   string `json:"recv_type,omitempty"`
 	RecvPtr    bool   `json:"-"`
+	Methods    int    `json:"-"`
 	Exported   bool   `json:"exported"`
 	Signature  string `json:"signature"`
 	File       string `json:"file"`

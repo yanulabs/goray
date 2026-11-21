@@ -100,6 +100,9 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 		EndLine:    end.Line,
 		LOC:        end.Line - pos.Line + 1,
 	}
+	if iface, ok := tn.Type().Underlying().(*types.Interface); ok {
+		sym.Methods = iface.NumMethods()
+	}
 	b.addSymbol(sym, pi)
 
 	if iface, ok := tn.Type().Underlying().(*types.Interface); ok && iface.NumMethods() > 0 {

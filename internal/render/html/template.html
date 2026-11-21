@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go Codebase Report</title>
+<style>{{.CSS}}</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Go Codebase Report</div>
+  <div id="repo-meta" class="muted"></div>
+  <div class="spacer"></div>
+  <button type="button" class="ghost" id="theme-toggle">Theme</button>
+</header>
+<nav class="tabs" id="tabs">
+  <button type="button" class="tab active" data-tab="overview">Overview</button>
+  <button type="button" class="tab" data-tab="graph">Dependencies</button>
+  <button type="button" class="tab" data-tab="hotspots">Hotspots</button>
+  <button type="button" class="tab" data-tab="interfaces">Interfaces</button>
+  <button type="button" class="tab" data-tab="tree">Hierarchy</button>
+  <input id="global-search" type="search" placeholder="Search symbols, files, packages…  (/)">
+</nav>
+<div id="search-results" class="search-results" hidden></div>
+
+<main>
+  <section class="view active" data-view="overview">
+    <div id="overview-content"></div>
+  </section>
+
+  <section class="view" data-view="graph">
+    <div class="controls" id="graph-controls"></div>
+    <div class="graph-wrap">
+      <svg id="graph-svg" role="img" aria-label="Dependency graph"></svg>
+    </div>
+  </section>
+
+  <section class="view" data-view="hotspots">
+    <div id="hotspot-controls" class="controls"></div>
+    <div class="panel"><div id="hotspot-table"></div></div>
+  </section>
+
+  <section class="view" data-view="interfaces">
+    <div class="controls"><input id="interface-search" type="search" placeholder="Filter interfaces, types, or packages…"></div>
+    <div id="interfaces-content"></div>
+  </section>
+
+  <section class="view" data-view="tree">
+    <div class="controls"><input id="tree-search" type="search" placeholder="Filter hierarchy…"></div>
+    <div id="tree-content" class="tree"></div>
+  </section>
+</main>
+
+<aside id="inspector" class="inspector" hidden>
+  <div class="inspector-head">
+    <h2 id="inspector-title">Details</h2>
+    <button type="button" class="close" id="inspector-close">Close</button>
+  </div>
+  <div id="inspector-body"></div>
+</aside>
+
+<noscript>This report requires JavaScript. All data is embedded locally.</noscript>
+<script id="report-data" type="application/json">{{.ReportJSON}}</script>
+<script>{{.JS}}</script>
+</body>
+</html>

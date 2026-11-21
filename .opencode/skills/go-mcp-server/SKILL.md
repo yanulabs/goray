@@ -142,3 +142,9 @@ Generated files and `_test.go` symbols are never summary-eligible.
   ```sh
   go-mcp-server -db-info /path/to/project
   ```
+
+- Generate the interactive offline report with:
+
+  ```sh
+  go-mcp-server -export-html report.html /path/to/project
+  ```

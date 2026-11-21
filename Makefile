@@ -4,6 +4,7 @@ GO ?= go
 BINARY := go-mcp-server
 BIN_DIR := bin
 ROOT ?= .
+REPORT ?= $(BIN_DIR)/report.html
 SKILL_DIR ?= $(HOME)/.config/opencode/skills
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS ?= -s -w -X main.version=$(VERSION)
@@ -13,7 +14,7 @@ export CGO_ENABLED
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build install install-skill test test-race vet lint fmt fmt-check verify tidy db-info clean help
+.PHONY: all build install install-skill test test-race vet lint fmt fmt-check verify tidy db-info report clean help
 
 all: build
 
@@ -56,6 +57,9 @@ tidy:
 db-info: build
 	$(BIN_DIR)/$(BINARY) -db-info "$(ROOT)"
 
+report: build
+	$(BIN_DIR)/$(BINARY) -export-html "$(REPORT)" "$(ROOT)"
+
 clean:
 	rm -rf $(BIN_DIR)
 
@@ -73,4 +77,5 @@ help:
 	@echo "  verify     fmt-check + vet + test-race + lint"
 	@echo "  tidy       run go mod tidy"
 	@echo "  db-info    print populated cache statistics (ROOT=$(ROOT))"
+	@echo "  report     export self-contained HTML to $(REPORT)"
 	@echo "  clean      remove build output"
