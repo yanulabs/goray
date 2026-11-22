@@ -46,11 +46,11 @@ func (c *Cache) Stats(ctx context.Context) (Stats, error) {
 		SummaryStates:          map[string]int{},
 		RecentSummaries:        make([]SummaryRow, 0),
 	}
-	if version, err := c.schemaVersion(ctx); err != nil {
+	version, err := c.schemaVersion(ctx)
+	if err != nil {
 		return Stats{}, err
-	} else {
-		stats.SchemaVersion = version
 	}
+	stats.SchemaVersion = version
 	for _, table := range []struct {
 		name string
 		ref  string

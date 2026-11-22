@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-func TestCommandHelperProcess(t *testing.T) {
+func TestCommandHelperProcess(_ *testing.T) {
 	if os.Getenv("GORAY_TEST_COMMAND_HELPER") != "1" {
 		return
 	}

@@ -4,6 +4,7 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,7 +18,7 @@ import (
 // Build combines an immutable index snapshot with cached summaries.
 func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HTMLReport, error) {
 	if idx == nil || idx.Summary == nil {
-		return render.HTMLReport{}, fmt.Errorf("index has no summary metadata")
+		return render.HTMLReport{}, errors.New("index has no summary metadata")
 	}
 	if store != nil {
 		if err := store.Sync(ctx, idx); err != nil {

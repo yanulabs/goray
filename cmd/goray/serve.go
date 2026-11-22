@@ -161,7 +161,7 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 
 	reportServer := startReportServer(ctx, listener, store, summaries, logger)
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		_ = reportServer.Shutdown(shutdownCtx)
 	}()

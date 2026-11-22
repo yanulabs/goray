@@ -2,7 +2,7 @@ package cache
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/yanulabs/goray/internal/index"
 )
@@ -10,7 +10,7 @@ import (
 // Sync atomically replaces ephemeral working-tree tables from an index build.
 func (c *Cache) Sync(ctx context.Context, idx *index.Index) error {
 	if idx == nil || idx.Summary == nil {
-		return fmt.Errorf("index has no summary metadata")
+		return errors.New("index has no summary metadata")
 	}
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {

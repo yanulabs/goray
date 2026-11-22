@@ -5,6 +5,7 @@ import "encoding/json"
 // SyncState is the freshness of a symbol's cached summary.
 type SyncState string
 
+// SyncState values.
 const (
 	StateSynced      SyncState = "synced"
 	StateSoftStale   SyncState = "soft_stale"
@@ -89,12 +90,14 @@ type CoverageCounts struct {
 	CoveragePct float64 `json:"coverage_pct"`
 }
 
+// CoverageGroup is one module/kind slice of summary coverage.
 type CoverageGroup struct {
 	Module string `json:"module"`
 	Kind   string `json:"kind"`
 	CoverageCounts
 }
 
+// Coverage is the summary-cache coverage report.
 type Coverage struct {
 	PromptVersion string          `json:"prompt_version"`
 	Groups        []CoverageGroup `json:"groups"`

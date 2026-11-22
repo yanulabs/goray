@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -236,7 +237,7 @@ func funcName(idx *Index, id string) string {
 func (idx *Index) resolveDependencyTarget(arg string) (map[string]bool, string, error) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
-		return nil, "", fmt.Errorf("dependency target must not be empty")
+		return nil, "", errors.New("dependency target must not be empty")
 	}
 	if strings.HasPrefix(arg, "mod:") {
 		arg = strings.TrimPrefix(arg, "mod:")

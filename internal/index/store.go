@@ -12,6 +12,7 @@ import (
 // State is the explicit lifecycle state of the index snapshot.
 type State string
 
+// Store lifecycle states.
 const (
 	StateInitializing State = "initializing"
 	StateReady        State = "ready"
@@ -93,6 +94,7 @@ type Store struct {
 	pendingChanges []string
 }
 
+// NewStore creates a store using the default build options.
 func NewStore(root string, logger *slog.Logger) *Store {
 	return NewStoreWithOptions(root, logger, BuildOptions{})
 }
@@ -370,6 +372,7 @@ func (s *Store) setStateLocked(state State) {
 	s.stateCh = make(chan struct{})
 }
 
+// Status returns a consistent snapshot of the store lifecycle and metadata.
 func (s *Store) Status() Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

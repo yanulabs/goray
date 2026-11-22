@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -121,7 +122,7 @@ func renderExport(root string, opts exportOptions) (string, error) {
 	case "md":
 		base, ok := formats.RenderCodebaseMap("markdown", idx)
 		if !ok {
-			return "", fmt.Errorf("markdown renderer is not registered")
+			return "", errors.New("markdown renderer is not registered")
 		}
 		summaries, err := markdownSummaries(root, idx, opts.dbPath, tags)
 		if err != nil {
@@ -131,7 +132,7 @@ func renderExport(root string, opts exportOptions) (string, error) {
 	case "dot":
 		content, ok := formats.RenderCodebaseMap("dot", idx)
 		if !ok {
-			return "", fmt.Errorf("dot renderer is not registered")
+			return "", errors.New("dot renderer is not registered")
 		}
 		return content, nil
 	}

@@ -90,6 +90,7 @@ type ImplMatch struct {
 	IfaceLine int    `json:"iface_line"`
 }
 
+// FileMetric is one file's size and generated/untracked classification.
 type FileMetric struct {
 	Path      string `json:"path"`
 	LOC       int    `json:"loc"`

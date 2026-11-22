@@ -1,3 +1,4 @@
+// Package main implements the goray command-line interface.
 package main
 
 import (

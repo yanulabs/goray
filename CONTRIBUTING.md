@@ -10,7 +10,7 @@ Requirements:
 
 - Go 1.26.11 or newer. CI and release builds use Go 1.27.4.
 - `golangci-lint` v2 for `make lint` / `make verify`.
-- Node.js 20+ and npm only for frontend work under `web/`.
+- Node.js 22.12+ and npm only for frontend work under `web/` (see `.nvmrc`).
 - Python 3.10+ only for `make install-mcp` / `make uninstall-mcp`.
 
 Clone and build:

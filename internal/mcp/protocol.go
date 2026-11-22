@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 )
 
+// Request is one JSON-RPC request or notification.
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -13,6 +14,7 @@ type Request struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
+// Response is one JSON-RPC response.
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -20,11 +22,13 @@ type Response struct {
 	Error   *Error          `json:"error,omitempty"`
 }
 
+// Error is a JSON-RPC error object.
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
+// ToolSpec is the protocol-facing description of one tool.
 type ToolSpec struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
