@@ -62,7 +62,7 @@ func OpenSplit(workingPath, summaryPath string) (*Cache, error) {
 func open(workingPath, summaryPath string, split bool) (*Cache, error) {
 	for _, path := range []string{workingPath, summaryPath} {
 		if path != ":memory:" {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				return nil, err
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -122,7 +123,7 @@ func (c *Cache) StateOf(ctx context.Context, id string) (SyncState, error) {
 	var state string
 	err := c.db.QueryRowContext(ctx, "SELECT "+c.stateExpr()+" FROM working_symbols w WHERE w.id = ?",
 		PromptVersion, PromptVersion, PromptVersion, PromptVersion, id).Scan(&state)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("symbol not found: %s", id)
 	}
 	return SyncState(state), err
@@ -254,6 +255,8 @@ func incCounts(counts *CoverageCounts, eligible bool, state SyncState) {
 		counts.HardStale++
 	case StateMissing:
 		counts.Missing++
+	case StateNotEligible:
+		// Handled by the !eligible branch above.
 	}
 }
 
@@ -283,7 +286,7 @@ func kindRank(kind string) int {
 func (c *Cache) SummaryContext(ctx context.Context, id string, idx *index.Index) (SummaryContext, error) {
 	sym, err := c.workingSymbol(ctx, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return SummaryContext{}, fmt.Errorf("symbol not found: %s", id)
 		}
 		return SummaryContext{}, err
@@ -523,7 +526,7 @@ func truncateModuleRunes(text string, limit int) (string, bool) {
 func (c *Cache) Enrich(ctx context.Context, id string) (json.RawMessage, SyncState, bool, error) {
 	sym, err := c.workingSymbol(ctx, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, StateMissing, false, nil
 		}
 		return nil, StateMissing, false, err
@@ -633,7 +636,7 @@ func (c *Cache) loadDependencies(ctx context.Context, ids []string, idx *index.I
 	for _, id := range ids {
 		sym, err := c.workingSymbol(ctx, id)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
 			return nil, err
@@ -722,6 +725,8 @@ func (c *Cache) cachedForState(ctx context.Context, sym *WorkingSymbol, state Sy
                 SELECT last_content_hash FROM `+c.summaryTable("symbol_history")+` WHERE symbol_id = ? AND prompt_version = ?
             ) ORDER BY created_at DESC LIMIT 1`,
 			PromptVersion, sym.ID, PromptVersion)
+	case StateMissing, StateNotEligible:
+		return nil, "", nil
 	default:
 		return nil, "", nil
 	}
@@ -731,7 +736,7 @@ func (c *Cache) querySummary(ctx context.Context, where string, args ...any) (js
 	var hash, raw string
 	err := c.db.QueryRowContext(ctx,
 		"SELECT content_hash, summary_json FROM "+c.summaryTable("summary_cache")+" "+where, args...).Scan(&hash, &raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", nil
 	}
 	if err != nil {
@@ -756,7 +761,7 @@ func (c *Cache) UpsertSummaries(ctx context.Context, items []SummaryInput) ([]Up
 	for i, item := range items {
 		results[i] = UpsertResult{SymbolID: item.SymbolID, Status: "validation_error"}
 		sym, err := c.workingSymbol(ctx, item.SymbolID)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			results[i].Status = "not_found"
 			results[i].Error = "symbol not found in current working tree"
 			continue
@@ -1004,7 +1009,7 @@ type Cached struct {
 // Lookup returns the cached summary and sync state for a canonical symbol ID.
 func (c *Cache) Lookup(ctx context.Context, id string) (Cached, error) {
 	sym, err := c.workingSymbol(ctx, id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return Cached{State: StateMissing}, nil
 	}
 	if err != nil {

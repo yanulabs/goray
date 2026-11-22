@@ -197,7 +197,7 @@ func isGenerated(name string, src []byte) bool {
 		if generatedStandard.MatchString(line) {
 			return true
 		}
-		text := ""
+		var text string
 		switch {
 		case inBlock:
 			text = line

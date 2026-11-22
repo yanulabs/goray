@@ -83,7 +83,7 @@ func (w *Watcher) loop() {
 func (w *Watcher) addTree(root string) error {
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if !entry.IsDir() {
 			return nil

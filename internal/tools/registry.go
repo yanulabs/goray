@@ -71,24 +71,24 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 	return list
 }
 
-func indexingPayload(err error) (string, bool, bool) {
+func indexingPayload(err error) (string, bool) {
 	var building *index.IndexingError
 	if errors.As(err, &building) {
 		return render.JSON(map[string]any{
 			"index_state":     "indexing",
 			"elapsed_seconds": building.ElapsedSeconds(),
 			"message":         "index is still building; retry shortly",
-		}), false, true
+		}), true
 	}
-	return "", false, false
+	return "", false
 }
 
 func (t *toolset) indexed(run func(*index.Index, map[string]any) (string, bool)) func(context.Context, map[string]any) (string, bool) {
 	return func(ctx context.Context, args map[string]any) (string, bool) {
 		idx, err := t.src.Wait(ctx)
 		if err != nil {
-			if text, failed, ok := indexingPayload(err); ok {
-				return text, failed
+			if text, ok := indexingPayload(err); ok {
+				return text, false
 			}
 			return err.Error(), true
 		}
@@ -100,8 +100,8 @@ func (t *toolset) indexedCtx(run func(context.Context, *index.Index, map[string]
 	return func(ctx context.Context, args map[string]any) (string, bool) {
 		idx, err := t.src.Wait(ctx)
 		if err != nil {
-			if text, failed, ok := indexingPayload(err); ok {
-				return text, failed
+			if text, ok := indexingPayload(err); ok {
+				return text, false
 			}
 			return err.Error(), true
 		}

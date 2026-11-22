@@ -42,18 +42,18 @@ func TestListenLocalAndBanner(t *testing.T) {
 	}
 }
 
-func occupyPort(t *testing.T) (net.Listener, int) {
+func occupyPort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	return ln, ln.Addr().(*net.TCPAddr).Port
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 func TestListenConfiguredFallbackStrictAndErrors(t *testing.T) {
-	_, busy := occupyPort(t)
+	busy := occupyPort(t)
 
 	result, err := listenConfigured(listenConfig{port: busy, portRange: 200, host: "127.0.0.1"})
 	if err != nil {
@@ -115,7 +115,7 @@ func TestServePortEnvAndFlagPrecedence(t *testing.T) {
 
 func TestServePortFileAndMovedPortNotice(t *testing.T) {
 	root, _, _ := newTestModule(t)
-	_, busy := occupyPort(t)
+	busy := occupyPort(t)
 	portFile := filepath.Join(t.TempDir(), "goray.port")
 	var stdout, stderr bytes.Buffer
 	var opened string

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -130,6 +132,18 @@ func errorCode(t *testing.T, raw map[string]json.RawMessage) int {
 		t.Fatalf("error: %v", err)
 	}
 	return errObj.Code
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestServeReturnsWriteError(t *testing.T) {
+	input := `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"
+	err := NewServer(strings.NewReader(input), failingWriter{}, nil).Serve(context.Background())
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Serve error = %v, want io.ErrClosedPipe", err)
+	}
 }
 
 func TestNotificationIgnored(t *testing.T) {

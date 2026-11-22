@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,8 +69,8 @@ func TestCLIProcessExitCodes(t *testing.T) {
 	if err == nil {
 		t.Fatal("unknown command should fail")
 	}
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 2 {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
 		t.Fatalf("unknown command error = %v", err)
 	}
 	if stdout != "" || !strings.Contains(stderr, `unknown command "bogus"`) {

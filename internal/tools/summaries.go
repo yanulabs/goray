@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -262,35 +263,38 @@ func (t *toolset) notEligibleContext(ctx context.Context, sym *index.Symbol) cac
 }
 
 func summaryErrorPayload(query string, err error) string {
-	switch typed := err.(type) {
-	case *index.AmbiguousSymbolError:
+	var ambiguous *index.AmbiguousSymbolError
+	if errors.As(err, &ambiguous) {
 		return render.JSON(map[string]any{
 			"error":      "ambiguous_symbol",
 			"input":      query,
-			"candidates": typed.IDs,
+			"candidates": ambiguous.IDs,
 			"hint":       "retry with one of the canonical candidate IDs",
 		})
-	case *index.SymbolNotFoundError:
+	}
+	var notFound *index.SymbolNotFoundError
+	if errors.As(err, &notFound) {
 		payload := map[string]any{
 			"error":            "symbol_not_found",
 			"input":            query,
 			"expected_formats": index.SymbolIDFormats,
 			"hint":             "call lookup_symbol with the same input to discover valid IDs",
 		}
-		if len(typed.Suggestions) > 0 {
-			payload["nearest_matches"] = typed.Suggestions
+		if len(notFound.Suggestions) > 0 {
+			payload["nearest_matches"] = notFound.Suggestions
 		}
 		return render.JSON(payload)
-	case *index.PackageTargetError:
+	}
+	var packageTarget *index.PackageTargetError
+	if errors.As(err, &packageTarget) {
 		return render.JSON(map[string]any{
 			"error":   "package_target",
 			"input":   query,
-			"package": typed.Package,
+			"package": packageTarget.Package,
 			"hint":    "use a symbol ID or canonical mod:/pkg:/file: summary ID; get_api_surface returns exported symbol IDs for this package",
 		})
-	default:
-		return err.Error()
 	}
+	return err.Error()
 }
 
 func (t *toolset) upsertSummaries() mcp.Tool {

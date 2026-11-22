@@ -186,12 +186,12 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 // scripts can follow a moved port without scraping stderr.
 func writePortFile(path, url string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	body := fmt.Sprintf("GORAY_REPORT_URL=%s\nPID=%d\n", url, os.Getpid())
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
