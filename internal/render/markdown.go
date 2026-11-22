@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/yanulabs/goray/internal/index"
@@ -33,9 +34,9 @@ func (m markdown) RenderCodebaseMap(idx *index.Index) string {
 		if mod.AllUntracked {
 			label += " [untracked]"
 		}
-		loc := fmt.Sprintf("%d", mod.ProdLOC)
+		loc := strconv.Itoa(mod.ProdLOC)
 		if mod.TestOnly {
-			loc = fmt.Sprintf("%d test loc", mod.TestLOC)
+			loc = strconv.Itoa(mod.TestLOC) + " test loc"
 		}
 		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %s | %d | %d |\n",
 			label, mod.Packages, mod.Files, mod.GeneratedFiles, mod.UntrackedFiles,

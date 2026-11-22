@@ -145,7 +145,7 @@ func startReportServer(ctx context.Context, ln net.Listener, store *index.Store,
 	}()
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
@@ -219,7 +219,7 @@ func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logg
 			logger.Warn("report API encode failed", "err", err)
 		}
 	})
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, "ok\n")
 	})

@@ -391,9 +391,9 @@ func TestBuildRejectsTypeErrors(t *testing.T) {
 func TestEligibilityPolicyFunctionsAndTypes(t *testing.T) {
 	longBody := strings.Repeat("\t// filler\n", 60)
 	complexBody := "if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }\n\treturn 0"
-	callers := ""
+	var callers strings.Builder
 	for i := 0; i < 8; i++ {
-		callers += fmt.Sprintf("func Call%d() { _ = Popular() }\n", i)
+		fmt.Fprintf(&callers, "func Call%d() { _ = Popular() }\n", i)
 	}
 	idx, _ := buildTestModule(t, map[string]string{"a/a.go": fmt.Sprintf(`package a
 
@@ -418,7 +418,7 @@ func Complex() int {
 func Long() int {
 %s	return 1
 }
-`, callers, complexBody, longBody)})
+`, callers.String(), complexBody, longBody)})
 
 	cases := map[string]bool{
 		"ExportedInterface":   true,

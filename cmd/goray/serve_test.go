@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -141,7 +142,7 @@ func TestServePortFileAndMovedPortNotice(t *testing.T) {
 		t.Fatalf("opened URL = %q", opened)
 	}
 	port := listenerPortString(opened)
-	if port == fmt.Sprintf("%d", busy) {
+	if port == strconv.Itoa(busy) {
 		t.Fatalf("serve did not move off busy port %d", busy)
 	}
 	if !strings.Contains(portFileBody, "GORAY_REPORT_URL="+opened) || !strings.Contains(portFileBody, "PID=") {

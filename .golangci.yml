@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - exhaustive
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - perfsprint
+    - revive
+    - unparam
+    - usestdlibvars
+    - wastedassign
+  settings:
+    cyclop:
+      max-complexity: 45
+    gocognit:
+      min-complexity: 100
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+        - name: indent-error-flow
+        - name: unused-parameter
+    gosec:
+      excludes:
+        # SQL identifier fragments are internal constants; values are always bound.
+        - G202
+        # Subprocesses are fixed binaries (git, go, golangci-lint, browser openers).
+        - G204
+        # These reads are confined to a resolved project root or explicit CLI path.
+        - G304
+        - G703
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - gosec
+          - unparam
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

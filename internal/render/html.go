@@ -3,7 +3,7 @@ package render
 import (
 	_ "embed"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +40,7 @@ type HTMLReport struct {
 	ModuleCycles    [][]string        `json:"module_cycles"`
 }
 
+// HTMLMetrics is the report header rollup.
 type HTMLMetrics struct {
 	Modules  int `json:"modules"`
 	Packages int `json:"packages"`
@@ -51,6 +52,7 @@ type HTMLMetrics struct {
 	Dead     int `json:"dead"`
 }
 
+// HTMLCoverage is the summary-cache coverage rollup.
 type HTMLCoverage struct {
 	Eligible    int     `json:"eligible"`
 	Synced      int     `json:"synced"`
@@ -61,6 +63,7 @@ type HTMLCoverage struct {
 	Percent     float64 `json:"percent"`
 }
 
+// HTMLSummary is one cached symbol or parent summary.
 type HTMLSummary struct {
 	Intent        string   `json:"intent,omitempty"`
 	SideEffects   []string `json:"side_effects,omitempty"`
@@ -73,6 +76,7 @@ type HTMLSummary struct {
 	DepsChanged   bool     `json:"deps_changed,omitempty"`
 }
 
+// HTMLSymbol is one report symbol row.
 type HTMLSymbol struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
@@ -101,12 +105,14 @@ type HTMLSymbol struct {
 	Callees     []string     `json:"callees,omitempty"`
 }
 
+// HTMLCoupled is one package coupling row.
 type HTMLCoupled struct {
 	Pkg    string `json:"pkg"`
 	FanIn  int    `json:"fan_in"`
 	FanOut int    `json:"fan_out"`
 }
 
+// HTMLModuleCard is one module card in the report.
 type HTMLModuleCard struct {
 	ID             string       `json:"id"`
 	Name           string       `json:"name"`
@@ -125,6 +131,7 @@ type HTMLModuleCard struct {
 	Summary        *HTMLSummary `json:"summary,omitempty"`
 }
 
+// HTMLPackageCard is one package card in the report.
 type HTMLPackageCard struct {
 	ID             string       `json:"id"`
 	PkgPath        string       `json:"pkg_path"`
@@ -142,6 +149,7 @@ type HTMLPackageCard struct {
 	Summary        *HTMLSummary `json:"summary,omitempty"`
 }
 
+// HTMLInterface is one interface and its implementations.
 type HTMLInterface struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
@@ -151,6 +159,7 @@ type HTMLInterface struct {
 	Implementations []HTMLImpl `json:"implementations"`
 }
 
+// HTMLImpl is one interface implementation row.
 type HTMLImpl struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -158,16 +167,19 @@ type HTMLImpl struct {
 	ViaPtr  bool   `json:"via_ptr"`
 }
 
+// HTMLGraphs groups the report's module and package graphs.
 type HTMLGraphs struct {
 	Modules  HTMLGraph `json:"modules"`
 	Packages HTMLGraph `json:"packages"`
 }
 
+// HTMLGraph is one layered dependency graph.
 type HTMLGraph struct {
 	Nodes []HTMLGraphNode `json:"nodes"`
 	Edges []HTMLGraphEdge `json:"edges"`
 }
 
+// HTMLGraphNode is one graph node with layout coordinates.
 type HTMLGraphNode struct {
 	ID        string       `json:"id"`
 	Label     string       `json:"label"`
@@ -186,12 +198,14 @@ type HTMLGraphNode struct {
 	Summary   *HTMLSummary `json:"summary,omitempty"`
 }
 
+// HTMLGraphEdge is one weighted graph edge.
 type HTMLGraphEdge struct {
 	From   string `json:"from"`
 	To     string `json:"to"`
 	Weight int    `json:"weight"`
 }
 
+// HTMLTreeNode is one node in the report explorer tree.
 type HTMLTreeNode struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`
@@ -224,26 +238,26 @@ func renderHTML(report HTMLReport, live bool) (string, error) {
 
 	out := strings.Replace(reportHTML, reportLivePlaceholder, strconv.FormatBool(live), 1)
 	if strings.Contains(out, reportLivePlaceholder) {
-		return "", fmt.Errorf("report template is missing the live placeholder")
+		return "", errors.New("report template is missing the live placeholder")
 	}
 
 	marker := `id="goray-data"`
 	markerStart := strings.Index(out, marker)
 	if markerStart < 0 {
-		return "", fmt.Errorf("report template is missing the goray-data script tag")
+		return "", errors.New("report template is missing the goray-data script tag")
 	}
 	payloadStart := strings.Index(out[markerStart:], ">")
 	if payloadStart < 0 {
-		return "", fmt.Errorf("report template has a malformed goray-data script tag")
+		return "", errors.New("report template has a malformed goray-data script tag")
 	}
 	payloadStart += markerStart + 1
 	payloadEnd := strings.Index(out[payloadStart:], "</script>")
 	if payloadEnd < 0 {
-		return "", fmt.Errorf("report template has an unclosed goray-data script tag")
+		return "", errors.New("report template has an unclosed goray-data script tag")
 	}
 	payloadEnd += payloadStart
 	if strings.TrimSpace(out[payloadStart:payloadEnd]) != reportDataPlaceholder {
-		return "", fmt.Errorf("report template is missing the data placeholder")
+		return "", errors.New("report template is missing the data placeholder")
 	}
 
 	return out[:payloadStart] + string(payload) + out[payloadEnd:], nil

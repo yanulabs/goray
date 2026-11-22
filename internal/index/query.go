@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -202,7 +203,7 @@ func (e *SymbolNotFoundError) Error() string {
 func (idx *Index) SingleSymbol(query string) (*Symbol, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return nil, fmt.Errorf("'symbol_id' must not be empty")
+		return nil, errors.New("'symbol_id' must not be empty")
 	}
 	if sym, ok := idx.Symbols[query]; ok {
 		return sym, nil

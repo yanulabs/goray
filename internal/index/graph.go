@@ -4,6 +4,7 @@ import (
 	"sort"
 )
 
+// Edge is one directed graph edge.
 type Edge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -11,12 +12,14 @@ type Edge struct {
 	Via  string `json:"via_interface,omitempty"`
 }
 
+// Graph is a bounded call or dependency graph projection.
 type Graph struct {
 	Root  string `json:"root"`
 	Nodes int    `json:"nodes"`
 	Edges []Edge `json:"edges"`
 }
 
+// Fan is one package's fan-in/fan-out pair.
 type Fan struct {
 	Pkg    string `json:"pkg"`
 	FanOut int    `json:"fan_out"`

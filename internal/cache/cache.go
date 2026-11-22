@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	// PromptVersion identifies the summary contract used for cache keys.
 	PromptVersion = "v1"
 	touchInterval = 30 * time.Second
 	gcInterval    = time.Hour

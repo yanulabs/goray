@@ -18,6 +18,7 @@ import (
 	"github.com/yanulabs/goray/internal/index"
 )
 
+// Dependency is one summary-context dependency link.
 type Dependency struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`
@@ -28,6 +29,7 @@ type Dependency struct {
 	Source    string          `json:"source,omitempty"`
 }
 
+// SummaryContext is the source, schema, and dependency payload for a summary target.
 type SummaryContext struct {
 	Symbol              WorkingSymbol   `json:"symbol"`
 	SyncState           SyncState       `json:"sync_state"`
@@ -880,7 +882,7 @@ var sideEffectEnum = map[string]bool{
 
 func validateSummary(kind string, raw json.RawMessage) error {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return fmt.Errorf("summary is required")
+		return errors.New("summary is required")
 	}
 	if kind == "func" || kind == "method" {
 		var payload funcSummary
@@ -891,7 +893,7 @@ func validateSummary(kind string, raw json.RawMessage) error {
 			return err
 		}
 		if payload.SideEffects == nil || len(*payload.SideEffects) == 0 {
-			return fmt.Errorf("side_effects must be a non-empty array")
+			return errors.New("side_effects must be a non-empty array")
 		}
 		none := false
 		for i, effect := range *payload.SideEffects {
@@ -903,16 +905,16 @@ func validateSummary(kind string, raw json.RawMessage) error {
 			}
 		}
 		if none && len(*payload.SideEffects) != 1 {
-			return fmt.Errorf("side_effects: 'none' must be the sole element")
+			return errors.New("side_effects: 'none' must be the sole element")
 		}
 		if payload.Invariants == nil {
-			return fmt.Errorf("invariants must be an array (may be empty)")
+			return errors.New("invariants must be an array (may be empty)")
 		}
 		if err := validateStrings(*payload.Invariants, "invariants"); err != nil {
 			return err
 		}
 		if payload.Concurrency != nil && utf8.RuneCountInString(*payload.Concurrency) > 800 {
-			return fmt.Errorf("concurrency exceeds 800 characters")
+			return errors.New("concurrency exceeds 800 characters")
 		}
 		return nil
 	}
@@ -925,10 +927,10 @@ func validateSummary(kind string, raw json.RawMessage) error {
 		return err
 	}
 	if payload.KeyInvariants == nil {
-		return fmt.Errorf("key_invariants must be an array (may be empty)")
+		return errors.New("key_invariants must be an array (may be empty)")
 	}
 	if payload.Boundaries == nil {
-		return fmt.Errorf("boundaries must be an array (may be empty)")
+		return errors.New("boundaries must be an array (may be empty)")
 	}
 	if err := validateStrings(*payload.KeyInvariants, "key_invariants"); err != nil {
 		return err
@@ -943,17 +945,17 @@ func strictDecode(raw json.RawMessage, dst any) error {
 		return fmt.Errorf("invalid summary JSON: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("invalid summary JSON: trailing data")
+		return errors.New("invalid summary JSON: trailing data")
 	}
 	return nil
 }
 
 func validateIntent(intent *string) error {
 	if intent == nil || strings.TrimSpace(*intent) == "" {
-		return fmt.Errorf("intent is required and must not be empty")
+		return errors.New("intent is required and must not be empty")
 	}
 	if utf8.RuneCountInString(*intent) > 400 {
-		return fmt.Errorf("intent exceeds 400 characters")
+		return errors.New("intent exceeds 400 characters")
 	}
 	return nil
 }

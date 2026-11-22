@@ -11,6 +11,7 @@ import (
 
 const maxConcurrentReads = 8
 
+// Server is a JSON-RPC MCP server over a newline-delimited stdio stream.
 type Server struct {
 	in        io.Reader
 	out       io.Writer
@@ -24,6 +25,7 @@ type Server struct {
 	writeErrC chan error
 }
 
+// NewServer creates a server with the given transport and tool registry.
 func NewServer(in io.Reader, out io.Writer, tools []Tool) *Server {
 	s := &Server{
 		in:        in,

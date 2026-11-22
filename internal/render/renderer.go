@@ -77,6 +77,7 @@ func (r *Registry) Register(renderer Renderer) {
 	}
 }
 
+// RenderCodebaseMap renders the architecture map in the requested format.
 func (r *Registry) RenderCodebaseMap(format string, idx *index.Index) (string, bool) {
 	renderer, ok := r.codebase[format]
 	if !ok {
@@ -85,6 +86,7 @@ func (r *Registry) RenderCodebaseMap(format string, idx *index.Index) (string, b
 	return renderer.RenderCodebaseMap(idx), true
 }
 
+// RenderModule renders one module overview in the requested format.
 func (r *Registry) RenderModule(format string, idx *index.Index, summary *index.ModSummary) (string, bool) {
 	renderer, ok := r.modules[format]
 	if !ok {
@@ -93,6 +95,7 @@ func (r *Registry) RenderModule(format string, idx *index.Index, summary *index.
 	return renderer.RenderModule(idx, summary), true
 }
 
+// RenderGraph renders a dependency graph in the requested format.
 func (r *Registry) RenderGraph(format string, graph index.Graph) (string, bool) {
 	renderer, ok := r.graphs[format]
 	if !ok {

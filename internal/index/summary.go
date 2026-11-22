@@ -58,12 +58,14 @@ type SummarySymbol struct {
 	Directives []string
 }
 
+// SummaryEdge is one dependency edge in the summary graph.
 type SummaryEdge struct {
 	SrcID string
 	DstID string
 	Kind  string
 }
 
+// Get returns a summary symbol by canonical ID, or nil when absent.
 func (d *SummaryData) Get(id string) *SummarySymbol {
 	if d == nil {
 		return nil

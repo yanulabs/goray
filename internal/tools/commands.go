@@ -80,6 +80,7 @@ func runCommand(ctx context.Context, dir, bin string, args ...string) (string, b
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
+	//nolint:gosec // exec.CommandContext does not invoke a shell; arguments are passed directly.
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()

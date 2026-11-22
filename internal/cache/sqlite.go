@@ -89,7 +89,7 @@ func execConn(ctx context.Context, conn driver.Conn, query string, args []driver
 	defer func() { _ = stmt.Close() }()
 	execer, ok := stmt.(driver.StmtExecContext)
 	if !ok {
-		return fmt.Errorf("sqlite connection does not support context-aware execution")
+		return errors.New("sqlite connection does not support context-aware execution")
 	}
 	_, err = execer.ExecContext(ctx, args)
 	return err
