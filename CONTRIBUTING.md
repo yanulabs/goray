@@ -8,7 +8,7 @@ By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Requirements:
 
-- Go 1.26 or newer.
+- Go 1.26.11 or newer. CI and release builds use Go 1.27.4.
 - `golangci-lint` v2 for `make lint` / `make verify`.
 - Node.js 20+ and npm only for frontend work under `web/`.
 - Python 3.10+ only for `make install-mcp` / `make uninstall-mcp`.
