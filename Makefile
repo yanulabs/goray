@@ -32,10 +32,11 @@ endif
 LDFLAGS ?= -s -w -X main.version=$(VERSION)
 
 CGO_ENABLED ?= 0
+GORELEASER ?= goreleaser
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build install uninstall install-skill uninstall-skill install-mcp uninstall-mcp install-all uninstall-all test test-race vet lint fmt fmt-check verify tidy db-info clean help web-install web-dev web-typecheck web-build
+.PHONY: all build install uninstall install-skill uninstall-skill install-mcp uninstall-mcp install-all uninstall-all test test-race vet lint fmt fmt-check verify release-check release-snapshot tidy db-info clean help web-install web-dev web-typecheck web-build
 
 define RESOLVE_BIN
 	bin="$$($(GO) env GOBIN)"; \
@@ -698,6 +699,14 @@ fmt-check: ## Fail if Go sources are not formatted
 
 verify: fmt-check vet lint test-race ## Run fmt-check, vet, lint, and test-race
 
+release-check: ## Validate the GoReleaser configuration
+	@command -v "$(GORELEASER)" >/dev/null 2>&1 || { echo "error: $(GORELEASER) not found; install goreleaser v2" >&2; exit 1; }
+	$(GORELEASER) check
+
+release-snapshot: ## Build local release artifacts without publishing
+	@command -v "$(GORELEASER)" >/dev/null 2>&1 || { echo "error: $(GORELEASER) not found; install goreleaser v2" >&2; exit 1; }
+	$(GORELEASER) release --snapshot --clean
+
 tidy: ## Run go mod tidy
 	$(GO) mod tidy
 
@@ -716,8 +725,8 @@ web-build: ## Typecheck and build the single-file report into internal/render/di
 db-info: build ## Print populated cache statistics (ROOT=$(ROOT))
 	"$(BIN_DIR)/$(BINARY)" -db-info "$(ROOT)"
 
-clean: ## Remove build output
-	rm -rf "$(BIN_DIR)"
+clean: ## Remove build and release output
+	rm -rf "$(BIN_DIR)" dist
 
 help: ## Show available targets and variables
 	@awk 'BEGIN {FS = ":.*## "; printf "goray (version %s)\n\nTargets:\n", "$(VERSION)"} \

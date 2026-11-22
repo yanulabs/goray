@@ -35,8 +35,9 @@ go.work.sum
 # CocoIndex Code (ccc)
 /.cocoindex_code/
 
-# Local build output
+# Local build and release output
 /bin/
+/dist/
 
 # Web frontend dependencies
 web/node_modules/

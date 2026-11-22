@@ -1,6 +1,13 @@
 # goray
 
+[![CI](https://github.com/yanulabs/goray/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yanulabs/goray/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/yanulabs/goray?sort=semver)](https://github.com/yanulabs/goray/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/yanulabs/goray.svg)](https://pkg.go.dev/github.com/yanulabs/goray)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Static semantic indexer, MCP stdio server, and offline architecture reporter for Go modules.
+
+> **Status:** pre-1.0. The CLI and MCP schemas are usable, but minor releases may add or adjust behavior. Pin a release when integrating into production automation.
 
 `goray` loads a Go module with `go/packages` and `go/types` to compute dependency graphs, call graphs, interface implementations, dead code, complexity hotspots, and blast radius. It ships as a single pure-Go binary (no CGO) and exposes the index either as a self-contained HTML/Markdown/DOT export or over MCP for coding agents.
 
@@ -8,12 +15,27 @@ Static semantic indexer, MCP stdio server, and offline architecture reporter for
 
 ## Install
 
+### Go toolchain
+
 ```sh
+# Latest release
 go install github.com/yanulabs/goray/cmd/goray@latest
 
+# Pin a version
+go install github.com/yanulabs/goray/cmd/goray@v0.1.0
+
+goray version
 ```
 
-From a local checkout:
+`goray` is pure Go with `CGO_ENABLED=0`; installed builds report their module version through `goray version`.
+
+### Prebuilt binaries
+
+Download Linux, macOS, or Windows archives (amd64/arm64) from
+[GitHub Releases](https://github.com/yanulabs/goray/releases). Each release
+includes `checksums.txt` with SHA-256 digests.
+
+### From a local checkout
 
 ```sh
 make install          # installs to GOBIN (or GOPATH/bin) with git version
@@ -417,6 +439,23 @@ make web-build    # typecheck + build internal/render/dist/report.html
 
 `make build` and `make verify` stay Node-free. Only `make web-build` requires Node.js, and its output is committed. For frontend work, run `goray serve` in one terminal and `make web-dev` in another; edit `web/src` without rebuilding the Go binary. If `serve` picks a port other than `4321`, point the proxy at it with `GORAY_DEV_API=http://127.0.0.1:<port> make web-dev`.
 
+Release artifacts are built with [GoReleaser](https://goreleaser.com/) when a
+`v*` tag is pushed. Validate the release config with `make release-check`, or
+build local snapshot artifacts with `make release-snapshot`. See
+[CHANGELOG.md](CHANGELOG.md) for release history.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, tests, coding
+rules, and the release process. Participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/yanulabs/goray/security/advisories/new).
+See [SECURITY.md](SECURITY.md) for scope and supported versions.
+
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

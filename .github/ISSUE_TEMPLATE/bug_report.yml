@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a reproducible defect in goray.
+title: "bug: "
+labels:
+  - "type: bug"
+  - "triage: needed"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include secrets, credentials, or private source code.
+        Security issues must be reported privately via the Security tab, not as public issues.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear description of the defect and its impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact commands, minimal repository shape, and inputs needed to reproduce.
+      placeholder: |
+        goray index /path/to/module
+        goray serve /path/to/module
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the error text and whether the wrong result came from the CLI, report, or an MCP client.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: goray version
+      description: Output of `goray version`.
+      placeholder: goray v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15.6 arm64
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP client (if applicable)
+      placeholder: OpenCode 1.x, Claude Code, Codex, Cursor, Gemini CLI, Antigravity
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: Paste relevant output. Redact paths and secrets as needed.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I can reproduce this with the latest release or main branch.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
