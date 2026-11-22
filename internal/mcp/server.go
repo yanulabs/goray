@@ -52,7 +52,7 @@ func (s *Server) SetVersion(version string) {
 
 // Serve reads JSON-RPC messages until stdin closes, shutdown is received, or
 // ctx is done.
-func (s *Server) Serve(ctx context.Context) error {
+func (s *Server) Serve(ctx context.Context) (err error) {
 	lines := make(chan []byte)
 	errCh := make(chan error, 1)
 	go func() {
@@ -74,7 +74,12 @@ func (s *Server) Serve(ctx context.Context) error {
 	}()
 
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	defer func() {
+		wg.Wait()
+		if err == nil {
+			err = s.pendingWriteError()
+		}
+	}()
 
 	for {
 		select {
@@ -84,6 +89,9 @@ func (s *Server) Serve(ctx context.Context) error {
 			return err
 		case line, ok := <-lines:
 			if !ok {
+				if err := s.pendingWriteError(); err != nil {
+					return err
+				}
 				return <-errCh
 			}
 			var req Request
@@ -181,6 +189,15 @@ func (s *Server) reply(notification bool, id json.RawMessage, result any) {
 		return
 	}
 	s.send(Response{ID: id, Result: result})
+}
+
+func (s *Server) pendingWriteError() error {
+	select {
+	case err := <-s.writeErrC:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (s *Server) send(resp Response) {

@@ -155,6 +155,47 @@ func Caller() {
 	}
 }
 
+func TestMarkdownSummaries(t *testing.T) {
+	dir := t.TempDir()
+	writeReportModule(t, dir)
+	idx, err := index.Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := cache.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if err := c.Sync(context.Background(), idx); err != nil {
+		t.Fatal(err)
+	}
+	leafID := "sym:example.com/reporttest/a.Leaf"
+	upsertReportSummary(t, c, idx, leafID, "Leaf | persists\nrecords", []string{"db_write"})
+	section, err := MarkdownSummaries(context.Background(), idx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Summary Cache", "Coverage:", "| Symbol | Kind | State | Intent |", leafID, `Leaf \| persists records`} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("markdown summaries missing %q:\n%s", want, section)
+		}
+	}
+}
+
+func TestMarkdownCell(t *testing.T) {
+	got := markdownCell("a | b\n c")
+	if got != `a \| b c` {
+		t.Fatalf("markdownCell = %q", got)
+	}
+	long := strings.Repeat("x", 200)
+	got = markdownCell(long)
+	if len([]rune(got)) != 160 || !strings.HasSuffix(got, "...") {
+		t.Fatalf("markdownCell truncation = %q", got)
+	}
+}
+
 func complexRiskFunc(name string) string {
 	body := strings.Repeat("\tif true {\n", 11)
 	body += "\t\treturn 1\n"

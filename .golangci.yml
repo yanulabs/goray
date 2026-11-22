@@ -6,8 +6,10 @@ run:
 linters:
   default: standard
   enable:
+    - cyclop
     - errorlint
     - exhaustive
+    - gocognit
     - gocritic
     - gosec
     - misspell
@@ -19,9 +21,9 @@ linters:
     - wastedassign
   settings:
     cyclop:
-      max-complexity: 45
+      max-complexity: 30
     gocognit:
-      min-complexity: 100
+      min-complexity: 70
     revive:
       rules:
         - name: exported
@@ -43,6 +45,7 @@ linters:
     rules:
       - path: _test\.go
         linters:
+          - cyclop
           - errcheck
           - gocritic
           - gosec

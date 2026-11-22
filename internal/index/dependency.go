@@ -66,32 +66,35 @@ type DependencySummary struct {
 	UsageSites    int `json:"usage_sites"`
 }
 
-// ExplainDependency resolves from/to as either an exact package path or an
-// architectural module name, then enumerates every import and symbol usage
-// behind the resulting package-to-package edges.
-func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit int) (DependencyExplanation, error) {
-	fromPkgs, fromKind, err := idx.resolveDependencyTarget(from)
-	if err != nil {
-		return DependencyExplanation{}, err
-	}
-	toPkgs, toKind, err := idx.resolveDependencyTarget(to)
-	if err != nil {
-		return DependencyExplanation{}, err
-	}
+type dependencyGroupKey struct {
+	from string
+	to   string
+}
 
-	type groupKey struct{ from, to string }
-	groups := map[groupKey]*DependencyEdgeGroup{}
-	groupFor := func(from, to string) *DependencyEdgeGroup {
-		key := groupKey{from: from, to: to}
-		if group := groups[key]; group != nil {
-			return group
-		}
-		group := &DependencyEdgeGroup{FromPkg: from, ToPkg: to}
-		groups[key] = group
+type dependencyGroups struct {
+	groups     map[dependencyGroupKey]*DependencyEdgeGroup
+	files      map[string]struct{}
+	totalUsage int
+}
+
+func newDependencyGroups() *dependencyGroups {
+	return &dependencyGroups{
+		groups: map[dependencyGroupKey]*DependencyEdgeGroup{},
+		files:  map[string]struct{}{},
+	}
+}
+
+func (g *dependencyGroups) groupFor(from, to string) *DependencyEdgeGroup {
+	key := dependencyGroupKey{from: from, to: to}
+	if group := g.groups[key]; group != nil {
 		return group
 	}
+	group := &DependencyEdgeGroup{FromPkg: from, ToPkg: to}
+	g.groups[key] = group
+	return group
+}
 
-	files := map[string]struct{}{}
+func (g *dependencyGroups) addImports(idx *Index, fromPkgs, toPkgs map[string]bool, includeTests bool) {
 	for _, site := range idx.ImportSites {
 		if !fromPkgs[site.FromPkg] || !toPkgs[site.ToPkg] {
 			continue
@@ -99,18 +102,19 @@ func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit in
 		if site.Test && !includeTests {
 			continue
 		}
-		group := groupFor(site.FromPkg, site.ToPkg)
+		group := g.groupFor(site.FromPkg, site.ToPkg)
 		group.Files = append(group.Files, DependencyFile{
 			File: site.File, Line: site.Line, Alias: site.Alias,
 			Blank: site.Blank, Dot: site.Dot, Test: site.Test,
 		})
-		files[site.File] = struct{}{}
+		g.files[site.File] = struct{}{}
 	}
+}
 
+func (g *dependencyGroups) addUsages(idx *Index, fromPkgs, toPkgs map[string]bool, includeTests bool) {
 	// Attribute each usage to the referencing package so module-level queries
 	// aggregate the correct package pair.
 	usagesBySymbol := map[string][]DependencyUsage{}
-	totalUsages := 0
 	for targetID, refs := range idx.XRefs {
 		sym := idx.Symbols[targetID]
 		if sym == nil || !toPkgs[sym.PkgPath] {
@@ -125,10 +129,9 @@ func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit in
 				File: ref.File, Line: ref.Line, FromFuncID: ref.FromFuncID,
 				FromFunc: funcName(idx, ref.FromFuncID), Test: ref.Test,
 			})
-			totalUsages++
+			g.totalUsage++
 		}
 	}
-
 	for key, usages := range usagesBySymbol {
 		parts := strings.SplitN(key, "\x00", 2)
 		if len(parts) != 2 {
@@ -139,7 +142,7 @@ func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit in
 		if sym == nil {
 			continue
 		}
-		group := groupFor(fromPkg, sym.PkgPath)
+		group := g.groupFor(fromPkg, sym.PkgPath)
 		canonical := sym.CanonicalID()
 		if canonical == "" {
 			canonical = sym.ID
@@ -149,12 +152,11 @@ func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit in
 			PkgPath: sym.PkgPath, Usages: usages,
 		})
 	}
+}
 
-	explanation := DependencyExplanation{
-		From: from, To: to, FromKind: fromKind, ToKind: toKind,
-		IncludeTest: includeTests, Limit: limit,
-	}
-	for _, group := range groups {
+func (g *dependencyGroups) sortedEdges() []DependencyEdgeGroup {
+	edges := make([]DependencyEdgeGroup, 0, len(g.groups))
+	for _, group := range g.groups {
 		sort.Slice(group.Files, func(i, j int) bool {
 			if group.Files[i].File != group.Files[j].File {
 				return group.Files[i].File < group.Files[j].File
@@ -162,14 +164,81 @@ func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit in
 			return group.Files[i].Line < group.Files[j].Line
 		})
 		sort.Slice(group.Symbols, func(i, j int) bool { return group.Symbols[i].ID < group.Symbols[j].ID })
-		explanation.Edges = append(explanation.Edges, *group)
+		edges = append(edges, *group)
 	}
-	sort.Slice(explanation.Edges, func(i, j int) bool {
-		if explanation.Edges[i].FromPkg != explanation.Edges[j].FromPkg {
-			return explanation.Edges[i].FromPkg < explanation.Edges[j].FromPkg
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].FromPkg != edges[j].FromPkg {
+			return edges[i].FromPkg < edges[j].FromPkg
 		}
-		return explanation.Edges[i].ToPkg < explanation.Edges[j].ToPkg
+		return edges[i].ToPkg < edges[j].ToPkg
 	})
+	return edges
+}
+
+func reverseDependencyHint(idx *Index, from, to string, fromPkgs, toPkgs map[string]bool, includeTests bool) string {
+	reverseFiles := 0
+	for _, site := range idx.ImportSites {
+		if toPkgs[site.FromPkg] && fromPkgs[site.ToPkg] && (includeTests || !site.Test) {
+			reverseFiles++
+		}
+	}
+	if reverseFiles == 0 {
+		return ""
+	}
+	return fmt.Sprintf("no %s -> %s edge; the reverse edge %s -> %s exists (%d import sites)", from, to, to, from, reverseFiles)
+}
+
+func applyDependencyLimit(explanation *DependencyExplanation) {
+	if explanation.Limit <= 0 {
+		return
+	}
+	remaining := explanation.Limit
+	for i := range explanation.Edges {
+		group := &explanation.Edges[i]
+		kept := group.Symbols[:0]
+		for _, sym := range group.Symbols {
+			if remaining <= 0 {
+				explanation.Truncated = true
+				break
+			}
+			if len(sym.Usages) > remaining {
+				sym.Usages = sym.Usages[:remaining]
+				remaining = 0
+				explanation.Truncated = true
+				kept = append(kept, sym)
+				break
+			}
+			remaining -= len(sym.Usages)
+			kept = append(kept, sym)
+		}
+		if len(kept) < len(group.Symbols) {
+			explanation.Truncated = true
+		}
+		group.Symbols = kept
+	}
+}
+
+// ExplainDependency resolves both targets to package sets, then enumerates
+// every import and symbol usage behind the resulting package-to-package edges.
+func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit int) (DependencyExplanation, error) {
+	fromPkgs, fromKind, err := idx.resolveDependencyTarget(from)
+	if err != nil {
+		return DependencyExplanation{}, err
+	}
+	toPkgs, toKind, err := idx.resolveDependencyTarget(to)
+	if err != nil {
+		return DependencyExplanation{}, err
+	}
+
+	groups := newDependencyGroups()
+	groups.addImports(idx, fromPkgs, toPkgs, includeTests)
+	groups.addUsages(idx, fromPkgs, toPkgs, includeTests)
+
+	explanation := DependencyExplanation{
+		From: from, To: to, FromKind: fromKind, ToKind: toKind,
+		IncludeTest: includeTests, Limit: limit,
+	}
+	explanation.Edges = groups.sortedEdges()
 
 	symbolSet := map[string]struct{}{}
 	for _, group := range explanation.Edges {
@@ -178,48 +247,14 @@ func (idx *Index) ExplainDependency(from, to string, includeTests bool, limit in
 		}
 	}
 	explanation.Summary = DependencySummary{
-		Files:         len(files),
+		Files:         len(groups.files),
 		TargetSymbols: len(symbolSet),
-		UsageSites:    totalUsages,
+		UsageSites:    groups.totalUsage,
 	}
-
 	if len(explanation.Edges) == 0 {
-		reverseFiles := 0
-		for _, site := range idx.ImportSites {
-			if toPkgs[site.FromPkg] && fromPkgs[site.ToPkg] && (includeTests || !site.Test) {
-				reverseFiles++
-			}
-		}
-		if reverseFiles > 0 {
-			explanation.Hint = fmt.Sprintf("no %s -> %s edge; the reverse edge %s -> %s exists (%d import sites)", from, to, to, from, reverseFiles)
-		}
+		explanation.Hint = reverseDependencyHint(idx, from, to, fromPkgs, toPkgs, includeTests)
 	}
-	if limit > 0 {
-		remaining := limit
-		for i := range explanation.Edges {
-			group := &explanation.Edges[i]
-			kept := group.Symbols[:0]
-			for _, sym := range group.Symbols {
-				if remaining <= 0 {
-					explanation.Truncated = true
-					break
-				}
-				if len(sym.Usages) > remaining {
-					sym.Usages = sym.Usages[:remaining]
-					remaining = 0
-					explanation.Truncated = true
-					kept = append(kept, sym)
-					break
-				}
-				remaining -= len(sym.Usages)
-				kept = append(kept, sym)
-			}
-			if len(kept) < len(group.Symbols) {
-				explanation.Truncated = true
-			}
-			group.Symbols = kept
-		}
-	}
+	applyDependencyLimit(&explanation)
 	return explanation, nil
 }
 
