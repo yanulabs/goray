@@ -207,9 +207,13 @@ const ELK_LAYOUT_OPTIONS = {
   "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
   "elk.layered.mergeEdges": "false",
   // elkjs 0.12.1 includes GraphCompactionStrategy.EDGE_LENGTH, which reclaims
-  // layer slack while keeping routes short. Verified against the bundled
-  // elk-worker in this package.
+  // layer slack while keeping routes short. The default SCANLINE constraint
+  // calculator throws "Invalid hitboxes for scanline constraint calculation"
+  // on real 100+ package graphs with orthogonal routing, so use the quadratic
+  // calculator. layoutGraph also retries without post-compaction and finally
+  // falls back to a grid, so a bundler/ELK edge case cannot blank the view.
   "elk.layered.compaction.postCompaction.strategy": "EDGE_LENGTH",
+  "elk.layered.compaction.postCompaction.constraints": "QUADRATIC",
   "elk.spacing.nodeNode": "32",
   "elk.layered.spacing.nodeNodeBetweenLayers": "52",
   "elk.spacing.edgeEdge": "13",
@@ -220,6 +224,54 @@ const ELK_LAYOUT_OPTIONS = {
 } as const;
 
 const elk = new ELK();
+
+function safeDimension(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+// Deterministic last-resort layout. It keeps every node inspectable even if a
+// future ELK release rejects an option combination for a specific graph.
+function fallbackGridLayout(
+  nodes: ReportGraphNode[],
+  dimensions: Map<string, { width: number; height: number }>,
+): ElkNode {
+  const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length * 1.8)));
+  const gapX = 52;
+  const gapY = 32;
+  const rows: ReportGraphNode[][] = [];
+  for (let index = 0; index < nodes.length; index += columns) {
+    rows.push(nodes.slice(index, index + columns));
+  }
+  const columnWidths = new Array<number>(columns).fill(NODE_MIN_WIDTH);
+  for (const row of rows) {
+    row.forEach((node, column) => {
+      const width = safeDimension(dimensions.get(node.id)?.width, NODE_MIN_WIDTH);
+      columnWidths[column] = Math.max(columnWidths[column], width);
+    });
+  }
+  const rowHeights = rows.map((row) =>
+    Math.max(...row.map((node) => safeDimension(dimensions.get(node.id)?.height, NODE_HEIGHT))),
+  );
+  const children: ElkNode[] = [];
+  let y = 0;
+  rows.forEach((row, rowIndex) => {
+    let x = 0;
+    row.forEach((node, column) => {
+      children.push({
+        id: node.id,
+        x,
+        y,
+        width: safeDimension(dimensions.get(node.id)?.width, NODE_MIN_WIDTH),
+        height: safeDimension(dimensions.get(node.id)?.height, NODE_HEIGHT),
+      });
+      x += columnWidths[column] + gapX;
+    });
+    y += rowHeights[rowIndex] + gapY;
+  });
+  const width = columnWidths.reduce((total, value) => total + value, 0) + gapX * Math.max(0, columns - 1);
+  const height = rowHeights.reduce((total, value) => total + value, 0) + gapY * Math.max(0, rows.length - 1);
+  return { id: "goray-fallback-root", children, width, height };
+}
 
 function stronglyConnectedComponents(
   nodeIDs: string[],
@@ -637,8 +689,8 @@ export async function layoutGraph(
     const size = dimensions.get(node.id);
     return {
       id: node.id,
-      width: size?.width ?? NODE_MIN_WIDTH,
-      height: size?.height ?? NODE_HEIGHT,
+      width: safeDimension(size?.width, NODE_MIN_WIDTH),
+      height: safeDimension(size?.height, NODE_HEIGHT),
     };
   });
 
@@ -648,17 +700,35 @@ export async function layoutGraph(
     targets: [edge.to],
   }));
 
+  const directionOption = direction === "LR" ? "RIGHT" : "DOWN";
   const elkGraph: ElkNode = {
     id: "goray-root",
     layoutOptions: {
       ...ELK_LAYOUT_OPTIONS,
-      "elk.direction": direction === "LR" ? "RIGHT" : "DOWN",
+      "elk.direction": directionOption,
     },
     children: elkNodes,
     edges: elkEdges,
   };
 
-  const result = await elk.layout(elkGraph);
+  let result: ElkNode;
+  try {
+    result = await elk.layout(elkGraph);
+  } catch {
+    // ELK's post-compaction is the only brittle phase for orthogonal graphs.
+    // Retry without it before giving up on real layout entirely.
+    const withoutCompaction = { ...ELK_LAYOUT_OPTIONS } as Record<string, string>;
+    delete withoutCompaction["elk.layered.compaction.postCompaction.strategy"];
+    delete withoutCompaction["elk.layered.compaction.postCompaction.constraints"];
+    try {
+      result = await elk.layout({
+        ...elkGraph,
+        layoutOptions: { ...withoutCompaction, "elk.direction": directionOption },
+      });
+    } catch {
+      result = fallbackGridLayout(visibleNodes, dimensions);
+    }
+  }
 
   const positionedByID = new Map<string, PositionedNode>();
   const nodes: PositionedNode[] = [];
@@ -668,8 +738,8 @@ export async function layoutGraph(
     if (!source) {
       continue;
     }
-    const width = child.width ?? dimensions.get(child.id)?.width ?? NODE_MIN_WIDTH;
-    const height = child.height ?? dimensions.get(child.id)?.height ?? NODE_HEIGHT;
+    const width = safeDimension(child.width ?? dimensions.get(child.id)?.width, NODE_MIN_WIDTH);
+    const height = safeDimension(child.height ?? dimensions.get(child.id)?.height, NODE_HEIGHT);
     const positioned: PositionedNode = {
       node: source,
       x: child.x ?? 0,
