@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-22
+
 ### Fixed
 
 - Indexing now loads typed syntax only for project packages instead of parsing and retaining every transitive dependency; peak memory on a small module dropped from 1.9GB to 155MB.
@@ -76,7 +78,8 @@ Initial public release.
 - Large report graphs no longer crash ELK after post-compaction.
 - Nil method packages no longer panic interface-dispatch registration.
 
-[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/yanulabs/goray/releases/tag/v0.1.3
 [0.1.2]: https://github.com/yanulabs/goray/releases/tag/v0.1.2
 [0.1.1]: https://github.com/yanulabs/goray/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yanulabs/goray/releases/tag/v0.1.0
