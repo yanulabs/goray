@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-22
+
+### Fixed
+
+- `get_summary_context` accepts canonical `mod:` IDs for multi-package and single-package modules in single and batch modes, returns the expected module schema and hashes, and includes compact package rollups, dependency edges, exported API, key file excerpts, and cached child package summaries.
+- `upsert_summaries` overwrites the stored payload, `model_id`, and timestamp when the same `(content_hash, prompt_version)` is written again, reports `updated` only when a row was actually replaced, and invalidates pending cache touch state.
+
 ## [0.1.0] - 2026-11-22
 
 Initial public release.
@@ -33,5 +40,6 @@ Initial public release.
 - Large report graphs no longer crash ELK after post-compaction.
 - Nil method packages no longer panic interface-dispatch registration.
 
-[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/yanulabs/goray/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yanulabs/goray/releases/tag/v0.1.0
