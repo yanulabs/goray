@@ -104,6 +104,11 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	modPath := modulePaths[0]
 
 	untracked := detectUntrackedContext(ctx, absRoot)
+	if err := ctx.Err(); err != nil {
+		// Untracked detection is best effort, so a canceled context can yield
+		// an empty set. Never publish a snapshot with incomplete provenance.
+		return nil, err
+	}
 	idx := newIndex(absRoot, modPath, modulePaths, untracked)
 	idx.BuildTags = opts.Tags
 	idx.Workspace = opts.Workspace
