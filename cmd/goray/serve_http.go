@@ -177,7 +177,9 @@ func (c *reportSnapshot) get(ctx context.Context, store *index.Store, summaries 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.built && c.idx == idx && c.generation == generation {
-		return c.data, nil
+		data := c.data
+		data.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+		return data, nil
 	}
 	data, err := report.BuildFromCache(ctx, idx, summaries)
 	if err != nil {

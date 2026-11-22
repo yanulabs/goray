@@ -222,6 +222,7 @@ func TestReportSnapshotInvalidatesOnCacheGeneration(t *testing.T) {
 	}
 	snapshot.mu.Lock()
 	snapshot.data.Repo = "cached"
+	snapshot.data.GeneratedAt = "old"
 	snapshot.mu.Unlock()
 	second, err := snapshot.get(ctx, store, summaries)
 	if err != nil {
@@ -229,6 +230,9 @@ func TestReportSnapshotInvalidatesOnCacheGeneration(t *testing.T) {
 	}
 	if second.Repo != "cached" {
 		t.Fatalf("unchanged snapshot rebuilt: repo = %q", second.Repo)
+	}
+	if second.GeneratedAt == "old" {
+		t.Fatal("cached report kept a stale generated_at timestamp")
 	}
 
 	idx, err := store.Wait(ctx)
