@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-22
+
+### Security
+
+- Release builds now use Go 1.27.4, and the module requires Go 1.26.11 or newer. The v0.1.1 binaries were built with Go 1.26.0 and contain 46 standard-library vulnerabilities, including GO-2026-6859 in `net/http`.
+- CI now runs `govulncheck` on every change.
+
+### Fixed
+
+- The filesystem watcher returns `WalkDir` failures instead of silently skipping unreadable directories.
+- `goray diff` computes the base hotspot map once instead of once per head hotspot.
+- The MCP server returns stdout write failures instead of silently continuing after a broken pipe.
+- `run_tests` and `run_lint` distinguish timeouts and cancellations from exit failures and truncate output on UTF-8 boundaries.
+- Sentinel and typed errors are handled through `errors.Is` and `errors.As`; missing state switch cases are explicit.
+- Goray-owned cache directories use `0700` and port files use `0600`.
+
+### Changed
+
+- Split the cache and index summary implementations into focused files and reduced the highest-complexity impact, dependency, and module-context functions.
+- Added coverage floors, cross-platform builds, embedded web artifact drift checks, and a pinned `golangci-lint` configuration.
+- Added exported API documentation and aligned the documented Go and Node requirements.
+
 ## [0.1.1] - 2026-11-22
 
 ### Fixed
@@ -40,6 +62,7 @@ Initial public release.
 - Large report graphs no longer crash ELK after post-compaction.
 - Nil method packages no longer panic interface-dispatch registration.
 
-[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/yanulabs/goray/releases/tag/v0.1.2
 [0.1.1]: https://github.com/yanulabs/goray/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yanulabs/goray/releases/tag/v0.1.0
