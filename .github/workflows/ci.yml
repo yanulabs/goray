@@ -36,6 +36,46 @@ jobs:
       - name: Build
         run: make build
 
+  web:
+    name: Web report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: web
+      - name: Build
+        run: npm run build
+        working-directory: web
+      - name: Check embedded report is current
+        run: git diff --exit-code -- internal/render/dist/report.html
+
+  cross-build:
+    name: Cross-build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.4"
+          cache: true
+      - name: Build
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./...
+
   vulnerability:
     name: Vulnerability scan
     runs-on: ubuntu-latest
