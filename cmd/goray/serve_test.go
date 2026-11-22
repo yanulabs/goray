@@ -200,6 +200,53 @@ func listenerPortString(url string) string {
 	return ""
 }
 
+func TestReportSnapshotInvalidatesOnCacheGeneration(t *testing.T) {
+	root, _, _ := newTestModule(t)
+	summaries, err := cache.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = summaries.Close() }()
+	logger := slog.New(slog.DiscardHandler)
+	store := index.NewStore(root, logger)
+	store.SetBuildHook(func(idx *index.Index) error {
+		return summaries.Sync(context.Background(), idx)
+	})
+	store.Start()
+	defer store.WaitForBuild()
+
+	snapshot := &reportSnapshot{}
+	ctx := context.Background()
+	if _, err := snapshot.get(ctx, store, summaries); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.mu.Lock()
+	snapshot.data.Repo = "cached"
+	snapshot.mu.Unlock()
+	second, err := snapshot.get(ctx, store, summaries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Repo != "cached" {
+		t.Fatalf("unchanged snapshot rebuilt: repo = %q", second.Repo)
+	}
+
+	idx, err := store.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := summaries.Sync(ctx, idx); err != nil {
+		t.Fatal(err)
+	}
+	third, err := snapshot.get(ctx, store, summaries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Repo == "cached" {
+		t.Fatal("cache generation change did not invalidate the report")
+	}
+}
+
 func TestReportHandler(t *testing.T) {
 	root, _, _ := newTestModule(t)
 	summaries, err := cache.Open(":memory:")
@@ -209,6 +256,9 @@ func TestReportHandler(t *testing.T) {
 	defer func() { _ = summaries.Close() }()
 	logger := slog.New(slog.DiscardHandler)
 	store := index.NewStore(root, logger)
+	store.SetBuildHook(func(idx *index.Index) error {
+		return summaries.Sync(context.Background(), idx)
+	})
 	store.Start()
 	defer store.WaitForBuild()
 

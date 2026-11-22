@@ -15,8 +15,12 @@ const untrackedTimeout = 2 * time.Second
 // It is best-effort: any failure (no git, not a repository, timeout) yields an
 // empty set with no error. Untracked files remain in the semantic index.
 func detectUntracked(root string) map[string]bool {
+	return detectUntrackedContext(context.Background(), root)
+}
+
+func detectUntrackedContext(parent context.Context, root string) map[string]bool {
 	out := map[string]bool{}
-	ctx, cancel := context.WithTimeout(context.Background(), untrackedTimeout)
+	ctx, cancel := context.WithTimeout(parent, untrackedTimeout)
 	defer cancel()
 
 	topCmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--show-toplevel")

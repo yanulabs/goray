@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/yanulabs/goray/internal/index"
 )
@@ -70,15 +72,16 @@ func parseDiffArgs(args []string) (diffOptions, error) {
 }
 
 type diffReport struct {
-	BaseRef  string       `json:"base_ref"`
-	HeadRef  string       `json:"head_ref"`
-	Head     string       `json:"head"`
-	Summary  diffCounters `json:"summary"`
-	Cycles   diffCycles   `json:"cycles"`
-	API      diffAPI      `json:"breaking_api"`
-	Hotspots diffHotspots `json:"hotspots"`
-	Dead     diffDeadCode `json:"dead_code"`
-	Failed   []string     `json:"failed_gates,omitempty"`
+	BaseRef    string       `json:"base_ref"`
+	BaseCommit string       `json:"base_commit"`
+	HeadRef    string       `json:"head_ref"`
+	Head       string       `json:"head"`
+	Summary    diffCounters `json:"summary"`
+	Cycles     diffCycles   `json:"cycles"`
+	API        diffAPI      `json:"breaking_api"`
+	Hotspots   diffHotspots `json:"hotspots"`
+	Dead       diffDeadCode `json:"dead_code"`
+	Failed     []string     `json:"failed_gates,omitempty"`
 }
 
 type diffCounters struct {
@@ -175,12 +178,15 @@ func runDiff(args []string, stdout, stderr io.Writer) error {
 }
 
 func buildDiff(opts diffOptions, stderr io.Writer) (diffReport, error) {
-	repo, err := gitOutput(opts.path, "rev-parse", "--show-toplevel")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	repo, err := gitOutput(ctx, opts.path, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return diffReport{}, usagef("not inside a git repository: %v", err)
 	}
 	repo = strings.TrimSpace(repo)
-	baseCommit, err := gitOutput(repo, "rev-parse", "--verify", opts.baseRef+"^{commit}")
+	baseCommit, err := gitOutput(ctx, repo, "rev-parse", "--verify", opts.baseRef+"^{commit}")
 	if err != nil {
 		return diffReport{}, usagef("cannot resolve base ref %q: %v", opts.baseRef, err)
 	}
@@ -200,10 +206,12 @@ func buildDiff(opts diffOptions, stderr io.Writer) (diffReport, error) {
 		return diffReport{}, err
 	}
 	defer func() {
-		_, _ = gitOutput(repo, "worktree", "remove", "--force", tmpDir)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = gitOutput(cleanupCtx, repo, "worktree", "remove", "--force", tmpDir)
 		_ = os.RemoveAll(tmpDir)
 	}()
-	if _, err := gitOutput(repo, "worktree", "add", "--detach", tmpDir, baseCommit); err != nil {
+	if _, err := gitOutput(ctx, repo, "worktree", "add", "--detach", tmpDir, baseCommit); err != nil {
 		return diffReport{}, fmt.Errorf("create base worktree: %w", err)
 	}
 	baseRoot := filepath.Join(tmpDir, rel)
@@ -228,8 +236,12 @@ func buildDiff(opts diffOptions, stderr io.Writer) (diffReport, error) {
 	}
 	report := compareIndexes(base, head)
 	report.BaseRef = opts.baseRef
+	report.BaseCommit = baseCommit
 	report.HeadRef = "working tree"
 	report.Head = baseCommit
+	if headCommit, err := gitOutput(ctx, repo, "rev-parse", "--verify", "HEAD^{commit}"); err == nil {
+		report.Head = strings.TrimSpace(headCommit)
+	}
 	for _, gate := range opts.failOn {
 		if gateTriggered(report, gate) {
 			report.Failed = append(report.Failed, gate)
@@ -238,10 +250,14 @@ func buildDiff(opts diffOptions, stderr io.Writer) (diffReport, error) {
 	return report, nil
 }
 
-func gitOutput(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), ctxErr)
+		}
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
 	}
 	return string(out), nil

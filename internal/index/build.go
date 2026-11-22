@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/types"
@@ -51,12 +52,22 @@ func NormalizeTags(raw []string) []string {
 
 // Build loads the module rooted at rootDir and computes a complete index.
 func Build(rootDir string) (*Index, error) {
-	return BuildWithOptions(rootDir, BuildOptions{})
+	return BuildContext(context.Background(), rootDir)
+}
+
+// BuildContext is Build with a cancellation context for package loading.
+func BuildContext(ctx context.Context, rootDir string) (*Index, error) {
+	return BuildWithOptionsContext(ctx, rootDir, BuildOptions{})
 }
 
 // BuildWithOptions loads a module (or go.work workspace) and computes a
 // complete index with the requested build tags.
 func BuildWithOptions(rootDir string, opts BuildOptions) (*Index, error) {
+	return BuildWithOptionsContext(context.Background(), rootDir, opts)
+}
+
+// BuildWithOptionsContext is BuildWithOptions with cancellation.
+func BuildWithOptionsContext(ctx context.Context, rootDir string, opts BuildOptions) (*Index, error) {
 	start := time.Now()
 	absRoot, err := filepath.Abs(rootDir)
 	if err != nil {
@@ -67,7 +78,7 @@ func BuildWithOptions(rootDir string, opts BuildOptions) (*Index, error) {
 		opts.Workspace = workspaceRootAt(absRoot)
 	}
 
-	pkgs, err := loadPackages(absRoot, opts)
+	pkgs, err := loadPackages(ctx, absRoot, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -75,14 +86,14 @@ func BuildWithOptions(rootDir string, opts BuildOptions) (*Index, error) {
 		return nil, fmt.Errorf("no Go packages found in %s", absRoot)
 	}
 
-	testPkgs := loadTestPackages(absRoot, opts)
-	return buildFromPackages(absRoot, opts, pkgs, testPkgs, start)
+	testPkgs := loadTestPackages(ctx, absRoot, opts)
+	return buildFromPackages(ctx, absRoot, opts, pkgs, testPkgs, start)
 }
 
 // buildFromPackages computes all derived structures from type-checked package
 // artifacts. Incremental rebuilds merge preloaded unaffected packages with
 // freshly loaded affected packages and reuse this exact path.
-func buildFromPackages(absRoot string, opts BuildOptions, pkgs, testPkgs []*packages.Package, start time.Time) (*Index, error) {
+func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, pkgs, testPkgs []*packages.Package, start time.Time) (*Index, error) {
 	if loadErr := packageLoadErrors(pkgs); loadErr != nil {
 		return nil, loadErr
 	}
@@ -92,7 +103,7 @@ func buildFromPackages(absRoot string, opts BuildOptions, pkgs, testPkgs []*pack
 	}
 	modPath := modulePaths[0]
 
-	untracked := detectUntracked(absRoot)
+	untracked := detectUntrackedContext(ctx, absRoot)
 	idx := newIndex(absRoot, modPath, modulePaths, untracked)
 	idx.BuildTags = opts.Tags
 	idx.Workspace = opts.Workspace
@@ -100,12 +111,10 @@ func buildFromPackages(absRoot string, opts BuildOptions, pkgs, testPkgs []*pack
 	b := newBuilder(idx, absRoot)
 	b.indexPackages(pkgs)
 	b.indexTestDefinitions(testPkgs)
-	b.indexReferences(pkgs)
-	b.indexTestReferences(testPkgs)
-	b.collectImportSites(pkgs)
-	b.testPass = true
-	b.collectImportSites(testPkgs)
-	b.testPass = false
+	b.indexReferences(pkgs, false)
+	b.indexReferences(testPkgs, true)
+	b.collectImportSites(pkgs, false)
+	b.collectImportSites(testPkgs, true)
 	b.collectImportedInterfaces(pkgs)
 	b.matchInterfaces()
 	b.applyDispatchEdges()
@@ -162,16 +171,20 @@ func newBuilder(idx *Index, absRoot string) *builder {
 		ifaceMethod:   map[string][]string{},
 		fieldOwners:   map[*ast.Ident]string{},
 		fieldVarOwner: map[*types.Var]string{},
+		facts:         map[string]fileFacts{},
 		idx:           idx,
 	}
 }
 
+// loadMode requests typed syntax only for the initial packages. NeedDeps must
+// stay out: it propagates NeedSyntax and NeedTypesInfo to every transitive
+// dependency, which parses and retains the entire dependency source graph.
 var loadMode = packages.NeedName | packages.NeedFiles |
-	packages.NeedImports | packages.NeedDeps | packages.NeedTypes |
+	packages.NeedImports | packages.NeedTypes |
 	packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedModule
 
-func loadPackages(absRoot string, opts BuildOptions) ([]*packages.Package, error) {
-	config := &packages.Config{Dir: absRoot, Mode: loadMode}
+func loadPackages(ctx context.Context, absRoot string, opts BuildOptions) ([]*packages.Package, error) {
+	config := &packages.Config{Context: ctx, Dir: absRoot, Mode: loadMode}
 	if len(opts.Tags) > 0 {
 		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
 	}
@@ -212,11 +225,12 @@ func loadPackages(absRoot string, opts BuildOptions) ([]*packages.Package, error
 // loadTestPackages type-checks test variants with the same build tags so test
 // mocks, test-only methods, and test call edges are visible to impact,
 // implementation, and coverage analysis.
-func loadTestPackages(absRoot string, opts BuildOptions) []*packages.Package {
+func loadTestPackages(ctx context.Context, absRoot string, opts BuildOptions) []*packages.Package {
 	config := &packages.Config{
-		Dir:   absRoot,
-		Tests: true,
-		Mode:  loadMode | packages.NeedForTest,
+		Context: ctx,
+		Dir:     absRoot,
+		Tests:   true,
+		Mode:    loadMode | packages.NeedForTest,
 	}
 	if len(opts.Tags) > 0 {
 		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
@@ -332,9 +346,7 @@ type builder struct {
 	fieldOwners     map[*ast.Ident]string
 	fieldVarOwner   map[*types.Var]string
 	pendingDispatch []dispatchCall
-
-	// testPass limits definition and reference indexing to *_test.go files.
-	testPass bool
+	facts           map[string]fileFacts
 }
 
 func hasTestFiles(packagesByPath map[string]*PkgInfo) bool {
@@ -520,7 +532,7 @@ func (b *builder) indexPackages(pkgs []*packages.Package) {
 			m.TestLOC += pi.TestLOC
 		}
 
-		b.indexDefinitions(p, pi)
+		b.indexDefinitions(p, pi, false)
 	}
 }
 
@@ -542,21 +554,13 @@ func (b *builder) pkgInfoFor(p *packages.Package) (*PkgInfo, bool) {
 }
 
 func (b *builder) indexTestDefinitions(pkgs []*packages.Package) {
-	b.testPass = true
-	defer func() { b.testPass = false }()
 	for _, p := range pkgs {
 		pi, ok := b.pkgInfoFor(p)
 		if !ok {
 			continue
 		}
-		b.indexDefinitions(p, pi)
+		b.indexDefinitions(p, pi, true)
 	}
-}
-
-func (b *builder) indexTestReferences(pkgs []*packages.Package) {
-	b.testPass = true
-	defer func() { b.testPass = false }()
-	b.indexReferences(pkgs)
 }
 
 func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
@@ -565,12 +569,12 @@ func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
 		mod = b.module(pi.ModuleArea)
 	}
 	for _, path := range p.GoFiles {
-		src, err := os.ReadFile(path)
+		facts, err := b.factsFor(path)
 		if err != nil {
 			continue
 		}
 		rel := relFile(b.absRoot, path)
-		generated := isGenerated(filepath.Base(path), src)
+		generated := facts.generated
 		untracked := b.idx.UntrackedFiles[rel]
 		pi.Files++
 		if mod != nil {
@@ -582,7 +586,7 @@ func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
 				mod.UntrackedFiles++
 			}
 		}
-		loc := countLines(src)
+		loc := facts.loc
 		if generated {
 			pi.GeneratedFiles++
 			pi.GeneratedLOC += loc
@@ -618,8 +622,8 @@ func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
 			continue
 		}
 		pi.TestFiles++
-		if src, err := os.ReadFile(filepath.Join(pi.Dir, entry.Name())); err == nil {
-			pi.TestLOC += countLines(src)
+		if facts, err := b.factsFor(filepath.Join(pi.Dir, entry.Name())); err == nil {
+			pi.TestLOC += facts.loc
 		}
 	}
 }

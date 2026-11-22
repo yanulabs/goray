@@ -17,7 +17,7 @@ type Indexer interface {
 	Wait(context.Context) (*index.Index, error)
 	Status() index.Status
 	Root() string
-	Rebuild() error
+	RebuildContext(context.Context) error
 }
 
 // Summaries is the summary-cache capability required by the tools.

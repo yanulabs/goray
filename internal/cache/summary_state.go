@@ -80,6 +80,10 @@ func (c *Cache) dependencies(ctx context.Context, sym *WorkingSymbol, idx *index
 			}
 			ids = append(ids, id)
 		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
 		_ = rows.Close()
 	} else {
 		rows, err := c.db.QueryContext(ctx,
@@ -94,6 +98,10 @@ func (c *Cache) dependencies(ctx context.Context, sym *WorkingSymbol, idx *index
 				return nil, err
 			}
 			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
 		}
 		_ = rows.Close()
 	}
@@ -114,6 +122,10 @@ func (c *Cache) children(ctx context.Context, sym *WorkingSymbol, idx *index.Ind
 			return nil, err
 		}
 		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
 	}
 	_ = rows.Close()
 	return c.loadDependencies(ctx, ids, idx, needSummaries)

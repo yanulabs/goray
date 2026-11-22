@@ -70,7 +70,7 @@ func symbolErrorPayload(err error) string {
 		payload := map[string]any{
 			"error":            "symbol_not_found",
 			"input":            notFound.Query,
-			"expected_formats": index.SymbolIDFormats,
+			"expected_formats": index.SymbolIDFormats(),
 			"hint":             "call lookup_symbol with the same input to discover valid IDs",
 		}
 		if len(notFound.Suggestions) > 0 {

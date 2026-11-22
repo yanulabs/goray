@@ -122,10 +122,15 @@ func (s *Store) SetBuildHook(hook func(*Index) error) {
 
 // Start builds the index in the background.
 func (s *Store) Start() {
+	s.StartContext(context.Background())
+}
+
+// StartContext builds the index in the background with cancellation.
+func (s *Store) StartContext(ctx context.Context) {
 	s.buildWG.Add(1)
 	go func() {
 		defer s.buildWG.Done()
-		_ = s.Rebuild()
+		_ = s.RebuildContext(ctx)
 	}()
 }
 
@@ -195,7 +200,7 @@ func (s *Store) AutoRebuild(ctx context.Context) {
 		case <-timerC:
 			timer = nil
 			timerC = nil
-			if err := s.rebuild(true); err != nil {
+			if err := s.rebuild(ctx, true); err != nil {
 				s.log.Error("auto reindex failed", "err", err)
 			}
 		}
@@ -209,10 +214,15 @@ func (s *Store) WaitForBuild() {
 
 // Rebuild performs a clean full rebuild. Builds are serialized.
 func (s *Store) Rebuild() error {
-	return s.rebuild(false)
+	return s.RebuildContext(context.Background())
 }
 
-func (s *Store) rebuild(incremental bool) error {
+// RebuildContext is Rebuild with cancellation.
+func (s *Store) RebuildContext(ctx context.Context) error {
+	return s.rebuild(ctx, false)
+}
+
+func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	s.buildWG.Add(1)
@@ -240,13 +250,13 @@ func (s *Store) rebuild(incremental bool) error {
 	affected := 0
 	if incremental && prev != nil && len(changed) > 0 {
 		var usedIncremental bool
-		idx, usedIncremental, err = BuildIncremental(s.root, s.opts, prev, changed)
+		idx, usedIncremental, err = BuildIncrementalContext(ctx, s.root, s.opts, prev, changed)
 		if usedIncremental {
 			mode = "incremental"
 			affected = incrementalAffectedCount(prev, idx)
 		}
 	} else {
-		idx, err = BuildWithOptions(s.root, s.opts)
+		idx, err = BuildWithOptionsContext(ctx, s.root, s.opts)
 	}
 	if err == nil && hook != nil {
 		err = hook(idx)

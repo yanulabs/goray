@@ -88,6 +88,7 @@ ON CONFLICT(id) DO UPDATE SET
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	c.generation.Add(1)
 	return nil
 }
 

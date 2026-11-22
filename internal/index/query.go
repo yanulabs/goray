@@ -7,14 +7,19 @@ import (
 	"strings"
 )
 
-// SymbolIDFormats lists the identifier shapes accepted by symbol-scoped tools.
-var SymbolIDFormats = []string{
+var symbolIDFormats = []string{
 	"sym:<import path>.<Name>",
 	"sym:<import path>.(*Type).Method",
 	"<import path>.<Name>",
 	"<package dir>.<Name>",
 	"<package dir>.<Type>.<Method>",
 	"<Type>.<Method>",
+}
+
+// SymbolIDFormats returns the identifier shapes accepted by symbol-scoped
+// tools. The returned slice is a copy so callers cannot mutate the contract.
+func SymbolIDFormats() []string {
+	return append([]string(nil), symbolIDFormats...)
 }
 
 // Resolve finds symbols by exact ID, canonical ID, exact name, tolerant
@@ -188,7 +193,7 @@ func (e *SymbolNotFoundError) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "symbol not found: %s", e.Query)
 	b.WriteString("; expected one of: ")
-	b.WriteString(strings.Join(SymbolIDFormats, ", "))
+	b.WriteString(strings.Join(symbolIDFormats, ", "))
 	if len(e.Suggestions) > 0 {
 		if len(e.Suggestions) > 5 {
 			e.Suggestions = e.Suggestions[:5]

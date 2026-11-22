@@ -88,6 +88,58 @@ func (t *toolset) enclosingSummary(ctx context.Context, sym *index.Symbol) (stri
 	return "", nil, ""
 }
 
+type apiSurfaceItem struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Kind        string          `json:"kind"`
+	Signature   string          `json:"signature"`
+	LOC         string          `json:"loc"`
+	XRefs       int             `json:"xrefs"`
+	CanonicalID string          `json:"canonical_id,omitempty"`
+	Generated   bool            `json:"generated,omitempty"`
+	Summary     json.RawMessage `json:"summary,omitempty"`
+	SyncState   string          `json:"sync_state,omitempty"`
+	DepsChanged bool            `json:"deps_changed,omitempty"`
+}
+
+func (t *toolset) collectAPISurface(ctx context.Context, idx *index.Index, pkg string, includeGenerated bool, kindFilter string) ([]apiSurfaceItem, int) {
+	items := make([]apiSurfaceItem, 0)
+	generatedOmittedSymbols := 0
+	for _, sym := range idx.Symbols {
+		if sym.PkgPath != pkg || !sym.Exported || sym.IsTest {
+			continue
+		}
+		if !apiKindMatches(sym.Kind, kindFilter) {
+			continue
+		}
+		if sym.Generated && !includeGenerated {
+			generatedOmittedSymbols++
+			continue
+		}
+		name := sym.Name
+		if sym.RecvType != "" {
+			name = "(" + sym.RecvType + ")." + sym.Name
+		}
+		summary, state, depsChanged := t.enrich(ctx, sym)
+		items = append(items, apiSurfaceItem{
+			ID: sym.ID, Name: name, Kind: sym.Kind, Signature: sym.Signature, CanonicalID: sym.CanonicalID(),
+			LOC: fmt.Sprintf("%s:%d", sym.File, sym.Line), XRefs: len(idx.XRefs[sym.ID]),
+			Generated: sym.Generated, Summary: summary, SyncState: string(state), DepsChanged: depsChanged,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		ri, rj := apiKindRank(items[i].Kind), apiKindRank(items[j].Kind)
+		if ri != rj {
+			return ri < rj
+		}
+		if items[i].Name != items[j].Name {
+			return items[i].Name < items[j].Name
+		}
+		return items[i].ID < items[j].ID
+	})
+	return items, generatedOmittedSymbols
+}
+
 func (t *toolset) apiSurface() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_api_surface",
@@ -114,54 +166,7 @@ func (t *toolset) apiSurface() mcp.Tool {
 				return "invalid kind: " + kindFilter, true
 			}
 
-			type item struct {
-				ID          string          `json:"id"`
-				Name        string          `json:"name"`
-				Kind        string          `json:"kind"`
-				Signature   string          `json:"signature"`
-				LOC         string          `json:"loc"`
-				XRefs       int             `json:"xrefs"`
-				CanonicalID string          `json:"canonical_id,omitempty"`
-				Generated   bool            `json:"generated,omitempty"`
-				Summary     json.RawMessage `json:"summary,omitempty"`
-				SyncState   string          `json:"sync_state,omitempty"`
-				DepsChanged bool            `json:"deps_changed,omitempty"`
-			}
-			items := make([]item, 0)
-			generatedOmittedSymbols := 0
-			for _, sym := range idx.Symbols {
-				if sym.PkgPath != pkg || !sym.Exported || sym.IsTest {
-					continue
-				}
-				if !apiKindMatches(sym.Kind, kindFilter) {
-					continue
-				}
-				if sym.Generated && !includeGenerated {
-					generatedOmittedSymbols++
-					continue
-				}
-				name := sym.Name
-				if sym.RecvType != "" {
-					name = "(" + sym.RecvType + ")." + sym.Name
-				}
-				summary, state, depsChanged := t.enrich(ctx, sym)
-				items = append(items, item{
-					ID: sym.ID, Name: name, Kind: sym.Kind, Signature: sym.Signature, CanonicalID: sym.CanonicalID(),
-					LOC: fmt.Sprintf("%s:%d", sym.File, sym.Line), XRefs: len(idx.XRefs[sym.ID]),
-					Generated: sym.Generated, Summary: summary, SyncState: string(state), DepsChanged: depsChanged,
-				})
-			}
-			sort.Slice(items, func(i, j int) bool {
-				ri, rj := apiKindRank(items[i].Kind), apiKindRank(items[j].Kind)
-				if ri != rj {
-					return ri < rj
-				}
-				if items[i].Name != items[j].Name {
-					return items[i].Name < items[j].Name
-				}
-				return items[i].ID < items[j].ID
-			})
-
+			items, generatedOmittedSymbols := t.collectAPISurface(ctx, idx, pkg, includeGenerated, kindFilter)
 			total := len(items)
 			offset := nonNegativeIntArg(args, "offset", 0)
 			if offset > total {
@@ -175,7 +180,7 @@ func (t *toolset) apiSurface() mcp.Tool {
 			pageTruncated := offset+len(page) < total
 			generatedOmittedAny := !includeGenerated && (info.GeneratedFiles > 0 || generatedOmittedSymbols > 0 || info.GeneratedLOC > 0)
 			truncated := pageTruncated || generatedOmittedAny
-			grouped := map[string][]item{}
+			grouped := map[string][]apiSurfaceItem{}
 			for _, entry := range page {
 				grouped[entry.Kind] = append(grouped[entry.Kind], entry)
 			}

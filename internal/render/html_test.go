@@ -2,7 +2,9 @@ package render
 
 import (
 	"encoding/json"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,6 +22,27 @@ func htmlPayload(t *testing.T, html string) string {
 		t.Fatal("goray-data script not closed")
 	}
 	return html[start : start+end]
+}
+
+func TestHTMLReportJSONContract(t *testing.T) {
+	typ := reflect.TypeOf(HTMLReport{})
+	keys := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name != "" && name != "-" {
+			keys = append(keys, name)
+		}
+	}
+	slices.Sort(keys)
+	want := []string{
+		"build_tags", "coupled_packages", "coverage", "generated_at", "graphs",
+		"hotspots", "interfaces", "metrics", "module_cycles", "module_path",
+		"module_paths", "modules", "packages", "repo", "symbols", "tree", "workspace",
+	}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("HTMLReport JSON contract changed:\n got: %v\nwant: %v", keys, want)
+	}
 }
 
 func emptyReport() HTMLReport {

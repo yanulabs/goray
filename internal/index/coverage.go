@@ -4,6 +4,17 @@ package index
 // seeds from the type-checked call edges of indexed test functions, so build
 // tags, receiver types, and package boundaries are honored exactly.
 func (b *builder) computeTestCoverage() {
+	seeds := b.testCoverageSeeds()
+	testReferencedTypes := b.testReferencedTypes()
+	covered := b.expandTestCoverage(seeds, testReferencedTypes)
+	for id := range covered {
+		if sym := b.idx.Symbols[id]; sym != nil && !sym.IsTest {
+			b.idx.TestCovered[id] = true
+		}
+	}
+}
+
+func (b *builder) testCoverageSeeds() map[string]bool {
 	seeds := map[string]bool{}
 	for id, sym := range b.idx.Symbols {
 		if !sym.IsTest || (sym.Kind != "func" && sym.Kind != "method") {
@@ -13,11 +24,14 @@ func (b *builder) computeTestCoverage() {
 			seeds[callee] = true
 		}
 	}
+	return seeds
+}
 
-	// Interface dispatch must not mark a production adapter as covered when a
-	// test only wires a mock. Follow dispatch edges to a concrete receiver only
-	// when tests reference or construct that concrete type.
-	testReferencedTypes := map[string]bool{}
+// testReferencedTypes prevents interface dispatch from marking a production
+// adapter as covered when a test only wires a mock. A dispatched concrete
+// receiver is followed only when tests reference or construct that type.
+func (b *builder) testReferencedTypes() map[string]bool {
+	referenced := map[string]bool{}
 	for id, refs := range b.idx.XRefs {
 		sym := b.idx.Symbols[id]
 		if sym == nil || (sym.Kind != "type" && sym.Kind != "struct" && sym.Kind != "interface") {
@@ -25,7 +39,7 @@ func (b *builder) computeTestCoverage() {
 		}
 		for _, ref := range refs {
 			if ref.Test {
-				testReferencedTypes[id] = true
+				referenced[id] = true
 				break
 			}
 		}
@@ -33,12 +47,15 @@ func (b *builder) computeTestCoverage() {
 	for typeID, sites := range b.idx.CompositeLiterals {
 		for _, site := range sites {
 			if site.Test {
-				testReferencedTypes[typeID] = true
+				referenced[typeID] = true
 				break
 			}
 		}
 	}
+	return referenced
+}
 
+func (b *builder) expandTestCoverage(seeds, testReferencedTypes map[string]bool) map[string]bool {
 	covered := make(map[string]bool, len(seeds))
 	queue := make([]string, 0, len(seeds))
 	for id := range seeds {
@@ -62,9 +79,5 @@ func (b *builder) computeTestCoverage() {
 			queue = append(queue, callee)
 		}
 	}
-	for id := range covered {
-		if sym := b.idx.Symbols[id]; sym != nil && !sym.IsTest {
-			b.idx.TestCovered[id] = true
-		}
-	}
+	return covered
 }

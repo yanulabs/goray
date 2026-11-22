@@ -59,11 +59,12 @@ func (b *builder) collectImportedInterfaces(pkgs []*packages.Package) {
 		if !b.inModule(p.PkgPath) || p.Types == nil {
 			continue
 		}
-		for impPath, imported := range p.Imports {
-			if imported == nil || imported.Types == nil {
+		for _, imported := range p.Types.Imports() {
+			if imported == nil {
 				continue
 			}
-			scope := imported.Types.Scope()
+			impPath := imported.Path()
+			scope := imported.Scope()
 			for _, name := range scope.Names() {
 				if !token.IsExported(name) {
 					continue

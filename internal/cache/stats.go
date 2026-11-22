@@ -100,6 +100,10 @@ func (c *Cache) Stats(ctx context.Context) (Stats, error) {
 		}
 		stats.SummaryStates[state] = count
 	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return Stats{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return Stats{}, err
 	}
@@ -117,6 +121,10 @@ FROM `+c.summaryTable("summary_cache")+` ORDER BY last_accessed_at DESC LIMIT 10
 			return Stats{}, err
 		}
 		stats.RecentSummaries = append(stats.RecentSummaries, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return Stats{}, err
 	}
 	if err := rows.Close(); err != nil {
 		return Stats{}, err

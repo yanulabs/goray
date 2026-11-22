@@ -102,6 +102,7 @@ ON CONFLICT(symbol_id, prompt_version) DO UPDATE SET
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	c.generation.Add(1)
 	for _, item := range prepared {
 		c.forgetTouch(item.sym.ContentHash)
 	}

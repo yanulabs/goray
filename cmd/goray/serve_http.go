@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -137,6 +138,9 @@ func startReportServer(ctx context.Context, ln net.Listener, store *index.Store,
 	server := &http.Server{
 		Handler:           reportHandler(store, summaries, logger),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 	go func() {
 		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -152,14 +156,42 @@ func startReportServer(ctx context.Context, ln net.Listener, store *index.Store,
 	return server
 }
 
+type reportSnapshot struct {
+	mu         sync.Mutex
+	idx        *index.Index
+	generation uint64
+	built      bool
+	data       render.HTMLReport
+}
+
+func (c *reportSnapshot) get(ctx context.Context, store *index.Store, summaries *cache.Cache) (render.HTMLReport, error) {
+	idx, err := store.Wait(ctx)
+	if err != nil {
+		return render.HTMLReport{}, fmt.Errorf("index is not ready: %w", err)
+	}
+	var generation uint64
+	if summaries != nil {
+		generation = summaries.Generation()
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.built && c.idx == idx && c.generation == generation {
+		return c.data, nil
+	}
+	data, err := report.BuildFromCache(ctx, idx, summaries)
+	if err != nil {
+		return render.HTMLReport{}, err
+	}
+	c.idx, c.generation, c.data, c.built = idx, generation, data, true
+	return data, nil
+}
+
 func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
+	snapshot := &reportSnapshot{}
 	build := func(ctx context.Context) (render.HTMLReport, error) {
-		idx, err := store.Wait(ctx)
-		if err != nil {
-			return render.HTMLReport{}, fmt.Errorf("index is not ready: %w", err)
-		}
-		return report.Build(ctx, idx, summaries)
+		return snapshot.get(ctx, store, summaries)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {

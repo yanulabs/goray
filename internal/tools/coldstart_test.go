@@ -17,8 +17,10 @@ func (indexingIndexer) Wait(context.Context) (*index.Index, error) {
 func (indexingIndexer) Status() index.Status {
 	return index.Status{IndexState: index.StateInitializing}
 }
-func (indexingIndexer) Root() string   { return "." }
-func (indexingIndexer) Rebuild() error { return nil }
+func (indexingIndexer) Root() string { return "." }
+func (indexingIndexer) RebuildContext(context.Context) error {
+	return nil
+}
 
 func TestToolsReturnStructuredIndexingState(t *testing.T) {
 	localOnly := map[string]bool{

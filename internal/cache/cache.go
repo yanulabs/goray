@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,10 +37,17 @@ type Cache struct {
 	stop      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+	closeErr  error
 
 	gcMu   sync.Mutex
 	lastGC time.Time
+
+	generation atomic.Uint64
 }
+
+// Generation increments whenever stored summaries or working rows change.
+// Read-side caches use it to invalidate derived payloads.
+func (c *Cache) Generation() uint64 { return c.generation.Load() }
 
 type touchKey struct {
 	contentHash   string
@@ -161,28 +169,27 @@ END`
 
 // Close flushes pending LRU touches and closes SQLite.
 func (c *Cache) Close() error {
-	var err error
 	c.closeOnce.Do(func() {
 		close(c.stop)
 		<-c.done
 		if flushErr := c.FlushTouches(context.Background()); flushErr != nil {
-			err = flushErr
+			c.closeErr = flushErr
 		}
 		if c.path != ":memory:" {
-			if checkpointErr := checkpoint(context.Background(), c.db, "main"); checkpointErr != nil && err == nil {
-				err = checkpointErr
+			if checkpointErr := checkpoint(context.Background(), c.db, "main"); checkpointErr != nil && c.closeErr == nil {
+				c.closeErr = checkpointErr
 			}
 		}
 		if c.split && c.summaryPath != ":memory:" {
-			if checkpointErr := checkpoint(context.Background(), c.db, "summaries"); checkpointErr != nil && err == nil {
-				err = checkpointErr
+			if checkpointErr := checkpoint(context.Background(), c.db, "summaries"); checkpointErr != nil && c.closeErr == nil {
+				c.closeErr = checkpointErr
 			}
 		}
-		if closeErr := c.db.Close(); closeErr != nil && err == nil {
-			err = closeErr
+		if closeErr := c.db.Close(); closeErr != nil && c.closeErr == nil {
+			c.closeErr = closeErr
 		}
 	})
-	return err
+	return c.closeErr
 }
 
 func (c *Cache) touchLoop() {

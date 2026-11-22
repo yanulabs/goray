@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,11 @@ import (
 // return value reports whether an incremental path was used. Any unsafe or
 // ambiguous condition falls back to a full rebuild.
 func BuildIncremental(rootDir string, opts BuildOptions, prev *Index, changed []string) (*Index, bool, error) {
+	return BuildIncrementalContext(context.Background(), rootDir, opts, prev, changed)
+}
+
+// BuildIncrementalContext is BuildIncremental with cancellation.
+func BuildIncrementalContext(ctx context.Context, rootDir string, opts BuildOptions, prev *Index, changed []string) (*Index, bool, error) {
 	start := time.Now()
 	absRoot, err := filepath.Abs(rootDir)
 	if err != nil {
@@ -25,7 +31,7 @@ func BuildIncremental(rootDir string, opts BuildOptions, prev *Index, changed []
 	}
 
 	full := func() (*Index, bool, error) {
-		idx, err := BuildWithOptions(absRoot, opts)
+		idx, err := BuildWithOptionsContext(ctx, absRoot, opts)
 		return idx, false, err
 	}
 	if prev == nil || prev.RootDir != absRoot || len(prev.pkgs) == 0 {
@@ -71,7 +77,7 @@ func BuildIncremental(rootDir string, opts BuildOptions, prev *Index, changed []
 		return full()
 	}
 
-	pkgs, testPkgs, ok := loadAffectedPackages(opts, prev, affected)
+	pkgs, testPkgs, ok := loadAffectedPackages(ctx, opts, prev, affected)
 	if !ok {
 		return full()
 	}
@@ -83,7 +89,7 @@ func BuildIncremental(rootDir string, opts BuildOptions, prev *Index, changed []
 
 	merged := mergePackages(prev.pkgs, pkgs)
 	mergedTests := mergeTestPackages(prev.testPkgs, testPkgs, affected)
-	idx, err := buildFromPackages(absRoot, opts, merged, mergedTests, start)
+	idx, err := buildFromPackages(ctx, absRoot, opts, merged, mergedTests, start)
 	if err != nil {
 		return nil, true, err
 	}
@@ -138,7 +144,7 @@ func reverseImportClosure(idx *Index, dirty map[string]bool) map[string]bool {
 // incrementalLoadHook lets tests observe exactly which packages are reloaded.
 var incrementalLoadHook func([]string)
 
-func loadAffectedPackages(opts BuildOptions, prev *Index, affected map[string]bool) ([]*packages.Package, []*packages.Package, bool) {
+func loadAffectedPackages(ctx context.Context, opts BuildOptions, prev *Index, affected map[string]bool) ([]*packages.Package, []*packages.Package, bool) {
 	paths := make([]string, 0, len(affected))
 	for pkg := range affected {
 		paths = append(paths, pkg)
@@ -148,62 +154,55 @@ func loadAffectedPackages(opts BuildOptions, prev *Index, affected map[string]bo
 		incrementalLoadHook(append([]string{}, paths...))
 	}
 
-	config := &packages.Config{Mode: loadMode}
+	config := &packages.Config{Context: ctx, Dir: prev.RootDir, Mode: loadMode}
 	if len(opts.Tags) > 0 {
 		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
 	}
-	seen := map[string]*packages.Package{}
-	var loaded []*packages.Package
+	// One load for every affected package keeps go list and export-data work
+	// proportional to the dependency graph instead of the package count.
+	loaded, err := packages.Load(config, paths...)
+	if err != nil {
+		return nil, nil, false
+	}
+	byPath := make(map[string]*packages.Package, len(loaded))
+	for _, pkg := range loaded {
+		if pkg.PkgPath != "" {
+			byPath[pkg.PkgPath] = pkg
+		}
+	}
+	pkgs := make([]*packages.Package, 0, len(paths))
 	for _, pkgPath := range paths {
 		info := prev.Packages[pkgPath]
 		if info == nil || info.Dir == "" {
 			return nil, nil, false
 		}
-		cfg := *config
-		cfg.Dir = info.Dir
-		pkgs, err := packages.Load(&cfg, ".")
-		if err != nil {
-			return nil, nil, false
-		}
-		var found *packages.Package
-		for _, p := range pkgs {
-			if p.PkgPath == pkgPath {
-				found = p
-				break
-			}
-		}
+		found := byPath[pkgPath]
 		if found == nil {
 			return nil, nil, false
 		}
-		seen[pkgPath] = found
-		loaded = append(loaded, found)
+		pkgs = append(pkgs, found)
 	}
 
-	testSeen := map[string]*packages.Package{}
 	testConfig := *config
 	testConfig.Mode |= packages.NeedForTest
 	testConfig.Tests = true
-	var testLoaded []*packages.Package
-	for _, pkgPath := range paths {
-		info := prev.Packages[pkgPath]
-		cfg := testConfig
-		cfg.Dir = info.Dir
-		pkgs, err := packages.Load(&cfg, ".")
-		if err != nil {
-			return nil, nil, false
-		}
-		for _, p := range pkgs {
-			if p.ForTest == "" || p.Name == "main" && strings.HasSuffix(p.PkgPath, ".test") {
-				continue
-			}
-			if testSeen[p.ID] != nil {
-				continue
-			}
-			testSeen[p.ID] = p
-			testLoaded = append(testLoaded, p)
-		}
+	testLoaded, err := packages.Load(&testConfig, paths...)
+	if err != nil {
+		return nil, nil, false
 	}
-	return loaded, testLoaded, true
+	testSeen := map[string]*packages.Package{}
+	testPkgs := make([]*packages.Package, 0, len(testLoaded))
+	for _, pkg := range testLoaded {
+		if pkg.ForTest == "" || pkg.Name == "main" && strings.HasSuffix(pkg.PkgPath, ".test") {
+			continue
+		}
+		if testSeen[pkg.ID] != nil {
+			continue
+		}
+		testSeen[pkg.ID] = pkg
+		testPkgs = append(testPkgs, pkg)
+	}
+	return pkgs, testPkgs, true
 }
 
 func mergePackages(prev, fresh []*packages.Package) []*packages.Package {

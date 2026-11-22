@@ -8,17 +8,17 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-func (b *builder) indexReferences(pkgs []*packages.Package) {
+func (b *builder) indexReferences(pkgs []*packages.Package, testOnly bool) {
 	for _, p := range pkgs {
 		pi, ok := b.pkgInfoFor(p)
 		if !ok || p.TypesInfo == nil || p.Fset == nil {
 			continue
 		}
-		b.indexPackageReferences(p, pi)
+		b.indexPackageReferences(p, pi, testOnly)
 	}
 }
 
-func (b *builder) indexPackageReferences(p *packages.Package, pi *PkgInfo) {
+func (b *builder) indexPackageReferences(p *packages.Package, pi *PkgInfo, testOnly bool) {
 	srcMod := pi.ModuleArea
 	recordUse := func(id *ast.Ident, fromFunc string) {
 		b.recordUse(p, srcMod, id, fromFunc)
@@ -29,7 +29,7 @@ func (b *builder) indexPackageReferences(p *packages.Package, pi *PkgInfo) {
 			continue
 		}
 		isTest := strings.HasSuffix(p.Fset.Position(file.Pos()).Filename, "_test.go")
-		if b.testPass && !isTest {
+		if testOnly && !isTest {
 			continue
 		}
 		b.collectFieldOwners(p, file)
@@ -312,7 +312,7 @@ func selectorExpr(expr ast.Expr) *ast.SelectorExpr {
 
 // collectImportSites records every import declaration, including blank and dot
 // imports. It runs for production and test packages.
-func (b *builder) collectImportSites(pkgs []*packages.Package) {
+func (b *builder) collectImportSites(pkgs []*packages.Package, testOnly bool) {
 	for _, p := range pkgs {
 		if p.Fset == nil {
 			continue
@@ -323,7 +323,7 @@ func (b *builder) collectImportSites(pkgs []*packages.Package) {
 			}
 			path := p.Fset.Position(file.Pos()).Filename
 			isTest := strings.HasSuffix(path, "_test.go")
-			if b.testPass && !isTest {
+			if testOnly && !isTest {
 				continue
 			}
 			for _, spec := range file.Imports {
