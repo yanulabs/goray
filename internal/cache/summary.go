@@ -52,6 +52,69 @@ type SummaryContext struct {
 	ParentModuleSummaryCached  *bool     `json:"parent_module_summary_cached,omitempty"`
 	ParentPackageSyncState     SyncState `json:"parent_package_sync_state,omitempty"`
 	ParentModuleSyncState      SyncState `json:"parent_module_sync_state,omitempty"`
+
+	Module *ModuleContext `json:"module_context,omitempty"`
+}
+
+// ModuleContext is the compact architectural context returned for mod: targets.
+type ModuleContext struct {
+	Name                   string              `json:"name"`
+	ProdLOC                int                 `json:"prod_loc"`
+	TestLOC                int                 `json:"test_loc"`
+	Packages               int                 `json:"packages"`
+	Files                  int                 `json:"files"`
+	PackageRollups         []ModulePackage     `json:"package_rollups"`
+	DependencyEdges        ModuleEdges         `json:"dependency_edges"`
+	ExportedAPI            []ModuleAPI         `json:"exported_api,omitempty"`
+	KeyFiles               []ModuleFileExcerpt `json:"key_files,omitempty"`
+	CachedPackageSummaries []string            `json:"cached_package_summaries,omitempty"`
+	Truncated              bool                `json:"truncated"`
+}
+
+// ModulePackage is one package rollup inside a module summary context.
+type ModulePackage struct {
+	ID        string   `json:"id"`
+	PkgPath   string   `json:"pkg_path"`
+	RelPath   string   `json:"rel_path"`
+	Name      string   `json:"name"`
+	ProdFiles int      `json:"prod_files"`
+	Files     int      `json:"files"`
+	ProdLOC   int      `json:"prod_loc"`
+	TestLOC   int      `json:"test_loc"`
+	Exported  int      `json:"exported"`
+	TestOnly  bool     `json:"test_only,omitempty"`
+	Imports   []string `json:"imports,omitempty"`
+	Doc       string   `json:"doc,omitempty"`
+}
+
+// ModuleEdge is one incoming or outgoing module dependency edge.
+type ModuleEdge struct {
+	Module  string `json:"module"`
+	Symbols int    `json:"symbols"`
+}
+
+// ModuleEdges is the module-level dependency edge projection.
+type ModuleEdges struct {
+	Out []ModuleEdge `json:"out"`
+	In  []ModuleEdge `json:"in"`
+}
+
+// ModuleAPI is one exported declaration inside a module.
+type ModuleAPI struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	PkgPath   string `json:"pkg_path"`
+	Signature string `json:"signature,omitempty"`
+	FilePath  string `json:"file_path,omitempty"`
+	StartLine int    `json:"start_line,omitempty"`
+}
+
+// ModuleFileExcerpt is a bounded excerpt of one key production file.
+type ModuleFileExcerpt struct {
+	Path      string `json:"path"`
+	LOC       int    `json:"loc"`
+	Excerpt   string `json:"excerpt"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // StateOf classifies one working symbol.
@@ -272,6 +335,9 @@ func (c *Cache) SummaryContext(ctx context.Context, id string, idx *index.Index)
 			return SummaryContext{}, err
 		}
 	}
+	if sym.Kind == "module" {
+		c.populateModuleContext(sym, idx, &out)
+	}
 	if state == StateSoftStale || state == StateHardStale {
 		for _, dep := range out.Dependencies {
 			if dep.SyncState != StateSynced {
@@ -312,6 +378,145 @@ func (c *Cache) populateSummaryParents(ctx context.Context, sym *WorkingSymbol, 
 		out.ParentModuleSummaryCached = &cached
 		out.ParentModuleSyncState = state
 	}
+}
+
+const (
+	moduleAPILimit        = 40
+	moduleKeyFileLimit    = 3
+	moduleKeyFileMaxRunes = 1200
+	modulePackageDocRunes = 300
+)
+
+// populateModuleContext adds compact package rollups, module edges, exported
+// API signatures, key file excerpts, and cached child package summary IDs for
+// mod: targets. The payload is bounded so a direct get_summary_context call
+// stays small enough to feed into upsert_summaries without extra probing.
+func (c *Cache) populateModuleContext(sym *WorkingSymbol, idx *index.Index, out *SummaryContext) {
+	if sym == nil || idx == nil {
+		return
+	}
+	mod := idx.Modules[sym.ModuleName]
+	if mod == nil {
+		return
+	}
+	ctx := ModuleContext{
+		Name: sym.ModuleName, ProdLOC: mod.ProdLOC, TestLOC: mod.TestLOC,
+		Packages: mod.Packages, Files: mod.Files,
+		DependencyEdges: ModuleEdges{Out: moduleEdgeList(mod.OutModules), In: moduleEdgeList(mod.InModules)},
+	}
+	for _, pkg := range idx.Packages {
+		if pkg.ModuleArea != sym.ModuleName {
+			continue
+		}
+		rollup := ModulePackage{
+			ID: "pkg:" + pkg.PkgPath, PkgPath: pkg.PkgPath, RelPath: pkg.RelPath, Name: pkg.Name,
+			ProdFiles: pkg.ProdFiles, Files: pkg.Files, ProdLOC: pkg.ProdLOC, TestLOC: pkg.TestLOC,
+			Exported: pkg.Exported, TestOnly: pkg.TestOnly, Imports: pkg.Imports,
+		}
+		if meta := idx.Summary.Get("pkg:" + pkg.PkgPath); meta != nil {
+			if doc, cut := truncateModuleRunes(meta.Doc, modulePackageDocRunes); doc != "" {
+				rollup.Doc = doc
+				if cut {
+					rollup.Doc += "..."
+				}
+			}
+		}
+		ctx.PackageRollups = append(ctx.PackageRollups, rollup)
+	}
+	sort.Slice(ctx.PackageRollups, func(i, j int) bool {
+		if ctx.PackageRollups[i].RelPath != ctx.PackageRollups[j].RelPath {
+			return ctx.PackageRollups[i].RelPath < ctx.PackageRollups[j].RelPath
+		}
+		return ctx.PackageRollups[i].ID < ctx.PackageRollups[j].ID
+	})
+
+	api := make([]ModuleAPI, 0)
+	files := make([]*index.SummarySymbol, 0)
+	if idx.Summary != nil {
+		for _, meta := range idx.Summary.Symbols {
+			if meta.ModuleName != sym.ModuleName {
+				continue
+			}
+			switch meta.Kind {
+			case "module", "package":
+				continue
+			case "file":
+				if !meta.IsTest && !meta.IsGenerated && meta.LOC > 0 {
+					files = append(files, meta)
+				}
+				continue
+			}
+			if !meta.Exported || meta.IsTest || meta.IsGenerated {
+				continue
+			}
+			api = append(api, ModuleAPI{
+				ID: meta.ID, Kind: meta.Kind, PkgPath: meta.PkgPath,
+				Signature: meta.Signature, FilePath: meta.FilePath, StartLine: meta.StartLine,
+			})
+		}
+	}
+	sort.Slice(api, func(i, j int) bool {
+		if api[i].PkgPath != api[j].PkgPath {
+			return api[i].PkgPath < api[j].PkgPath
+		}
+		return api[i].ID < api[j].ID
+	})
+	if len(api) > moduleAPILimit {
+		api = api[:moduleAPILimit]
+		ctx.Truncated = true
+	}
+	ctx.ExportedAPI = api
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].LOC != files[j].LOC {
+			return files[i].LOC > files[j].LOC
+		}
+		return files[i].FilePath < files[j].FilePath
+	})
+	if len(files) > moduleKeyFileLimit {
+		files = files[:moduleKeyFileLimit]
+		ctx.Truncated = true
+	}
+	for _, file := range files {
+		excerpt := readSource(idx, &WorkingSymbol{FilePath: file.FilePath, StartLine: 1, EndLine: file.EndLine})
+		if excerpt == "" {
+			continue
+		}
+		text, cut := truncateModuleRunes(excerpt, moduleKeyFileMaxRunes)
+		if cut {
+			text += "..."
+			ctx.Truncated = true
+		}
+		ctx.KeyFiles = append(ctx.KeyFiles, ModuleFileExcerpt{Path: file.FilePath, LOC: file.LOC, Excerpt: text, Truncated: cut})
+	}
+
+	for _, dep := range out.Dependencies {
+		if dep.Kind == "package" && len(dep.Summary) > 0 {
+			ctx.CachedPackageSummaries = append(ctx.CachedPackageSummaries, dep.ID)
+		}
+	}
+	out.Module = &ctx
+}
+
+func moduleEdgeList(edges map[string][]string) []ModuleEdge {
+	keys := make([]string, 0, len(edges))
+	for key := range edges {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]ModuleEdge, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, ModuleEdge{Module: key, Symbols: len(edges[key])})
+	}
+	return out
+}
+
+func truncateModuleRunes(text string, limit int) (string, bool) {
+	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
+		return text, false
+	}
+	runes := []rune(text)
+	return string(runes[:limit]), true
 }
 
 // Enrich returns a cached summary for existing read tools.
@@ -591,12 +796,29 @@ func (c *Cache) UpsertSummaries(ctx context.Context, items []SummaryInput) ([]Up
 
 	for _, item := range prepared {
 		now := nowString()
-		if _, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, `
 INSERT INTO `+c.summaryTable("summary_cache")+` (content_hash, prompt_version, self_hash, dep_hash, kind, model_id, summary_json, created_at, last_accessed_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(content_hash, prompt_version) DO UPDATE SET last_accessed_at = excluded.last_accessed_at`,
-			item.sym.ContentHash, PromptVersion, item.sym.SelfHash, item.sym.DepHash, item.sym.Kind, item.modelID, string(item.raw), now, now); err != nil {
+ON CONFLICT(content_hash, prompt_version) DO UPDATE SET
+    self_hash = excluded.self_hash,
+    dep_hash = excluded.dep_hash,
+    kind = excluded.kind,
+    model_id = excluded.model_id,
+    summary_json = excluded.summary_json,
+    created_at = excluded.created_at,
+    last_accessed_at = excluded.last_accessed_at`,
+			item.sym.ContentHash, PromptVersion, item.sym.SelfHash, item.sym.DepHash, item.sym.Kind, item.modelID, string(item.raw), now, now)
+		if err != nil {
 			return nil, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if affected == 0 {
+			results[item.index].Status = "validation_error"
+			results[item.index].Error = "summary cache write did not replace a row; retry after reindexing"
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO `+c.summaryTable("symbol_history")+` (symbol_id, prompt_version, last_content_hash, last_self_hash, last_dep_hash, updated_at)
@@ -614,8 +836,22 @@ ON CONFLICT(symbol_id, prompt_version) DO UPDATE SET
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	for _, item := range prepared {
+		c.forgetTouch(item.sym.ContentHash)
+	}
 	c.maybeGC(ctx)
 	return results, nil
+}
+
+// forgetTouch drops a pending LRU timestamp for a key that was just written so
+// a later flush cannot regress the freshly stored last_accessed_at value.
+func (c *Cache) forgetTouch(contentHash string) {
+	if contentHash == "" {
+		return
+	}
+	c.touchMu.Lock()
+	delete(c.touches, touchKey{contentHash: contentHash, promptVersion: PromptVersion})
+	c.touchMu.Unlock()
 }
 
 type funcSummary struct {

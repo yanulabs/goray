@@ -338,6 +338,115 @@ func Leaf() int {
 	}
 }
 
+func TestUpsertOverwritesSameContentHash(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{"a/a.go": `package a
+
+func Leaf() int {
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
+	return 0
+}
+`}
+	c := openTestCache(t)
+	idx := buildSync(t, c, dir, files)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		id   string
+	}{
+		{"module", "mod:a"},
+		{"package", "pkg:" + testModule + "/a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc, err := c.SummaryContext(ctx, tc.id, idx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sc.ContentHash == "" || sc.DepHash == "" {
+				t.Fatalf("context hashes = %+v", sc)
+			}
+
+			summaryA := testArchSummary("payload-a")
+			rawA, err := json.Marshal(summaryA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err := c.UpsertSummaries(ctx, []SummaryInput{{
+				SymbolID: tc.id, Summary: rawA,
+				ExpectedSelfHash: sc.SelfHash, ExpectedDepHash: sc.DepHash,
+				ModelID: "model-v1",
+			}})
+			if err != nil || len(results) != 1 || results[0].Status != "updated" {
+				t.Fatalf("first upsert = %+v (%v)", results, err)
+			}
+
+			var oldJSON, oldModel, oldCreated string
+			if err := c.db.QueryRowContext(ctx,
+				"SELECT summary_json, model_id, created_at FROM summary_cache WHERE content_hash = ? AND prompt_version = ?",
+				sc.ContentHash, PromptVersion).Scan(&oldJSON, &oldModel, &oldCreated); err != nil {
+				t.Fatal(err)
+			}
+			if oldModel != "model-v1" {
+				t.Fatalf("old model = %q", oldModel)
+			}
+
+			// Same source, same hashes: only the payload and model change.
+			time.Sleep(2 * time.Millisecond)
+			summaryB := testArchSummary("payload-b")
+			rawB, err := json.Marshal(summaryB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err = c.UpsertSummaries(ctx, []SummaryInput{{
+				SymbolID: tc.id, Summary: rawB,
+				ExpectedSelfHash: sc.SelfHash, ExpectedDepHash: sc.DepHash,
+				ModelID: "model-v2",
+			}})
+			if err != nil || len(results) != 1 || results[0].Status != "updated" {
+				t.Fatalf("second upsert = %+v (%v)", results, err)
+			}
+
+			var newJSON, newModel, newCreated string
+			if err := c.db.QueryRowContext(ctx,
+				"SELECT summary_json, model_id, created_at FROM summary_cache WHERE content_hash = ? AND prompt_version = ?",
+				sc.ContentHash, PromptVersion).Scan(&newJSON, &newModel, &newCreated); err != nil {
+				t.Fatal(err)
+			}
+			if newJSON == oldJSON || newJSON != string(rawB) {
+				t.Fatalf("payload not replaced:\nold=%s\nnew=%s\nwant=%s", oldJSON, newJSON, rawB)
+			}
+			if newModel != "model-v2" {
+				t.Fatalf("new model = %q", newModel)
+			}
+			if newCreated == oldCreated {
+				t.Fatalf("created_at not refreshed: %q", newCreated)
+			}
+			var rowCount int
+			if err := c.db.QueryRowContext(ctx,
+				"SELECT COUNT(*) FROM summary_cache WHERE content_hash = ? AND prompt_version = ?",
+				sc.ContentHash, PromptVersion).Scan(&rowCount); err != nil {
+				t.Fatal(err)
+			}
+			if rowCount != 1 {
+				t.Fatalf("summary_cache rows = %d", rowCount)
+			}
+
+			readBack, err := c.Lookup(ctx, tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if readBack.State != StateSynced || string(readBack.Summary) != string(rawB) || readBack.ModelID != "model-v2" {
+				t.Fatalf("read back = state %s model %s summary %s", readBack.State, readBack.ModelID, readBack.Summary)
+			}
+			enriched, state, _, err := c.Enrich(ctx, tc.id)
+			if err != nil || state != StateSynced || string(enriched) != string(rawB) {
+				t.Fatalf("enriched = state %s summary %s (%v)", state, enriched, err)
+			}
+		})
+	}
+}
+
 func TestBranchSwitchAndRenameResilience(t *testing.T) {
 	dir := t.TempDir()
 	base := `package a

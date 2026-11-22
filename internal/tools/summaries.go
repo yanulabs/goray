@@ -98,8 +98,8 @@ func (t *toolset) getSummaryContext() mcp.Tool {
 		Name:        "get_summary_context",
 		Description: "Prepares raw source context for WRITING or updating summaries (schema, hashes, staleness, dependencies; max 25, budgeted). Not a reader for cached summaries: use lookup_symbol or the parent package/module summary for reading.",
 		InputSchema: object(map[string]any{
-			"symbol_id":  propString("Canonical symbol ID, full Go identifier, or repository-relative shorthand (single-symbol mode)"),
-			"symbol_ids": map[string]any{"type": "array", "maxItems": 25, "items": map[string]any{"type": "string"}, "description": "Batch symbol IDs in any accepted identifier form (max 25)"},
+			"symbol_id":  propString("Canonical symbol ID (including mod:/pkg:/file: summary targets), full Go identifier, or repository-relative shorthand (single-symbol mode)"),
+			"symbol_ids": map[string]any{"type": "array", "maxItems": 25, "items": map[string]any{"type": "string"}, "description": "Batch symbol or canonical mod:/pkg:/file: IDs in any accepted identifier form (max 25)"},
 			"max_chars":  propInt("Batch output budget in characters (default 40000)"),
 		}),
 		Run: func(ctx context.Context, args map[string]any) (string, bool) {
@@ -171,6 +171,14 @@ func (t *toolset) summaryContextFor(ctx context.Context, idx *index.Index, raw s
 	if len(idx.Symbols) == 0 {
 		return t.summaries.SummaryContext(ctx, raw, idx)
 	}
+	raw = strings.TrimSpace(raw)
+	// Summary targets are not regular Go declarations. Resolve canonical
+	// mod:/pkg:/file: IDs directly against the summary working state before
+	// SingleSymbol, which intentionally classifies package-like inputs as
+	// package_target errors.
+	if id, ok := canonicalSummaryTarget(idx, raw); ok {
+		return t.summaries.SummaryContext(ctx, id, idx)
+	}
 	sym, err := idx.SingleSymbol(raw)
 	if err != nil {
 		return cache.SummaryContext{}, err
@@ -187,6 +195,32 @@ func (t *toolset) summaryContextFor(ctx context.Context, idx *index.Index, raw s
 		return cache.SummaryContext{}, err
 	}
 	return summaryContext, nil
+}
+
+// canonicalSummaryTarget maps canonical summary-cache IDs to their normalized
+// working-symbol form. mod: IDs are accepted for both multi-package and
+// single-package modules; pkg: and file: canonical IDs are handled uniformly
+// instead of being misreported as package targets.
+func canonicalSummaryTarget(idx *index.Index, raw string) (string, bool) {
+	switch {
+	case strings.HasPrefix(raw, "mod:"):
+		name, ok := idx.ResolveModule(raw)
+		if !ok {
+			return "", false
+		}
+		return "mod:" + name, true
+	case strings.HasPrefix(raw, "pkg:"):
+		pkg, ok := idx.ResolvePackage(raw)
+		if !ok {
+			return "", false
+		}
+		return "pkg:" + pkg, true
+	case strings.HasPrefix(raw, "file:"):
+		if idx.Summary.Get(raw) != nil {
+			return raw, true
+		}
+	}
+	return "", false
 }
 
 func (t *toolset) notEligibleContext(ctx context.Context, sym *index.Symbol) cache.SummaryContext {
@@ -252,7 +286,7 @@ func summaryErrorPayload(query string, err error) string {
 			"error":   "package_target",
 			"input":   query,
 			"package": typed.Package,
-			"hint":    "get_summary_context needs a symbol ID; use get_api_surface or request the parent package summary",
+			"hint":    "use a symbol ID or canonical mod:/pkg:/file: summary ID; get_api_surface returns exported symbol IDs for this package",
 		})
 	default:
 		return err.Error()
