@@ -58,120 +58,120 @@ type ImpactRef struct {
 	Test       bool   `json:"test,omitempty"`
 }
 
-// ImpactBySymbol follows references and transitive callers, expanding
-// interface implementations, struct composite literals, fields, and vars.
-func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
-	pkgs := map[string]struct{}{sym.PkgPath: {}}
-	files := map[string]struct{}{sym.File: {}}
-	mods := map[string]struct{}{}
-	callers := map[string]struct{}{}
+// impactAccumulator collects the shared blast-radius sets for symbol and
+// package impact analysis.
+type impactAccumulator struct {
+	pkgs    map[string]struct{}
+	files   map[string]struct{}
+	mods    map[string]struct{}
+	callers map[string]struct{}
+	direct  []ImpactRef
+}
+
+func newImpactAccumulator(sym *Symbol) *impactAccumulator {
+	acc := &impactAccumulator{
+		pkgs:    map[string]struct{}{sym.PkgPath: {}},
+		files:   map[string]struct{}{sym.File: {}},
+		mods:    map[string]struct{}{},
+		callers: map[string]struct{}{},
+	}
 	if sym.ModuleArea != "" {
-		mods[sym.ModuleArea] = struct{}{}
+		acc.mods[sym.ModuleArea] = struct{}{}
 	}
+	return acc
+}
 
-	direct := make([]ImpactRef, 0, len(idx.XRefs[sym.ID]))
-	testRefFiles := map[string]struct{}{}
-	for _, ref := range idx.XRefs[sym.ID] {
-		pkgs[ref.FromPkg] = struct{}{}
-		files[ref.File] = struct{}{}
-		if ref.FromMod != "" {
-			mods[ref.FromMod] = struct{}{}
-		}
-		if ref.FromFuncID != "" {
-			callers[ref.FromFuncID] = struct{}{}
-		}
-		if ref.Test {
-			testRefFiles[ref.File] = struct{}{}
-		}
-		direct = append(direct, ImpactRef{
-			FromPkg: ref.FromPkg, FromMod: ref.FromMod, FromFuncID: ref.FromFuncID,
-			File: ref.File, Line: ref.Line, Test: ref.Test,
-		})
+func (acc *impactAccumulator) addRef(ref XRef) {
+	acc.pkgs[ref.FromPkg] = struct{}{}
+	acc.files[ref.File] = struct{}{}
+	if ref.FromMod != "" {
+		acc.mods[ref.FromMod] = struct{}{}
 	}
-
-	impact := Impact{
-		DirectReferences: direct,
-		Callers:          nil,
+	if ref.FromFuncID != "" {
+		acc.callers[ref.FromFuncID] = struct{}{}
 	}
-	roots := []string{sym.ID}
+	acc.direct = append(acc.direct, ImpactRef{
+		FromPkg: ref.FromPkg, FromMod: ref.FromMod, FromFuncID: ref.FromFuncID,
+		File: ref.File, Line: ref.Line, Test: ref.Test,
+	})
+}
 
-	// Include references to the struct's fields and methods for type targets.
-	if sym.Kind == "struct" || sym.Kind == "type" || sym.Kind == "interface" {
-		for _, other := range idx.Symbols {
-			if other.PkgPath != sym.PkgPath || other.RecvType != sym.Name || other.ID == sym.ID {
+func (acc *impactAccumulator) addSymbol(sym *Symbol) {
+	acc.pkgs[sym.PkgPath] = struct{}{}
+	acc.files[sym.File] = struct{}{}
+	if sym.ModuleArea != "" {
+		acc.mods[sym.ModuleArea] = struct{}{}
+	}
+}
+
+func (acc *impactAccumulator) addCaller(id string, idx *Index) {
+	acc.callers[id] = struct{}{}
+	if sym := idx.Symbols[id]; sym != nil {
+		acc.addSymbol(sym)
+	}
+}
+
+func isTypeTarget(sym *Symbol) bool {
+	return sym.Kind == "struct" || sym.Kind == "type" || sym.Kind == "interface"
+}
+
+func (idx *Index) collectTypeTargetRefs(sym *Symbol, acc *impactAccumulator) {
+	for _, other := range idx.Symbols {
+		if other.PkgPath != sym.PkgPath || other.RecvType != sym.Name || other.ID == sym.ID {
+			continue
+		}
+		for _, ref := range idx.XRefs[other.ID] {
+			acc.addRef(ref)
+		}
+	}
+}
+
+func (idx *Index) collectInterfaceImpact(sym *Symbol, acc *impactAccumulator) (implementations, mocks []ImpactSymbol, roots []string) {
+	for _, match := range idx.IfaceImpls[sym.ID] {
+		impl := idx.Symbols[match.TypeID]
+		if impl == nil {
+			continue
+		}
+		entry := newImpactSymbol(impl)
+		if impl.IsTest {
+			mocks = append(mocks, entry)
+		} else {
+			implementations = append(implementations, entry)
+		}
+		acc.addSymbol(impl)
+		// Calls through the interface reach concrete methods.
+		for _, method := range idx.Symbols {
+			if method.PkgPath != impl.PkgPath || method.RecvType != impl.Name || method.Kind != "method" {
 				continue
 			}
-			for _, ref := range idx.XRefs[other.ID] {
-				pkgs[ref.FromPkg] = struct{}{}
-				files[ref.File] = struct{}{}
-				if ref.FromMod != "" {
-					mods[ref.FromMod] = struct{}{}
-				}
-				if ref.FromFuncID != "" {
-					callers[ref.FromFuncID] = struct{}{}
-				}
-				direct = append(direct, ImpactRef{
-					FromPkg: ref.FromPkg, FromMod: ref.FromMod, FromFuncID: ref.FromFuncID,
-					File: ref.File, Line: ref.Line, Test: ref.Test,
-				})
+			roots = append(roots, method.ID)
+			for _, caller := range idx.Callers[method.ID] {
+				acc.addCaller(caller, idx)
 			}
 		}
 	}
+	return implementations, mocks, roots
+}
 
-	if sym.Kind == "interface" {
-		for _, match := range idx.IfaceImpls[sym.ID] {
-			impl := idx.Symbols[match.TypeID]
-			if impl == nil {
-				continue
-			}
-			entry := newImpactSymbol(impl)
-			if impl.IsTest {
-				impact.TestMocks = append(impact.TestMocks, entry)
-			} else {
-				impact.Implementations = append(impact.Implementations, entry)
-			}
-			pkgs[impl.PkgPath] = struct{}{}
-			files[impl.File] = struct{}{}
-			if impl.ModuleArea != "" {
-				mods[impl.ModuleArea] = struct{}{}
-			}
-			// Calls through the interface reach concrete methods.
-			for _, method := range idx.Symbols {
-				if method.PkgPath != impl.PkgPath || method.RecvType != impl.Name || method.Kind != "method" {
-					continue
-				}
-				roots = append(roots, method.ID)
-				for _, caller := range idx.Callers[method.ID] {
-					callers[caller] = struct{}{}
-					if cs := idx.Symbols[caller]; cs != nil {
-						pkgs[cs.PkgPath] = struct{}{}
-						files[cs.File] = struct{}{}
-						if cs.ModuleArea != "" {
-							mods[cs.ModuleArea] = struct{}{}
-						}
-					}
-				}
-			}
+func (idx *Index) collectCompositeImpact(sym *Symbol, acc *impactAccumulator) (literals, unkeyed []CompositeSite) {
+	for _, site := range idx.CompositeLiterals[sym.ID] {
+		acc.pkgs[site.FromPkg] = struct{}{}
+		acc.files[site.File] = struct{}{}
+		if site.FromMod != "" {
+			acc.mods[site.FromMod] = struct{}{}
+		}
+		if site.FromFunc != "" {
+			acc.callers[site.FromFunc] = struct{}{}
+		}
+		literals = append(literals, site)
+		if site.Unkeyed {
+			unkeyed = append(unkeyed, site)
 		}
 	}
+	return literals, unkeyed
+}
 
-	if sites := idx.CompositeLiterals[sym.ID]; len(sites) > 0 {
-		impact.CompositeLiterals = append(impact.CompositeLiterals, sites...)
-		for _, site := range sites {
-			pkgs[site.FromPkg] = struct{}{}
-			files[site.File] = struct{}{}
-			if site.FromMod != "" {
-				mods[site.FromMod] = struct{}{}
-			}
-			if site.FromFunc != "" {
-				callers[site.FromFunc] = struct{}{}
-			}
-			if site.Unkeyed {
-				impact.UnkeyedLiterals = append(impact.UnkeyedLiterals, site)
-			}
-		}
-	}
-
+func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, depth int, acc *impactAccumulator) {
 	seen := map[string]int{sym.ID: 0}
 	queue := append([]string{sym.ID}, roots...)
 	for _, root := range roots {
@@ -191,30 +191,48 @@ func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
 			}
 			seen[caller] = seen[cur] + 1
 			queue = append(queue, caller)
-			callers[caller] = struct{}{}
-			if cs, ok := idx.Symbols[caller]; ok {
-				pkgs[cs.PkgPath] = struct{}{}
-				files[cs.File] = struct{}{}
-				if cs.ModuleArea != "" {
-					mods[cs.ModuleArea] = struct{}{}
-				}
-			}
+			acc.addCaller(caller, idx)
 		}
 	}
+}
 
-	result := idx.impact(pkgs, files, mods, callers)
-	result.DirectReferences = dedupeRefs(direct)
-	result.TransitiveCallers = sortedKeys(callers)
-	result.AffectedPackages = sortedPackages(pkgs)
-	result.TestPackagesToRun = append([]string{}, result.TestPackages...)
-	impact.Implementations = sortImpactSymbols(impact.Implementations)
-	impact.TestMocks = sortImpactSymbols(impact.TestMocks)
-	if len(impact.Implementations) > 0 || len(impact.TestMocks) > 0 {
-		result.Implementations = impact.Implementations
-		result.TestMocks = impact.TestMocks
+// ImpactBySymbol follows references and transitive callers, expanding
+// interface implementations, struct composite literals, fields, and vars.
+func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
+	acc := newImpactAccumulator(sym)
+	for _, ref := range idx.XRefs[sym.ID] {
+		acc.addRef(ref)
 	}
-	result.CompositeLiterals = impact.CompositeLiterals
-	result.UnkeyedLiterals = impact.UnkeyedLiterals
+
+	// Include references to the struct's fields and methods for type targets.
+	if isTypeTarget(sym) {
+		idx.collectTypeTargetRefs(sym, acc)
+	}
+
+	var implementations, mocks []ImpactSymbol
+	roots := []string{sym.ID}
+	if sym.Kind == "interface" {
+		var interfaceRoots []string
+		implementations, mocks, interfaceRoots = idx.collectInterfaceImpact(sym, acc)
+		roots = append(roots, interfaceRoots...)
+	}
+
+	literals, unkeyed := idx.collectCompositeImpact(sym, acc)
+	idx.walkImpactCallers(sym, roots, depth, acc)
+
+	result := idx.impact(acc.pkgs, acc.files, acc.mods, acc.callers)
+	result.DirectReferences = dedupeRefs(acc.direct)
+	result.TransitiveCallers = sortedKeys(acc.callers)
+	result.AffectedPackages = sortedPackages(acc.pkgs)
+	result.TestPackagesToRun = append([]string{}, result.TestPackages...)
+	implementations = sortImpactSymbols(implementations)
+	mocks = sortImpactSymbols(mocks)
+	if len(implementations) > 0 || len(mocks) > 0 {
+		result.Implementations = implementations
+		result.TestMocks = mocks
+	}
+	result.CompositeLiterals = literals
+	result.UnkeyedLiterals = unkeyed
 	return result
 }
 
