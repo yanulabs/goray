@@ -36,7 +36,7 @@ GORELEASER ?= goreleaser
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build install uninstall install-skill uninstall-skill install-mcp uninstall-mcp install-all uninstall-all test test-race vet lint fmt fmt-check verify release-check release-snapshot tidy db-info clean help web-install web-dev web-typecheck web-build
+.PHONY: all build install uninstall install-skill uninstall-skill install-mcp uninstall-mcp install-all uninstall-all test test-race cover vet lint fmt fmt-check verify release-check release-snapshot tidy db-info clean help web-install web-dev web-typecheck web-build
 
 define RESOLVE_BIN
 	bin="$$($(GO) env GOBIN)"; \
@@ -689,15 +689,18 @@ lint: ## Run golangci-lint
 fmt: ## Format Go sources
 	gofmt -w .
 
-fmt-check: ## Fail if Go sources are not formatted
-	@out="$$(gofmt -l .)"; \
+fmt-check: ## Fail if tracked Go sources are not formatted
+	@out="$$(git ls-files -z -- '*.go' | xargs -0 gofmt -l)"; \
 	if [ -n "$$out" ]; then \
 		echo "gofmt required for:"; \
 		echo "$$out"; \
 		exit 1; \
 	fi
 
-verify: fmt-check vet lint test-race ## Run fmt-check, vet, lint, and test-race
+cover: ## Run tests with coverage and enforce documented floors
+	./scripts/check-coverage.sh
+
+verify: fmt-check vet lint test-race cover ## Run fmt-check, vet, lint, test-race, and coverage
 
 release-check: ## Validate the GoReleaser configuration
 	@command -v "$(GORELEASER)" >/dev/null 2>&1 || { echo "error: $(GORELEASER) not found; install goreleaser v2" >&2; exit 1; }
