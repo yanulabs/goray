@@ -14,11 +14,23 @@ function metricHint(node: ReportTreeNode, index: EntityIndex): string {
   switch (node.kind) {
     case "module": {
       const card = entity.moduleCard;
-      return card ? `${card.packages} pkgs · ${formatCompact(card.prod_loc)} loc` : "";
+      if (!card) {
+        return "";
+      }
+      const loc = entity.metrics.testOnly
+        ? `${formatCompact(entity.metrics.testLoc ?? 0)} test loc`
+        : `${formatCompact(card.prod_loc)} loc`;
+      return `${card.packages} pkgs · ${loc}`;
     }
     case "package": {
       const card = entity.packageCard;
-      return card ? `${formatCompact(card.prod_loc)} loc · in ${card.fan_in}` : "";
+      if (!card) {
+        return "";
+      }
+      const loc = entity.metrics.testOnly
+        ? `${formatCompact(entity.metrics.testLoc ?? 0)} test loc`
+        : `${formatCompact(card.prod_loc)} loc`;
+      return `${loc} · in ${card.fan_in}`;
     }
     case "func":
     case "method":
@@ -131,6 +143,11 @@ export function ExplorerView({
             <span className="min-w-0 truncate font-mono text-[11px] text-zinc-800 dark:text-zinc-100">
               {node.kind === "file" ? truncateMiddle(node.label, 80) : node.label}
             </span>
+            {entity?.metrics.testOnly ? (
+              <span className="shrink-0 rounded border border-indigo-300 bg-indigo-50 px-1 font-mono text-[8px] uppercase tracking-wide text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">
+                test-only
+              </span>
+            ) : null}
             {entity?.untracked ? (
               <span className="shrink-0 font-mono text-[8px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
                 untracked

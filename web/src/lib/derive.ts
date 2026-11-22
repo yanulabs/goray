@@ -1,5 +1,7 @@
 import type {
+  GraphScope,
   Report,
+  ReportGraph,
   ReportInterface,
   ReportModuleCard,
   ReportPackageCard,
@@ -14,6 +16,53 @@ export interface EntityMetrics {
   fanIn: number;
   fanOut: number;
   testCovered?: boolean;
+  testLoc?: number;
+  testOnly?: boolean;
+}
+
+export interface GraphNodeMeta {
+  testLoc: number;
+  testOnly: boolean;
+}
+
+// The Go report emits test_only directly. Older embedded payloads only carry
+// prod_loc/test_loc, so apply the same classification the backend uses: no
+// production LOC and at least one test LOC. Genuinely empty packages/modules
+// (both zero) are not test-only.
+export function isTestOnlyCard(card: {
+  test_only?: boolean;
+  prod_loc: number;
+  test_loc: number;
+}): boolean {
+  return card.test_only === true || (card.prod_loc === 0 && card.test_loc > 0);
+}
+
+export function buildGraphNodeMeta(
+  report: Report,
+  scope: GraphScope,
+  graph: ReportGraph,
+): Map<string, GraphNodeMeta> {
+  const byID = new Map<string, GraphNodeMeta>();
+  const cards = scope === "modules" ? report.modules : report.packages;
+  for (const card of cards) {
+    byID.set(card.id, {
+      testLoc: card.test_loc,
+      testOnly: isTestOnlyCard(card),
+    });
+  }
+  // Tolerate payloads that classify the graph node itself even when the card
+  // is absent (for example a package filtered out of the explorer tree).
+  for (const node of graph.nodes) {
+    if (node.test_only !== true) {
+      continue;
+    }
+    const existing = byID.get(node.id);
+    byID.set(node.id, {
+      testLoc: existing?.testLoc ?? 0,
+      testOnly: true,
+    });
+  }
+  return byID;
 }
 
 export interface Entity {
@@ -93,6 +142,8 @@ export function buildEntityIndex(report: Report): EntityIndex {
         complexity: 0,
         fanIn: card.fan_in,
         fanOut: card.fan_out,
+        testLoc: card.test_loc,
+        testOnly: isTestOnlyCard(card),
       },
       packageCard: card,
     });
@@ -119,6 +170,8 @@ export function buildEntityIndex(report: Report): EntityIndex {
         complexity: 0,
         fanIn: card.in_modules,
         fanOut: card.out_modules,
+        testLoc: card.test_loc,
+        testOnly: isTestOnlyCard(card),
       },
       moduleCard: card,
     });
