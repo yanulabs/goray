@@ -27,7 +27,7 @@ go install github.com/yanulabs/goray/cmd/goray@v0.1.0
 goray version
 ```
 
-`goray` is pure Go with `CGO_ENABLED=0`; installed builds report their module version through `goray version`.
+Building from source requires Go 1.26.11 or newer. `goray` is pure Go with `CGO_ENABLED=0`; installed builds report their module version through `goray version`.
 
 ### Prebuilt binaries
 
