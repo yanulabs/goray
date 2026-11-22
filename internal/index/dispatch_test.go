@@ -24,6 +24,10 @@ type Extended interface {
 type Generic[T any] struct{ Value T }
 
 func (g Generic[T]) Charge(int) error { return nil }
+
+type Inline interface {
+	interface{ Ping() error }
+}
 `,
 		"payments/payments.go": `package payments
 
@@ -230,6 +234,9 @@ func TestGenericAndEmbeddedInterfacesDoNotPanic(t *testing.T) {
 	}
 	if idx.Symbols["example.com/ports/ports.Extended"] == nil {
 		t.Fatal("embedded interface not indexed")
+	}
+	if idx.Symbols["example.com/ports/ports.Inline"] == nil {
+		t.Fatal("inline embedded interface not indexed")
 	}
 }
 

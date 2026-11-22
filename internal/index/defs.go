@@ -216,7 +216,14 @@ func (b *builder) registerInterfaceMethods(id string, iface *types.Interface) {
 			continue
 		}
 		b.ifaceOwner[method] = id
-		key := method.Pkg().Path() + "." + method.Name()
+		// Methods declared in anonymous/embedded interface literals can have a
+		// nil package. The call-site resolver also has the receiver type ID, so
+		// this name-based fallback is optional and must not panic.
+		pkgPath := ""
+		if method.Pkg() != nil {
+			pkgPath = method.Pkg().Path()
+		}
+		key := pkgPath + "." + method.Name()
 		b.ifaceMethod[key] = append(b.ifaceMethod[key], id)
 	}
 }
