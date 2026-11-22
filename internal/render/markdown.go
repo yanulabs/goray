@@ -27,12 +27,19 @@ func (m markdown) RenderCodebaseMap(idx *index.Index) string {
 	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, mod := range idx.ModulesByLOC() {
 		label := mod.Name
+		if mod.TestOnly {
+			label += " [test-only]"
+		}
 		if mod.AllUntracked {
 			label += " [untracked]"
 		}
-		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d | %d |\n",
+		loc := fmt.Sprintf("%d", mod.ProdLOC)
+		if mod.TestOnly {
+			loc = fmt.Sprintf("%d test loc", mod.TestLOC)
+		}
+		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %s | %d | %d |\n",
 			label, mod.Packages, mod.Files, mod.GeneratedFiles, mod.UntrackedFiles,
-			mod.ProdLOC, len(mod.InModules), len(mod.OutModules))
+			loc, len(mod.InModules), len(mod.OutModules))
 	}
 
 	b.WriteString("\n## Cross-Module Graph\n\n")
@@ -93,13 +100,20 @@ func (m markdown) RenderCodebaseMap(idx *index.Index) string {
 func (markdown) RenderModule(idx *index.Index, mod *index.ModSummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Module `%s`\n\n", mod.Name)
+	if mod.TestOnly {
+		fmt.Fprintf(&b, "- Classification: **test-only** (no production files; %d test LOC)\n", mod.TestLOC)
+	}
 	fmt.Fprintf(&b, "- Prod LOC: %d | Test LOC: %d | Packages: %d\n", mod.ProdLOC, mod.TestLOC, mod.Packages)
 	fmt.Fprintf(&b, "- Root Exported: %d | `.Ports()` calls: %d | Goroutines: %d\n\n",
 		mod.RootExported, mod.PortsCalls, mod.Goroutines)
 
 	b.WriteString("## Subpackages\n| RelPath | Prod LOC | Test LOC | Exported | `.Ports()` |\n|---|---:|---:|---:|---:|\n")
 	for _, pkg := range modulePackages(idx, mod.Name) {
-		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d |\n", pkg.RelPath, pkg.ProdLOC, pkg.TestLOC, pkg.Exported, pkg.PortsCalls)
+		label := pkg.RelPath
+		if pkg.TestOnly {
+			label += " [test-only]"
+		}
+		fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d |\n", label, pkg.ProdLOC, pkg.TestLOC, pkg.Exported, pkg.PortsCalls)
 	}
 
 	b.WriteString("\n## Outgoing Module Deps\n")

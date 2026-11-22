@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,6 +40,163 @@ func TestListenLocalAndBanner(t *testing.T) {
 			t.Fatalf("banner missing %q:\n%s", want, banner.String())
 		}
 	}
+}
+
+func occupyPort(t *testing.T) (net.Listener, int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln, ln.Addr().(*net.TCPAddr).Port
+}
+
+func TestListenConfiguredFallbackStrictAndErrors(t *testing.T) {
+	_, busy := occupyPort(t)
+
+	result, err := listenConfigured(listenConfig{port: busy, portRange: 200, host: "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = result.listener.Close() }()
+	if !result.fallback || result.port == busy || result.requested != busy {
+		t.Fatalf("result = %+v", result)
+	}
+
+	if _, err := listenConfigured(listenConfig{port: busy, portRange: 1, host: "127.0.0.1"}); err == nil ||
+		!strings.Contains(err.Error(), "no free port in range") {
+		t.Fatalf("exhausted range error = %v", err)
+	}
+	if _, err := listenConfigured(listenConfig{port: busy, portRange: 5, host: "127.0.0.1", strict: true}); err == nil ||
+		!strings.Contains(err.Error(), "strict port") {
+		t.Fatalf("strict error = %v", err)
+	}
+
+	zero, err := listenConfigured(listenConfig{port: 0, portRange: 10, host: "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = zero.listener.Close() }()
+	if zero.port == 0 || zero.fallback {
+		t.Fatalf("port 0 result = %+v", zero)
+	}
+
+	if _, err := listenConfigured(listenConfig{port: 0, portRange: 10, host: "invalid host name"}); err == nil ||
+		isAddrInUse(err) {
+		t.Fatalf("invalid host error = %v", err)
+	}
+}
+
+func TestServePortEnvAndFlagPrecedence(t *testing.T) {
+	t.Setenv("GORAY_PORT", "5000")
+	t.Setenv("GORAY_PORT_RANGE", "5")
+	t.Setenv("GORAY_HOST", "0.0.0.0")
+	t.Setenv("GORAY_STRICT_PORT", "true")
+	t.Setenv("GORAY_PORT_FILE", "/tmp/env-port-file")
+	opts, err := parseServeArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.port != 5000 || opts.portRange != 5 || opts.host != "0.0.0.0" || !opts.strictPort || opts.portFile != "/tmp/env-port-file" {
+		t.Fatalf("env options = %+v", opts)
+	}
+	opts, err = parseServeArgs([]string{"--port", "5001", "--port-range", "7", "--host", "127.0.0.1", "--strict-port=false", "--port-file", "/tmp/flag-port-file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.port != 5001 || opts.portRange != 7 || opts.host != "127.0.0.1" || opts.strictPort || opts.portFile != "/tmp/flag-port-file" {
+		t.Fatalf("flag options = %+v", opts)
+	}
+	if _, err := parseServeArgs([]string{"--port-range", "0"}); err == nil {
+		t.Fatal("zero port range should fail")
+	}
+}
+
+func TestServePortFileAndMovedPortNotice(t *testing.T) {
+	root, _, _ := newTestModule(t)
+	_, busy := occupyPort(t)
+	portFile := filepath.Join(t.TempDir(), "goray.port")
+	var stdout, stderr bytes.Buffer
+	var opened string
+	var portFileBody string
+	opener := func(url string) error {
+		opened = url
+		data, err := os.ReadFile(portFile)
+		if err != nil {
+			return err
+		}
+		portFileBody = string(data)
+		return nil
+	}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"shutdown"}` + "\n")
+	opts := serveOptions{
+		path: root, dbPath: ":memory:", logLevel: "off", port: busy, portRange: 200,
+		host: "127.0.0.1", portFile: portFile, noWatch: true, open: true,
+	}
+	if err := serveContext(context.Background(), opts, input, &stdout, &stderr, opener); err != nil {
+		t.Fatal(err)
+	}
+	if opened == "" || !strings.Contains(opened, ":") {
+		t.Fatalf("opened URL = %q", opened)
+	}
+	port := listenerPortString(opened)
+	if port == fmt.Sprintf("%d", busy) {
+		t.Fatalf("serve did not move off busy port %d", busy)
+	}
+	if !strings.Contains(portFileBody, "GORAY_REPORT_URL="+opened) || !strings.Contains(portFileBody, "PID=") {
+		t.Fatalf("port file = %q", portFileBody)
+	}
+	if _, err := os.Stat(portFile); !os.IsNotExist(err) {
+		t.Fatalf("port file not removed on clean shutdown: %v", err)
+	}
+	if !strings.Contains(stderr.String(), fmt.Sprintf("Port %d is in use", busy)) {
+		t.Fatalf("missing moved-port notice:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "GORAY_REPORT_URL="+opened) {
+		t.Fatalf("missing machine-readable URL:\n%s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "GORAY_REPORT_URL") {
+		t.Fatalf("URL leaked to stdout:\n%s", stdout.String())
+	}
+}
+
+func TestConcurrentServeContextUsesDistinctPorts(t *testing.T) {
+	root, _, _ := newTestModule(t)
+	type outcome struct {
+		url string
+		err error
+	}
+	results := make(chan outcome, 2)
+	run := func() {
+		var stdout, stderr bytes.Buffer
+		var url string
+		opener := func(value string) error { url = value; return nil }
+		input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"shutdown"}` + "\n")
+		opts := serveOptions{
+			path: root, dbPath: ":memory:", logLevel: "off", port: 0,
+			portRange: 10, host: "127.0.0.1", noWatch: true, open: true,
+		}
+		err := serveContext(context.Background(), opts, input, &stdout, &stderr, opener)
+		results <- outcome{url: url, err: err}
+	}
+	go run()
+	go run()
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil {
+		t.Fatalf("serve errors: %v / %v", first.err, second.err)
+	}
+	if first.url == "" || second.url == "" || first.url == second.url {
+		t.Fatalf("URLs = %q / %q", first.url, second.url)
+	}
+}
+
+func listenerPortString(url string) string {
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(url, "http://"), "/")
+	if i := strings.LastIndex(trimmed, ":"); i >= 0 {
+		return trimmed[i+1:]
+	}
+	return ""
 }
 
 func TestReportHandler(t *testing.T) {

@@ -39,6 +39,9 @@ func (idx *Index) DeadCode(opts DeadCodeOptions) []*Symbol {
 		if sym.Kind != "func" && sym.Kind != "method" {
 			continue
 		}
+		if sym.IsTest {
+			continue
+		}
 		if sym.IsHook || idx.IfaceMethods[sym.ID] || len(idx.XRefs[sym.ID]) > 0 {
 			continue
 		}

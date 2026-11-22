@@ -58,12 +58,18 @@ type Status struct {
 	TestLoadErrors       int      `json:"test_load_errors,omitempty"`
 	TestLoadErrorDetails []string `json:"test_load_error_details,omitempty"`
 	BuildMS              int64    `json:"build_ms,omitempty"`
+	BuildTags            []string `json:"build_tags,omitempty"`
+	Workspace            bool     `json:"workspace,omitempty"`
+	ModulePaths          []string `json:"module_paths,omitempty"`
+	LastBuildMode        string   `json:"last_build_mode,omitempty"`
+	AffectedPackages     int      `json:"affected_packages,omitempty"`
 }
 
 // Store owns the current immutable index snapshot.
 type Store struct {
 	root string
 	log  *slog.Logger
+	opts BuildOptions
 
 	mu         sync.RWMutex
 	idx        *Index
@@ -81,14 +87,25 @@ type Store struct {
 	autoWG    sync.WaitGroup
 	dirtyCh   chan struct{}
 	hook      func(*Index) error
+
+	lastMode       string
+	lastAffected   int
+	pendingChanges []string
 }
 
 func NewStore(root string, logger *slog.Logger) *Store {
+	return NewStoreWithOptions(root, logger, BuildOptions{})
+}
+
+// NewStoreWithOptions creates a store that loads with the given build tags and
+// workspace mode.
+func NewStoreWithOptions(root string, logger *slog.Logger, opts BuildOptions) *Store {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	opts.Tags = NormalizeTags(opts.Tags)
 	return &Store{
-		root: root, log: logger, ready: make(chan struct{}),
+		root: root, log: logger, opts: opts, ready: make(chan struct{}),
 		state: StateInitializing, stateCh: make(chan struct{}),
 		dirtyCh: make(chan struct{}, 1),
 	}
@@ -120,10 +137,13 @@ func (s *Store) State() State {
 	return s.state
 }
 
-// MarkDirty signals that source files changed.
-func (s *Store) MarkDirty() {
+// MarkDirty signals that source files changed. Passing paths enables
+// package-level incremental rebuilds; calling with no paths forces a full
+// rebuild.
+func (s *Store) MarkDirty(paths ...string) {
 	s.mu.Lock()
 	s.changeSeq++
+	s.pendingChanges = append(s.pendingChanges, paths...)
 	s.setStateLocked(StateDirty)
 	s.mu.Unlock()
 	select {
@@ -173,7 +193,7 @@ func (s *Store) AutoRebuild(ctx context.Context) {
 		case <-timerC:
 			timer = nil
 			timerC = nil
-			if err := s.Rebuild(); err != nil {
+			if err := s.rebuild(true); err != nil {
 				s.log.Error("auto reindex failed", "err", err)
 			}
 		}
@@ -185,8 +205,12 @@ func (s *Store) WaitForBuild() {
 	s.buildWG.Wait()
 }
 
-// Rebuild replaces the snapshot. Builds are serialized.
+// Rebuild performs a clean full rebuild. Builds are serialized.
 func (s *Store) Rebuild() error {
+	return s.rebuild(false)
+}
+
+func (s *Store) rebuild(incremental bool) error {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	s.buildWG.Add(1)
@@ -197,11 +221,31 @@ func (s *Store) Rebuild() error {
 	startSeq := s.changeSeq
 	s.setStateLocked(StateRebuilding)
 	hook := s.hook
+	prev := s.idx
+	changed := append([]string{}, s.pendingChanges...)
+	s.pendingChanges = nil
 	s.mu.Unlock()
 
 	start := time.Now()
-	s.log.Info("indexing started", "root", s.root)
-	idx, err := Build(s.root)
+	mode := "full"
+	modeLabel := "full"
+	if incremental {
+		modeLabel = "incremental"
+	}
+	s.log.Info("indexing started", "root", s.root, "tags", s.opts.Tags, "workspace", s.opts.Workspace, "mode", modeLabel)
+	var idx *Index
+	var err error
+	affected := 0
+	if incremental && prev != nil && len(changed) > 0 {
+		var usedIncremental bool
+		idx, usedIncremental, err = BuildIncremental(s.root, s.opts, prev, changed)
+		if usedIncremental {
+			mode = "incremental"
+			affected = incrementalAffectedCount(prev, idx)
+		}
+	} else {
+		idx, err = BuildWithOptions(s.root, s.opts)
+	}
 	if err == nil && hook != nil {
 		err = hook(idx)
 	}
@@ -217,6 +261,11 @@ func (s *Store) Rebuild() error {
 		s.idx = idx
 		s.err = nil
 		s.loadErrors = nil
+		s.lastMode = mode
+		s.lastAffected = affected
+		if affected == 0 {
+			s.lastAffected = len(idx.Packages)
+		}
 		if s.changeSeq != startSeq {
 			s.setStateLocked(StateDirty)
 		} else {
@@ -228,10 +277,25 @@ func (s *Store) Rebuild() error {
 	if err != nil {
 		s.log.Error("indexing failed", "err", err, "duration", duration)
 	} else {
-		s.log.Info("indexing ready", "packages", len(idx.Packages), "symbols", len(idx.Symbols), "duration", duration)
+		s.log.Info("indexing ready", "mode", mode, "affected_packages", affected, "packages", len(idx.Packages), "symbols", len(idx.Symbols), "duration", duration)
 	}
 	s.readyOnce.Do(func() { close(s.ready) })
 	return err
+}
+
+// incrementalAffectedCount reports how many packages changed between snapshots.
+func incrementalAffectedCount(prev, next *Index) int {
+	if prev == nil || next == nil {
+		return 0
+	}
+	count := 0
+	for pkg, info := range next.Packages {
+		old := prev.Packages[pkg]
+		if old == nil || old.ProdLOC != info.ProdLOC || old.TestLOC != info.TestLOC || old.ProdFiles != info.ProdFiles || old.TestFiles != info.TestFiles {
+			count++
+		}
+	}
+	return count
 }
 
 // Wait returns the latest snapshot, waiting up to indexWaitGrace for the
@@ -329,11 +393,16 @@ func (s *Store) Status() Status {
 		status.TestLoadErrors = len(s.idx.TestLoadErrors)
 		status.TestLoadErrorDetails = append([]string{}, s.idx.TestLoadErrors...)
 		status.ModulePath = s.idx.ModulePath
+		status.ModulePaths = append([]string{}, s.idx.ModulePaths...)
+		status.BuildTags = append([]string{}, s.idx.BuildTags...)
+		status.Workspace = s.idx.Workspace
 		status.Packages = len(s.idx.Packages)
 		status.Modules = len(s.idx.Modules)
 		status.Symbols = len(s.idx.Symbols)
 		status.XRefs = s.idx.TotalXRefs()
 		status.BuildMS = s.idx.BuildDuration.Milliseconds()
 	}
+	status.LastBuildMode = s.lastMode
+	status.AffectedPackages = s.lastAffected
 	return status
 }

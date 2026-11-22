@@ -16,15 +16,16 @@ type Watcher struct {
 	w         *fsnotify.Watcher
 	root      string
 	log       *slog.Logger
-	onChange  func()
+	onChange  func([]string)
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	closeErr  error
 }
 
-// New recursively watches root and invokes onChange for relevant files.
-func New(root string, logger *slog.Logger, onChange func()) (*Watcher, error) {
+// New recursively watches root and invokes onChange with the absolute paths of
+// relevant changes. Callers may debounce and deduplicate the batches.
+func New(root string, logger *slog.Logger, onChange func([]string)) (*Watcher, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -62,9 +63,11 @@ func (w *Watcher) loop() {
 				}
 			}
 			if relevant(event) {
-				w.onChange()
+				w.onChange([]string{event.Name})
 			} else if directoryEvent(event) {
-				w.onChange()
+				// Directory creation/removal changes package discovery; force a
+				// full rebuild by reporting the directory path.
+				w.onChange([]string{filepath.Join(event.Name, "go.mod")})
 			}
 		case err, ok := <-w.w.Errors:
 			if !ok {

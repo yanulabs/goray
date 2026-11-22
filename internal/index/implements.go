@@ -114,6 +114,9 @@ func (b *builder) matchInterfaces() {
 	for _, iface := range b.ifaces {
 		required := iface.iface.NumMethods()
 		for _, typ := range b.concrete {
+			if typ.named != nil && typ.named.TypeParams().Len() > 0 {
+				continue // uninstantiated generics: types.Implements is undefined
+			}
 			if typ.ptr.Len() < required {
 				continue
 			}

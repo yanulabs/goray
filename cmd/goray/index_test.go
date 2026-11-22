@@ -275,6 +275,57 @@ func TestIndexTestOnlyErrorIsWarning(t *testing.T) {
 	}
 }
 
+func TestIndexBuildTagsCLI(t *testing.T) {
+	isolateCLIEnv(t)
+	root, _, _ := newTestModule(t)
+	writeTestFile(t, filepath.Join(root, "rootpkg", "tagged_test.go"),
+		"//go:build integration\n\npackage rootpkg\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {}\n")
+
+	plain := indexJSON(t, "index", "--json", root)
+	tagged := indexJSON(t, "index", "--json", "--tags", "integration", root)
+	if len(tagged.BuildTags) != 1 || tagged.BuildTags[0] != "integration" {
+		t.Fatalf("build_tags = %v", tagged.BuildTags)
+	}
+	if tagged.DBPath == plain.DBPath {
+		t.Fatalf("tagged index reused the default working DB: %q", tagged.DBPath)
+	}
+	if tagged.SummaryDBPath != plain.SummaryDBPath {
+		t.Fatalf("build tags changed the shared summary DB: %q != %q", tagged.SummaryDBPath, plain.SummaryDBPath)
+	}
+
+	t.Setenv("GORAY_BUILD_TAGS", "integration")
+	fromEnv := indexJSON(t, "index", "--json", root)
+	if len(fromEnv.BuildTags) != 1 || fromEnv.BuildTags[0] != "integration" {
+		t.Fatalf("env build_tags = %v", fromEnv.BuildTags)
+	}
+	if fromEnv.DBPath != tagged.DBPath {
+		t.Fatalf("env/flag tag sets resolved different DBs: %q != %q", fromEnv.DBPath, tagged.DBPath)
+	}
+}
+
+func TestIndexWorkspaceCLI(t *testing.T) {
+	isolateCLIEnv(t)
+	root := t.TempDir()
+	writeTestModule(t, filepath.Join(root, "modulea"), "example.com/a")
+	writeTestModule(t, filepath.Join(root, "moduleb"), "example.com/b")
+	writeTestFile(t, filepath.Join(root, "modulea", "a.go"), "package a\n\nfunc A() int { return 1 }\n")
+	writeTestFile(t, filepath.Join(root, "moduleb", "b.go"), "package b\n\nfunc B() int { return 2 }\n")
+	writeTestFile(t, filepath.Join(root, "go.work"), "go 1.23\n\nuse (\n\t./modulea\n\t./moduleb\n)\n")
+
+	result := indexJSON(t, "index", "--workspace", "--json", root)
+	if !result.Workspace || len(result.ModulePaths) != 2 {
+		t.Fatalf("workspace result = %+v", result)
+	}
+	if result.Symbols == 0 || result.Packages != 2 {
+		t.Fatalf("workspace counts = %+v", result)
+	}
+
+	t.Setenv("GOWORK", "off")
+	if code, _, _ := runDirect(t, "index", "--workspace", root); code == 0 {
+		t.Fatal("GOWORK=off with --workspace should fail")
+	}
+}
+
 func TestIndexHelp(t *testing.T) {
 	for _, args := range [][]string{{"index", "-h"}, {"index", "--help"}, {"help", "index"}} {
 		code, stdout, stderr := runDirect(t, args...)

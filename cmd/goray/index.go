@@ -12,28 +12,34 @@ import (
 	"github.com/yanulabs/goray/internal/index"
 )
 
-var indexValueFlags = map[string]bool{"db": true}
+var indexValueFlags = map[string]bool{"db": true, "tags": true}
 
 type indexOptions struct {
-	path   string
-	dbPath string
-	json   bool
+	path      string
+	dbPath    string
+	tags      string
+	workspace bool
+	json      bool
 }
 
 type indexResult struct {
-	Root            string  `json:"root"`
-	ModulePath      string  `json:"module_path"`
-	DBPath          string  `json:"db_path"`
-	SummaryDBPath   string  `json:"summary_db_path"`
-	Packages        int     `json:"packages"`
-	Files           int     `json:"files"`
-	Symbols         int     `json:"symbols"`
-	Edges           int     `json:"edges"`
-	Eligible        int     `json:"eligible"`
-	Synced          int     `json:"synced"`
-	CoveragePercent float64 `json:"coverage_percent"`
-	Warnings        int     `json:"warnings"`
-	DurationMS      int64   `json:"duration_ms"`
+	Root            string   `json:"root"`
+	ModulePath      string   `json:"module_path"`
+	ModulePaths     []string `json:"module_paths,omitempty"`
+	BuildTags       []string `json:"build_tags,omitempty"`
+	Workspace       bool     `json:"workspace"`
+	BuildMode       string   `json:"build_mode"`
+	DBPath          string   `json:"db_path"`
+	SummaryDBPath   string   `json:"summary_db_path"`
+	Packages        int      `json:"packages"`
+	Files           int      `json:"files"`
+	Symbols         int      `json:"symbols"`
+	Edges           int      `json:"edges"`
+	Eligible        int      `json:"eligible"`
+	Synced          int      `json:"synced"`
+	CoveragePercent float64  `json:"coverage_percent"`
+	Warnings        int      `json:"warnings"`
+	DurationMS      int64    `json:"duration_ms"`
 }
 
 func parseIndexArgs(args []string) (indexOptions, error) {
@@ -41,6 +47,8 @@ func parseIndexArgs(args []string) (indexOptions, error) {
 	quietFlagSet(fs)
 	var opts indexOptions
 	fs.StringVar(&opts.dbPath, "db", "", "SQLite cache path")
+	fs.StringVar(&opts.tags, "tags", "", "Go build tags (comma- or space-separated)")
+	fs.BoolVar(&opts.workspace, "workspace", false, "index all modules in the active go.work")
 	fs.BoolVar(&opts.json, "json", false, "emit JSON stats")
 	positionals, err := parseFlagSet(fs, args)
 	if err != nil {
@@ -63,13 +71,14 @@ func runIndex(args []string, stdout, stderr io.Writer) error {
 
 func indexOnce(opts indexOptions, stdout, stderr io.Writer) error {
 	start := time.Now()
-	root, err := index.ResolveModuleRoot(opts.path)
+	root, err := index.ResolveProjectRoot(opts.path, opts.workspace)
 	if err != nil {
 		return err
 	}
+	tags := buildTags(opts.tags)
 	// Build before opening SQLite. Production load errors must leave any
 	// existing healthy working state untouched.
-	idx, err := index.Build(root)
+	idx, err := index.BuildWithOptions(root, index.BuildOptions{Tags: tags, Workspace: opts.workspace})
 	if err != nil {
 		return err
 	}
@@ -77,7 +86,7 @@ func indexOnce(opts indexOptions, stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 
-	dbPath, summaryDBPath, err := cache.ResolvePaths(root, opts.dbPath)
+	dbPath, summaryDBPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, tags)
 	if err != nil {
 		return err
 	}
@@ -112,6 +121,10 @@ func indexOnce(opts indexOptions, stdout, stderr io.Writer) error {
 	result := indexResult{
 		Root:            root,
 		ModulePath:      idx.ModulePath,
+		ModulePaths:     idx.ModulePaths,
+		BuildTags:       idx.BuildTags,
+		Workspace:       idx.Workspace,
+		BuildMode:       "full",
 		DBPath:          dbPath,
 		SummaryDBPath:   summaryDBPath,
 		Packages:        len(idx.Packages),

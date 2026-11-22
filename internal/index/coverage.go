@@ -1,56 +1,43 @@
 package index
 
-import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"path/filepath"
-	"strings"
-)
-
 // computeTestCoverage derives test reachability without executing go test. It
-// seeds from direct callees of test functions and walks the indexed call graph.
-// Name-based seeding is intentionally conservative: over-marking a symbol as
-// covered is preferable to reporting live production code as untested.
+// seeds from the type-checked call edges of indexed test functions, so build
+// tags, receiver types, and package boundaries are honored exactly.
 func (b *builder) computeTestCoverage() {
 	seeds := map[string]bool{}
-	_ = filepath.WalkDir(b.absRoot, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
-			return nil
+	for id, sym := range b.idx.Symbols {
+		if !sym.IsTest || (sym.Kind != "func" && sym.Kind != "method") {
+			continue
 		}
-		rel := relFile(b.absRoot, path)
-		if strings.HasPrefix(rel, "testdata/") || strings.Contains(rel, "/testdata/") {
-			return nil
+		for _, callee := range b.idx.Callees[id] {
+			seeds[callee] = true
 		}
-		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if parseErr != nil {
-			return nil
+	}
+
+	// Interface dispatch must not mark a production adapter as covered when a
+	// test only wires a mock. Follow dispatch edges to a concrete receiver only
+	// when tests reference or construct that concrete type.
+	testReferencedTypes := map[string]bool{}
+	for id, refs := range b.idx.XRefs {
+		sym := b.idx.Symbols[id]
+		if sym == nil || (sym.Kind != "type" && sym.Kind != "struct" && sym.Kind != "interface") {
+			continue
 		}
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+		for _, ref := range refs {
+			if ref.Test {
+				testReferencedTypes[id] = true
+				break
 			}
-			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				id := calledIdent(call.Fun)
-				if id == nil {
-					return true
-				}
-				for _, sym := range b.idx.SymbolsByName[strings.ToLower(id.Name)] {
-					if !sym.IsTest && (sym.Kind == "func" || sym.Kind == "method") {
-						seeds[sym.ID] = true
-					}
-				}
-				return true
-			})
 		}
-		return nil
-	})
+	}
+	for typeID, sites := range b.idx.CompositeLiterals {
+		for _, site := range sites {
+			if site.Test {
+				testReferencedTypes[typeID] = true
+				break
+			}
+		}
+	}
 
 	covered := make(map[string]bool, len(seeds))
 	queue := make([]string, 0, len(seeds))
@@ -64,6 +51,12 @@ func (b *builder) computeTestCoverage() {
 		for _, callee := range b.idx.Callees[cur] {
 			if covered[callee] {
 				continue
+			}
+			if edge, ok := b.idx.CallEdgeKinds[cur+"\x00"+callee]; ok && edge.Kind == "interface_dispatch" {
+				target := b.idx.Symbols[callee]
+				if target != nil && !target.IsTest && !testReferencedTypes[target.PkgPath+"."+target.RecvType] {
+					continue
+				}
 			}
 			covered[callee] = true
 			queue = append(queue, callee)

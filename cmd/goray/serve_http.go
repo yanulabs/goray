@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/yanulabs/goray/internal/cache"
@@ -18,38 +20,113 @@ import (
 	"github.com/yanulabs/goray/internal/report"
 )
 
-const defaultServePort = 4321
+const (
+	defaultServePort = 4321
+	defaultPortRange = 100
+	defaultServeHost = "127.0.0.1"
+)
 
-func listenLocal(port int) (net.Listener, error) {
-	if port < 0 || port > 65535 {
-		return nil, fmt.Errorf("invalid port %d", port)
+type listenConfig struct {
+	port      int
+	portRange int
+	host      string
+	strict    bool
+}
+
+type listenResult struct {
+	listener  net.Listener
+	requested int
+	port      int
+	fallback  bool
+}
+
+// listenConfigured reserves a listener atomically. Only EADDRINUSE advances to
+// the next candidate; every other bind error is returned immediately.
+func listenConfigured(cfg listenConfig) (listenResult, error) {
+	if cfg.port < 0 || cfg.port > 65535 {
+		return listenResult{}, fmt.Errorf("invalid port %d", cfg.port)
+	}
+	if cfg.host == "" {
+		cfg.host = defaultServeHost
+	}
+	if cfg.portRange <= 0 {
+		cfg.portRange = defaultPortRange
 	}
 	listen := func(p int) (net.Listener, error) {
-		return net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)))
+		return net.Listen("tcp", net.JoinHostPort(cfg.host, strconv.Itoa(p)))
 	}
-	if port == 0 {
-		return listen(0)
+	result := listenResult{requested: cfg.port}
+	if cfg.port == 0 {
+		ln, err := listen(0)
+		if err != nil {
+			return listenResult{}, fmt.Errorf("listen on %s:0: %w", cfg.host, err)
+		}
+		result.listener = ln
+		result.port = listenerPort(ln)
+		return result, nil
 	}
-	var lastErr error
-	for p := port; p <= port+20 && p <= 65535; p++ {
+
+	last := cfg.port + cfg.portRange - 1
+	if last > 65535 {
+		last = 65535
+	}
+	for p := cfg.port; p <= last; p++ {
 		ln, err := listen(p)
 		if err == nil {
-			return ln, nil
+			result.listener = ln
+			result.port = p
+			result.fallback = p != cfg.port
+			return result, nil
 		}
-		lastErr = err
+		if !isAddrInUse(err) {
+			return listenResult{}, fmt.Errorf("listen on %s:%d: %w", cfg.host, p, err)
+		}
+		if cfg.strict {
+			return listenResult{}, fmt.Errorf("port %d is already in use (strict port mode): %w", p, err)
+		}
 	}
-	// Keep the MCP server usable even if every preferred port is taken.
-	if ln, err := listen(0); err == nil {
-		return ln, nil
+	return listenResult{}, fmt.Errorf(
+		"no free port in range %d-%d on %s; stop the process using one of these ports or pass --port 0",
+		cfg.port, last, cfg.host,
+	)
+}
+
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
+func listenerPort(ln net.Listener) int {
+	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
+		return addr.Port
 	}
-	return nil, fmt.Errorf("listen on 127.0.0.1:%d: %w", port, lastErr)
+	return 0
+}
+
+// listenLocal keeps the legacy behavior used by tests: try the requested port
+// and the following 20 candidates, with no ephemeral fallback.
+func listenLocal(port int) (net.Listener, error) {
+	result, err := listenConfigured(listenConfig{port: port, portRange: 21, host: defaultServeHost})
+	if err != nil {
+		return nil, err
+	}
+	return result.listener, nil
 }
 
 func localURL(ln net.Listener) string {
-	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
-		return fmt.Sprintf("http://127.0.0.1:%d/", addr.Port)
+	addr := ln.Addr().String()
+	if tcp, ok := ln.Addr().(*net.TCPAddr); ok && tcp.Port == 0 {
+		addr = tcp.IP.String() + ":0"
 	}
-	return "http://127.0.0.1/"
+	return "http://" + addr + "/"
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 func printServeBanner(w io.Writer, url string) {

@@ -23,6 +23,9 @@ const (
 type HTMLReport struct {
 	Repo            string            `json:"repo"`
 	ModulePath      string            `json:"module_path"`
+	ModulePaths     []string          `json:"module_paths,omitempty"`
+	BuildTags       []string          `json:"build_tags,omitempty"`
+	Workspace       bool              `json:"workspace,omitempty"`
 	GeneratedAt     string            `json:"generated_at"`
 	Metrics         HTMLMetrics       `json:"metrics"`
 	Coverage        HTMLCoverage      `json:"coverage"`
@@ -110,6 +113,7 @@ type HTMLModuleCard struct {
 	Packages       int          `json:"packages"`
 	ProdLOC        int          `json:"prod_loc"`
 	TestLOC        int          `json:"test_loc"`
+	TestOnly       bool         `json:"test_only,omitempty"`
 	RootExported   int          `json:"root_exported"`
 	PortsCalls     int          `json:"ports_calls"`
 	Goroutines     int          `json:"goroutines"`
@@ -128,6 +132,7 @@ type HTMLPackageCard struct {
 	Module         string       `json:"module"`
 	ProdLOC        int          `json:"prod_loc"`
 	TestLOC        int          `json:"test_loc"`
+	TestOnly       bool         `json:"test_only,omitempty"`
 	Exported       int          `json:"exported"`
 	FanIn          int          `json:"fan_in"`
 	FanOut         int          `json:"fan_out"`
@@ -169,6 +174,8 @@ type HTMLGraphNode struct {
 	Kind      string       `json:"kind"`
 	Module    string       `json:"module,omitempty"`
 	LOC       int          `json:"loc"`
+	TestLOC   int          `json:"test_loc,omitempty"`
+	TestOnly  bool         `json:"test_only,omitempty"`
 	FanIn     int          `json:"fan_in"`
 	FanOut    int          `json:"fan_out"`
 	Eligible  bool         `json:"eligible"`

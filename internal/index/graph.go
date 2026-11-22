@@ -7,6 +7,8 @@ import (
 type Edge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+	Kind string `json:"edge_kind,omitempty"`
+	Via  string `json:"via_interface,omitempty"`
 }
 
 type Graph struct {
@@ -28,20 +30,66 @@ type graphStep struct {
 
 // CallGraph walks callers/callees breadth-first from rootID.
 func (idx *Index) CallGraph(rootID, direction string, depth, limit int) Graph {
+	return idx.CallGraphWithOptions(rootID, direction, depth, limit, true)
+}
+
+// CallGraphWithOptions optionally includes interface_dispatch edges.
+func (idx *Index) CallGraphWithOptions(rootID, direction string, depth, limit int, includeInterfaceDispatch bool) Graph {
 	steps := make([]graphStep, 0, 2)
 	if direction == "callees" || direction == "both" {
 		steps = append(steps, graphStep{
-			neighbors: func(id string) []string { return idx.Callees[id] },
-			edge:      func(cur, next string) Edge { return Edge{From: cur, To: next} },
+			neighbors: func(id string) []string {
+				return idx.filterCallees(id, includeInterfaceDispatch)
+			},
+			edge: func(cur, next string) Edge { return idx.callEdge(cur, next) },
 		})
 	}
 	if direction == "callers" || direction == "both" {
 		steps = append(steps, graphStep{
-			neighbors: func(id string) []string { return idx.Callers[id] },
-			edge:      func(cur, next string) Edge { return Edge{From: next, To: cur} },
+			neighbors: func(id string) []string {
+				return idx.filterCallers(id, includeInterfaceDispatch)
+			},
+			edge: func(cur, next string) Edge { return idx.callEdge(next, cur) },
 		})
 	}
 	return walkGraph(rootID, depth, limit, steps)
+}
+
+func (idx *Index) filterCallees(id string, includeDispatch bool) []string {
+	if includeDispatch {
+		return idx.Callees[id]
+	}
+	out := make([]string, 0, len(idx.Callees[id]))
+	for _, callee := range idx.Callees[id] {
+		if edge, ok := idx.CallEdgeKinds[id+"\x00"+callee]; ok && edge.Kind == "interface_dispatch" {
+			continue
+		}
+		out = append(out, callee)
+	}
+	return out
+}
+
+func (idx *Index) filterCallers(id string, includeDispatch bool) []string {
+	if includeDispatch {
+		return idx.Callers[id]
+	}
+	out := make([]string, 0, len(idx.Callers[id]))
+	for _, caller := range idx.Callers[id] {
+		if edge, ok := idx.CallEdgeKinds[caller+"\x00"+id]; ok && edge.Kind == "interface_dispatch" {
+			continue
+		}
+		out = append(out, caller)
+	}
+	return out
+}
+
+func (idx *Index) callEdge(from, to string) Edge {
+	edge := Edge{From: from, To: to}
+	if kind, ok := idx.CallEdgeKinds[from+"\x00"+to]; ok {
+		edge.Kind = kind.Kind
+		edge.Via = kind.Via
+	}
+	return edge
 }
 
 // DependencyGraph walks package imports or reverse imports from rootPkg.
