@@ -356,7 +356,17 @@ func (s *summaryBuild) classifyPackages() {
 
 func (s *summaryBuild) classifyModules() {
 	for _, modRec := range s.modules {
-		modRec.sym.Eligible = len(modRec.packages) >= 2
+		// A module is an architectural unit regardless of how many packages it
+		// contains. Single-package modules (the norm for internal/<area>,
+		// cmd/<app>, and modules/<name> layouts) must still be summarizable.
+		// Test-only and generated-only modules remain ineligible.
+		modRec.sym.Eligible = false
+		for _, pkgRec := range modRec.packages {
+			if pkgRec.sym.Eligible {
+				modRec.sym.Eligible = true
+				break
+			}
+		}
 	}
 }
 
