@@ -16,6 +16,12 @@ func waitChange(t *testing.T, changes <-chan []string) {
 	}
 }
 
+func TestNewRejectsMissingRoot(t *testing.T) {
+	if _, err := New(filepath.Join(t.TempDir(), "missing"), nil, nil); err == nil {
+		t.Fatal("expected an error for a missing watch root")
+	}
+}
+
 func TestWatcherRecursiveAndIgnored(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {

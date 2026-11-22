@@ -12,24 +12,27 @@ import (
 const maxConcurrentReads = 8
 
 type Server struct {
-	in      io.Reader
-	out     io.Writer
-	byName  map[string]Tool
-	specs   []ToolSpec
-	version string
-	readSem chan struct{}
-	writeMu sync.Mutex
-	outMu   sync.Mutex
+	in        io.Reader
+	out       io.Writer
+	byName    map[string]Tool
+	specs     []ToolSpec
+	version   string
+	readSem   chan struct{}
+	writeMu   sync.Mutex
+	outMu     sync.Mutex
+	writeErr  error
+	writeErrC chan error
 }
 
 func NewServer(in io.Reader, out io.Writer, tools []Tool) *Server {
 	s := &Server{
-		in:      in,
-		out:     out,
-		byName:  make(map[string]Tool, len(tools)),
-		specs:   make([]ToolSpec, 0, len(tools)),
-		version: "dev",
-		readSem: make(chan struct{}, maxConcurrentReads),
+		in:        in,
+		out:       out,
+		byName:    make(map[string]Tool, len(tools)),
+		specs:     make([]ToolSpec, 0, len(tools)),
+		version:   "dev",
+		readSem:   make(chan struct{}, maxConcurrentReads),
+		writeErrC: make(chan error, 1),
 	}
 	for _, tool := range tools {
 		s.byName[tool.Name] = tool
@@ -75,6 +78,8 @@ func (s *Server) Serve(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case err := <-s.writeErrC:
+			return err
 		case line, ok := <-lines:
 			if !ok {
 				return <-errCh
@@ -184,7 +189,16 @@ func (s *Server) send(resp Response) {
 	}
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	_, _ = s.out.Write(append(data, '\n'))
+	if s.writeErr != nil {
+		return
+	}
+	if _, err := s.out.Write(append(data, '\n')); err != nil {
+		s.writeErr = err
+		select {
+		case s.writeErrC <- err:
+		default:
+		}
+	}
 }
 
 func toolResult(text string, failed bool) map[string]any {

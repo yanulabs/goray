@@ -117,7 +117,7 @@ type compactModuleOverview struct {
 	IndexState       index.State        `json:"index_state"`
 }
 
-func compactModuleSummary(idx *index.Index, mod *index.ModSummary) compactModule {
+func compactModuleSummary(mod *index.ModSummary) compactModule {
 	return compactModule{
 		Name: mod.Name, Packages: mod.Packages, Files: mod.Files,
 		GeneratedFiles: mod.GeneratedFiles, GeneratedSymbols: mod.GeneratedSymbols,
@@ -154,7 +154,7 @@ func compactModules(idx *index.Index, sortBy string) []compactModule {
 	})
 	out := make([]compactModule, 0, len(modules))
 	for _, mod := range modules {
-		out = append(out, compactModuleSummary(idx, mod))
+		out = append(out, compactModuleSummary(mod))
 	}
 	return out
 }
@@ -382,7 +382,7 @@ func (t *toolset) compactModuleOverview(idx *index.Index, mod *index.ModSummary,
 	}
 	totalLarge := len(large)
 	out := compactModuleOverview{
-		Module: compactModuleSummary(idx, mod), PackageRollups: packages, Subpackages: packages, TotalPackages: len(packages),
+		Module: compactModuleSummary(mod), PackageRollups: packages, Subpackages: packages, TotalPackages: len(packages),
 		DependencyEdges: compactModuleEdges(mod), TopHotspots: hotspots, TotalHotspots: totalHotspots,
 		LargeFiles: limitFiles(large, 10), TotalLargeFiles: totalLarge, IncludeGenerated: includeGenerated,
 		TotalCount: len(packages), ReturnedCount: len(packages), IndexState: t.src.Status().IndexState,

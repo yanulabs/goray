@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -125,7 +126,7 @@ func migrate(db *sql.DB, migrations fs.FS, dir, scope, schema string) error {
 
 	var version int
 	err := db.QueryRow("SELECT version FROM "+metaTable+" WHERE scope = ?", scope).Scan(&version)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		version = 0
 	} else if err != nil {
 		return fmt.Errorf("read %s: %w", metaTable, err)

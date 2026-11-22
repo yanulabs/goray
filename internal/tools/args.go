@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/yanulabs/goray/internal/index"
@@ -55,35 +56,38 @@ func pageSizeArg(args map[string]any, key string, fallback int) int {
 // symbolErrorPayload turns resolver failures into machine-readable errors with
 // candidate IDs so agents can retry without guessing.
 func symbolErrorPayload(err error) string {
-	switch typed := err.(type) {
-	case *index.AmbiguousSymbolError:
+	var ambiguous *index.AmbiguousSymbolError
+	if errors.As(err, &ambiguous) {
 		return render.JSON(map[string]any{
 			"error":      "ambiguous_symbol",
-			"input":      typed.Query,
-			"candidates": typed.IDs,
+			"input":      ambiguous.Query,
+			"candidates": ambiguous.IDs,
 			"hint":       "retry with one of the canonical candidate IDs",
 		})
-	case *index.SymbolNotFoundError:
+	}
+	var notFound *index.SymbolNotFoundError
+	if errors.As(err, &notFound) {
 		payload := map[string]any{
 			"error":            "symbol_not_found",
-			"input":            typed.Query,
+			"input":            notFound.Query,
 			"expected_formats": index.SymbolIDFormats,
 			"hint":             "call lookup_symbol with the same input to discover valid IDs",
 		}
-		if len(typed.Suggestions) > 0 {
-			payload["nearest_matches"] = typed.Suggestions
+		if len(notFound.Suggestions) > 0 {
+			payload["nearest_matches"] = notFound.Suggestions
 		}
 		return render.JSON(payload)
-	case *index.PackageTargetError:
+	}
+	var packageTarget *index.PackageTargetError
+	if errors.As(err, &packageTarget) {
 		return render.JSON(map[string]any{
 			"error":   "package_target",
-			"input":   typed.Query,
-			"package": typed.Package,
+			"input":   packageTarget.Query,
+			"package": packageTarget.Package,
 			"hint":    "use get_api_surface, get_dependency_graph, or get_impact_analysis for package-scoped queries",
 		})
-	default:
-		return err.Error()
 	}
+	return err.Error()
 }
 
 func displaySymbolID(sym *index.Symbol) string {

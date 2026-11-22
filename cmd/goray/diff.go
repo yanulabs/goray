@@ -298,11 +298,12 @@ func compareIndexes(base, head *index.Index) diffReport {
 	sortAPIChanges(report.API.Removed)
 
 	headHotspots := complexFunctions(head)
+	baseHotspotMap := baseHotspots(base)
 	for id, after := range headHotspots {
 		if head.TestCovered[id] {
 			continue
 		}
-		before, existed := baseHotspots(base)[id]
+		before, existed := baseHotspotMap[id]
 		if !existed {
 			report.Hotspots.New = append(report.Hotspots.New, after)
 			continue

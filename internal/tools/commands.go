@@ -2,15 +2,19 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yanulabs/goray/internal/mcp"
 	"github.com/yanulabs/goray/internal/render"
 )
 
-const commandTimeout = 3 * time.Minute
+var commandTimeout = 3 * time.Minute
+
+const maxCommandOutput = 64 * 1024
 
 func (t *toolset) runTests() mcp.Tool {
 	return mcp.Tool{
@@ -79,13 +83,28 @@ func runCommand(ctx context.Context, dir, bin string, args ...string) (string, b
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-
-	const maxOutput = 64 * 1024
-	if len(out) > maxOutput {
-		out = append(out[:maxOutput], []byte("\n... [output truncated at 64 KiB]")...)
-	}
+	out = truncateCommandOutput(out, maxCommandOutput)
 	if err != nil {
-		return fmt.Sprintf("FAILED (%v):\n%s", err, out), true
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return fmt.Sprintf("FAILED (timeout after %s):\n%s", commandTimeout, out), true
+		case errors.Is(ctx.Err(), context.Canceled):
+			return fmt.Sprintf("FAILED (context canceled):\n%s", out), true
+		default:
+			return fmt.Sprintf("FAILED (%v):\n%s", err, out), true
+		}
 	}
 	return "OK:\n" + string(out), false
+}
+
+func truncateCommandOutput(out []byte, limit int) []byte {
+	if len(out) <= limit {
+		return out
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(out[cut]) {
+		cut--
+	}
+	truncated := append([]byte(nil), out[:cut]...)
+	return append(truncated, []byte("\n... [output truncated at 64 KiB]")...)
 }

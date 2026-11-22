@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -263,16 +264,22 @@ func TestAmbiguousShorthandAndNotFound(t *testing.T) {
 	}
 	if _, err := idx.SingleSymbol("Thing"); err == nil {
 		t.Fatal("expected ambiguous shorthand error")
-	} else if ambiguous, ok := err.(*AmbiguousSymbolError); !ok || len(ambiguous.IDs) != 2 {
-		t.Fatalf("error = %T %v", err, err)
+	} else {
+		var ambiguous *AmbiguousSymbolError
+		if !errors.As(err, &ambiguous) || len(ambiguous.IDs) != 2 {
+			t.Fatalf("error = %T %v", err, err)
+		}
 	}
 	if got, err := idx.SingleSymbol("a.Thing"); err != nil || got.ID != "example.com/ambig/a.Thing" {
 		t.Fatalf("a.Thing = %v, %v", got, err)
 	}
 	if _, err := idx.SingleSymbol("a.Missing"); err == nil {
 		t.Fatal("expected not found")
-	} else if _, ok := err.(*SymbolNotFoundError); !ok {
-		t.Fatalf("error = %T %v", err, err)
+	} else {
+		var notFound *SymbolNotFoundError
+		if !errors.As(err, &notFound) {
+			t.Fatalf("error = %T %v", err, err)
+		}
 	}
 }
 

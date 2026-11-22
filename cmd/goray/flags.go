@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -37,7 +38,7 @@ func parseFlagSet(fs *flag.FlagSet, args []string) ([]string, error) {
 		return nil, err
 	}
 	if err := fs.Parse(normalized); err != nil {
-		if err == flag.ErrHelp {
+		if errors.Is(err, flag.ErrHelp) {
 			return nil, usagef("help requested for %s", fs.Name())
 		}
 		return nil, usagef("%s", err)

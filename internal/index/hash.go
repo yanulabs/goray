@@ -180,6 +180,8 @@ func (b *builder) writeChanType(sb *strings.Builder, typ *types.Chan, active map
 		sb.WriteString("chan<- ")
 	case types.RecvOnly:
 		sb.WriteString("<-chan ")
+	case types.SendRecv:
+		sb.WriteString("chan ")
 	default:
 		sb.WriteString("chan ")
 	}

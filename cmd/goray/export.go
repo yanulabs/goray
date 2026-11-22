@@ -184,14 +184,17 @@ func writeReport(path string, data []byte, format string) error {
 		return writeAtomic(path, data)
 	}
 	dir := filepath.Dir(path)
+	//nolint:gosec // exported reports are user-facing artifacts and must remain readable.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	//nolint:gosec // exported reports are user-facing artifacts and must remain readable.
 	return os.WriteFile(path, data, 0o644)
 }
 
 func writeAtomic(path string, data []byte) (err error) {
 	dir := filepath.Dir(path)
+	//nolint:gosec // exported reports are user-facing artifacts and must remain readable.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
