@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Indexing now loads typed syntax only for project packages instead of parsing and retaining every transitive dependency; peak memory on a small module dropped from 1.9GB to 155MB.
+- The report server caches snapshots and no longer rewrites all working rows on every HTTP poll.
+- Incremental rebuilds load all affected packages in one `go/packages` call and honor cancellation.
+- `goray diff` reports the real HEAD commit alongside the resolved base commit.
+- Cache reads propagate iteration errors, and repeated `Cache.Close` calls retain the first failure.
+- Git and browser subprocesses have bounded timeouts, and command tools wait for inherited output pipes to close.
+
+### Changed
+
+- CI verifies the Go version declared in `go.mod`.
+- The report TypeScript contract is guarded by a Go field snapshot test.
+
 ## [0.1.2] - 2026-11-22
 
 ### Security

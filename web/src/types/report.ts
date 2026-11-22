@@ -143,6 +143,7 @@ export interface ReportGraphNode {
   kind: NodeKind;
   module?: string;
   loc: number;
+  test_loc?: number;
   fan_in: number;
   fan_out: number;
   eligible: boolean;
@@ -181,6 +182,9 @@ export interface ReportTreeNode {
 export interface Report {
   repo: string;
   module_path: string;
+  module_paths?: string[];
+  build_tags?: string[];
+  workspace?: boolean;
   generated_at: string;
   metrics: ReportMetrics;
   coverage: ReportCoverage;

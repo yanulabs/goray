@@ -146,6 +146,63 @@ use (
 	}
 }
 
+func TestWorkspaceIncrementalRebuild(t *testing.T) {
+	root := t.TempDir()
+	writeTagModule(t, filepath.Join(root, "modulea"), "example.com/a", map[string]string{
+		"a.go": `package a
+
+import "example.com/b"
+
+func UseB() int { return b.Value() }
+`,
+	})
+	writeTagModule(t, filepath.Join(root, "moduleb"), "example.com/b", map[string]string{
+		"b.go": "package b\n\nfunc Value() int { return 1 }\n",
+	})
+	writeTagModule(t, filepath.Join(root, "modulec"), "example.com/c", map[string]string{
+		"c.go": "package c\n\nfunc Value() int { return 3 }\n",
+	})
+	writeTagModule(t, filepath.Join(root, "moduled"), "example.com/d", map[string]string{
+		"d.go": "package d\n\nfunc Value() int { return 4 }\n",
+	})
+	work := `go 1.23
+
+use (
+	./modulea
+	./moduleb
+	./modulec
+	./moduled
+)
+`
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte(work), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prev, err := BuildWithOptions(root, BuildOptions{Workspace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bFile := filepath.Join(root, "moduleb", "b.go")
+	if err := os.WriteFile(bFile, []byte("package b\n\nfunc Value() int { return 2 }\n\nfunc Extra() int { return 3 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next, used, err := BuildIncremental(root, BuildOptions{Workspace: true}, prev, []string{bFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !used {
+		t.Fatal("workspace rebuild did not use the incremental path")
+	}
+	if next.Symbols["example.com/b.Extra"] == nil {
+		t.Fatalf("incremental workspace index missed changed package: %v", len(next.Symbols))
+	}
+	for _, pkg := range []string{"example.com/a", "example.com/c", "example.com/d"} {
+		if next.Packages[pkg] == nil {
+			t.Fatalf("incremental workspace index dropped %s", pkg)
+		}
+	}
+}
+
 func TestTestOnlyPackageAndModuleClassification(t *testing.T) {
 	root := t.TempDir()
 	writeTagModule(t, root, "example.com/testonly", map[string]string{

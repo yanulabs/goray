@@ -64,6 +64,22 @@ func TestStoreAutoRebuildCoalescing(t *testing.T) {
 	}
 }
 
+func TestStoreRebuildContextCanceled(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/cancel\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package cancel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(dir, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := store.RebuildContext(ctx); err == nil {
+		t.Fatal("canceled rebuild returned nil error")
+	}
+}
+
 func TestStoreWaitBoundedWhileDirty(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/storetest\n\ngo 1.23\n"), 0o644); err != nil {

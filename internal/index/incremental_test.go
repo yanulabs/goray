@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -197,7 +198,7 @@ func TestIncrementalSyntaxErrorKeepsStoreHealthy(t *testing.T) {
 		t.Fatal("expected a rebuild error for a syntax error")
 	}
 	store.MarkDirty(leafFile)
-	if err := store.rebuild(true); err == nil {
+	if err := store.rebuild(context.Background(), true); err == nil {
 		t.Fatal("expected an incremental rebuild error")
 	}
 	after, err := store.Wait(t.Context())
@@ -215,7 +216,7 @@ func TestIncrementalSyntaxErrorKeepsStoreHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.MarkDirty(leafFile)
-	if err := store.rebuild(true); err != nil {
+	if err := store.rebuild(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := store.Wait(t.Context())

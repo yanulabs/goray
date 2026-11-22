@@ -156,7 +156,7 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 	store.SetBuildHook(func(idx *index.Index) error {
 		return summaries.Sync(context.Background(), idx)
 	})
-	store.Start()
+	store.StartContext(ctx)
 	defer store.WaitForBuild()
 
 	reportServer := startReportServer(ctx, listener, store, summaries, logger)

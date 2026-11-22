@@ -318,22 +318,30 @@ func LayoutGraph(graph HTMLGraph) HTMLGraph {
 
 	layer := make([]int, len(nodes))
 	processed := make([]bool, len(nodes))
-	for processedCount := 0; processedCount < len(nodes); processedCount++ {
-		candidates := make([]int, 0)
-		for i := range nodes {
-			if !processed[i] && indegree[i] == 0 {
-				candidates = append(candidates, i)
-			}
+	ready := make([]int, 0, len(nodes))
+	for i := range nodes {
+		if indegree[i] == 0 {
+			ready = append(ready, i)
 		}
-		if len(candidates) == 0 {
+	}
+	sortNodeCandidates(nodes, ready)
+	for processedCount := 0; processedCount < len(nodes); processedCount++ {
+		if len(ready) == 0 {
+			// Cycles have no zero-indegree frontier left. Break the cycle at the
+			// lexically smallest unprocessed node, matching the old scan order.
+			forced := -1
 			for i := range nodes {
-				if !processed[i] {
-					candidates = append(candidates, i)
+				if processed[i] {
+					continue
+				}
+				if forced == -1 || nodeLess(nodes, i, forced) {
+					forced = i
 				}
 			}
+			ready = append(ready, forced)
 		}
-		sortNodeCandidates(nodes, candidates)
-		current := candidates[0]
+		current := ready[0]
+		ready = ready[1:]
 		processed[current] = true
 		for _, next := range adjacency[current] {
 			if processed[next] {
@@ -344,6 +352,9 @@ func LayoutGraph(graph HTMLGraph) HTMLGraph {
 			}
 			if indegree[next] > 0 {
 				indegree[next]--
+				if indegree[next] == 0 {
+					ready = insertNodeCandidate(nodes, ready, next)
+				}
 			}
 		}
 	}
@@ -382,14 +393,24 @@ func uniqueGraphEdges(edges []HTMLGraphEdge) []HTMLGraphEdge {
 }
 
 func sortNodeCandidates(nodes []HTMLGraphNode, indexes []int) {
-	sort.Slice(indexes, func(i, j int) bool {
-		a, b := nodes[indexes[i]], nodes[indexes[j]]
-		if a.Module != b.Module {
-			return a.Module < b.Module
-		}
-		if a.Label != b.Label {
-			return a.Label < b.Label
-		}
-		return a.ID < b.ID
-	})
+	sort.Slice(indexes, func(i, j int) bool { return nodeLess(nodes, indexes[i], indexes[j]) })
+}
+
+func nodeLess(nodes []HTMLGraphNode, left, right int) bool {
+	a, b := nodes[left], nodes[right]
+	if a.Module != b.Module {
+		return a.Module < b.Module
+	}
+	if a.Label != b.Label {
+		return a.Label < b.Label
+	}
+	return a.ID < b.ID
+}
+
+func insertNodeCandidate(nodes []HTMLGraphNode, queue []int, index int) []int {
+	pos := sort.Search(len(queue), func(i int) bool { return nodeLess(nodes, index, queue[i]) })
+	queue = append(queue, 0)
+	copy(queue[pos+1:], queue[pos:])
+	queue[pos] = index
+	return queue
 }

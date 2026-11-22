@@ -38,7 +38,7 @@ func (c *Cache) Lookup(ctx context.Context, id string) (Cached, error) {
 		c.touch(hash)
 		if err := c.db.QueryRowContext(ctx,
 			"SELECT model_id FROM "+c.summaryTable("summary_cache")+" WHERE content_hash = ? AND prompt_version = ?",
-			hash, PromptVersion).Scan(&out.ModelID); err != nil && err != sql.ErrNoRows {
+			hash, PromptVersion).Scan(&out.ModelID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return Cached{}, err
 		}
 	}

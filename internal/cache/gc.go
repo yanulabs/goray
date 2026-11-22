@@ -85,6 +85,7 @@ WHERE NOT EXISTS (
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	c.generation.Add(1)
 	_, _ = c.db.ExecContext(ctx, "PRAGMA main.incremental_vacuum(1000)")
 	_, _ = c.db.ExecContext(ctx, "PRAGMA main.optimize")
 	if c.split {

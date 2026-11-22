@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
@@ -223,14 +224,17 @@ func writeAtomic(path string, data []byte) (err error) {
 }
 
 func openBrowser(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", path)
+		cmd = exec.CommandContext(ctx, "open", path)
 	case "linux":
-		cmd = exec.Command("xdg-open", path)
+		cmd = exec.CommandContext(ctx, "xdg-open", path)
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", path)
+		cmd = exec.CommandContext(ctx, "cmd", "/c", "start", "", path)
 	default:
 		return fmt.Errorf("unsupported platform %s", runtime.GOOS)
 	}

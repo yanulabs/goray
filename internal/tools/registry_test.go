@@ -19,7 +19,7 @@ type fakeIndexer struct{}
 func (fakeIndexer) Wait(context.Context) (*index.Index, error) { return nil, errors.New("not ready") }
 func (fakeIndexer) Status() index.Status                       { return index.Status{RootDir: "."} }
 func (fakeIndexer) Root() string                               { return "." }
-func (fakeIndexer) Rebuild() error                             { return nil }
+func (fakeIndexer) RebuildContext(context.Context) error       { return nil }
 
 func TestRegistry(t *testing.T) {
 	list := New(fakeIndexer{}, render.NewRegistry(), nil)

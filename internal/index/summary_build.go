@@ -2,8 +2,6 @@ package index
 
 import (
 	"go/ast"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -119,9 +117,9 @@ func (s *summaryBuild) collectFile(p *packages.Package, file *ast.File, pkgRec *
 func (s *summaryBuild) addFile(p *packages.Package, pkgRec *summaryPackage, file *ast.File, absPath, filePath, fileID string) *summaryFile {
 	loc := 0
 	generated := false
-	if src, err := os.ReadFile(absPath); err == nil {
-		loc = countLines(src)
-		generated = isGenerated(filepath.Base(absPath), src)
+	if facts, err := s.b.factsFor(absPath); err == nil {
+		loc = facts.loc
+		generated = facts.generated
 	}
 	dirs := directiveLines(file.Comments)
 	sym := &SummarySymbol{

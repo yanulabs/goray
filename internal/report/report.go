@@ -15,12 +15,24 @@ import (
 	"github.com/yanulabs/goray/internal/render"
 )
 
-// Build combines an immutable index snapshot with cached summaries.
+// Build combines an immutable index snapshot with cached summaries. It syncs
+// the working tables first and is intended for one-shot CLI exports.
 func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HTMLReport, error) {
+	return build(ctx, idx, store, true)
+}
+
+// BuildFromCache assembles a report without rewriting working tables. The
+// caller must guarantee that store already contains the snapshot (for example
+// through Store.SetBuildHook).
+func BuildFromCache(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HTMLReport, error) {
+	return build(ctx, idx, store, false)
+}
+
+func build(ctx context.Context, idx *index.Index, store *cache.Cache, syncIndex bool) (render.HTMLReport, error) {
 	if idx == nil || idx.Summary == nil {
 		return render.HTMLReport{}, errors.New("index has no summary metadata")
 	}
-	if store != nil {
+	if syncIndex && store != nil {
 		if err := store.Sync(ctx, idx); err != nil {
 			return render.HTMLReport{}, fmt.Errorf("sync summary cache: %w", err)
 		}

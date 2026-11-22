@@ -18,7 +18,27 @@ type fileMeta struct {
 	isTest    bool
 }
 
-func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo) {
+// fileFacts is the on-disk metadata shared by definition indexing, summary
+// building, and file metrics so every file is read at most once.
+type fileFacts struct {
+	loc       int
+	generated bool
+}
+
+func (b *builder) factsFor(path string) (fileFacts, error) {
+	if facts, ok := b.facts[path]; ok {
+		return facts, nil
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return fileFacts{}, err
+	}
+	facts := fileFacts{loc: countLines(src), generated: isGenerated(filepath.Base(path), src)}
+	b.facts[path] = facts
+	return facts, nil
+}
+
+func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo, testOnly bool) {
 	if p.Types == nil || p.TypesInfo == nil || p.Fset == nil {
 		return
 	}
@@ -27,7 +47,7 @@ func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo) {
 			continue
 		}
 		meta := b.fileMetaFor(p, file)
-		if b.testPass && !meta.isTest {
+		if testOnly && !meta.isTest {
 			continue
 		}
 		for _, decl := range file.Decls {
@@ -58,8 +78,8 @@ func (b *builder) fileMetaFor(p *packages.Package, file *ast.File) fileMeta {
 		untracked: b.idx.UntrackedFiles[relFile(b.absRoot, path)],
 	}
 	if path != "" {
-		if src, err := os.ReadFile(path); err == nil {
-			meta.generated = isGenerated(filepath.Base(path), src)
+		if facts, err := b.factsFor(path); err == nil {
+			meta.generated = facts.generated
 		}
 	}
 	return meta

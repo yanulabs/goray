@@ -60,8 +60,8 @@ func (t *toolset) reindex() mcp.Tool {
 		Description: "Rebuild the go/packages + go/types semantic index from disk.",
 		Exclusive:   true,
 		InputSchema: object(nil),
-		Run: func(context.Context, map[string]any) (string, bool) {
-			if err := t.src.Rebuild(); err != nil {
+		Run: func(ctx context.Context, _ map[string]any) (string, bool) {
+			if err := t.src.RebuildContext(ctx); err != nil {
 				return "reindex failed: " + err.Error(), true
 			}
 			status := t.src.Status()
@@ -83,6 +83,8 @@ func runCommand(ctx context.Context, dir, bin string, args ...string) (string, b
 	//nolint:gosec // exec.CommandContext does not invoke a shell; arguments are passed directly.
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
+	// Kill descendants that keep stdout open after the parent is canceled.
+	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	out = truncateCommandOutput(out, maxCommandOutput)
 	if err != nil {

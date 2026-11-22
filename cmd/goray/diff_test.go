@@ -152,6 +152,10 @@ func TestDiffJSONAndGates(t *testing.T) {
 	if report.BaseRef != "HEAD" {
 		t.Fatalf("base ref = %q", report.BaseRef)
 	}
+	head := gitRun(t, root, "rev-parse", "HEAD")
+	if report.Head != head || report.BaseCommit != head {
+		t.Fatalf("head/base commit = %q/%q, want %q", report.Head, report.BaseCommit, head)
+	}
 	if len(report.Cycles.New) == 0 {
 		t.Fatalf("new cycles missing: %+v", report.Cycles)
 	}
