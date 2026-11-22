@@ -45,6 +45,13 @@ type SummaryContext struct {
 	Directives          []string        `json:"directives,omitempty"`
 	Dependencies        []Dependency    `json:"dependencies,omitempty"`
 	Note                string          `json:"note,omitempty"`
+
+	ParentPackageID            string    `json:"parent_package_id,omitempty"`
+	ParentModuleID             string    `json:"parent_module_id,omitempty"`
+	ParentPackageSummaryCached *bool     `json:"parent_package_summary_cached,omitempty"`
+	ParentModuleSummaryCached  *bool     `json:"parent_module_summary_cached,omitempty"`
+	ParentPackageSyncState     SyncState `json:"parent_package_sync_state,omitempty"`
+	ParentModuleSyncState      SyncState `json:"parent_module_sync_state,omitempty"`
 }
 
 // StateOf classifies one working symbol.
@@ -245,8 +252,9 @@ func (c *Cache) SummaryContext(ctx context.Context, id string, idx *index.Index)
 		}
 	}
 	if state == StateNotEligible {
-		out.Note = "symbol is not eligible for summarization; use raw source"
+		out.Note = "symbol is not eligible for summarization; use the parent package/module summary or raw source"
 		out.Source = readSource(idx, sym)
+		c.populateSummaryParents(ctx, sym, &out)
 		return out, nil
 	}
 	if state != StateSynced && state != StateNotEligible {
@@ -272,6 +280,38 @@ func (c *Cache) SummaryContext(ctx context.Context, id string, idx *index.Index)
 		}
 	}
 	return out, nil
+}
+
+func (c *Cache) populateSummaryParents(ctx context.Context, sym *WorkingSymbol, out *SummaryContext) {
+	if sym.PkgPath != "" {
+		out.ParentPackageID = "pkg:" + sym.PkgPath
+	}
+	if sym.ModuleName != "" {
+		out.ParentModuleID = "mod:" + sym.ModuleName
+	}
+	stateFor := func(id string) (bool, SyncState) {
+		if id == "" {
+			return false, ""
+		}
+		parent, err := c.workingSymbol(ctx, id)
+		if err != nil {
+			return false, ""
+		}
+		state := c.classify(ctx, parent)
+		cached, _, err := c.cachedForState(ctx, parent, state)
+		if err != nil {
+			return false, state
+		}
+		return len(cached) > 0, state
+	}
+	if cached, state := stateFor(out.ParentPackageID); state != "" {
+		out.ParentPackageSummaryCached = &cached
+		out.ParentPackageSyncState = state
+	}
+	if cached, state := stateFor(out.ParentModuleID); state != "" {
+		out.ParentModuleSummaryCached = &cached
+		out.ParentModuleSyncState = state
+	}
 }
 
 // Enrich returns a cached summary for existing read tools.

@@ -11,22 +11,22 @@ import (
 func (t *toolset) impactAnalysis() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_impact_analysis",
-		Description: "Blast-radius analysis for a symbol or package: impacted callers, files, modules, and test packages.",
+		Description: "Blast-radius analysis for a symbol or package: impacted callers, files, modules, and test packages. Prefers symbol_id; set package for package-scoped impact.",
 		InputSchema: object(map[string]any{
-			"symbol":  propString("Target symbol ID or name"),
-			"package": propString("Target relative package path (used if symbol is empty)"),
-			"depth":   propInt("Max traversal depth (default: 3)"),
+			"symbol_id": propString("Target symbol ID, full Go identifier, or repository-relative shorthand"),
+			"package":   propString("Target relative package path (used if symbol_id is empty)"),
+			"depth":     propInt("Max traversal depth (default: 3)"),
 		}),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
 			depth := intArg(args, "depth", 3)
-			symArg := strArg(args, "symbol", "")
-			pkgArg := strings.TrimPrefix(strArg(args, "package", ""), "./")
+			symArg := symbolArg(args)
+			pkgArg := strings.TrimPrefix(packageArg(args), "./")
 
 			switch {
 			case symArg != "":
 				sym, err := idx.SingleSymbol(symArg)
 				if err != nil {
-					return err.Error(), true
+					return symbolErrorPayload(err), true
 				}
 				out := struct {
 					index.Impact
@@ -44,7 +44,7 @@ func (t *toolset) impactAnalysis() mcp.Tool {
 				}{Impact: idx.ImpactByPackage(pkg, depth), IndexState: t.src.Status().IndexState}
 				return render.JSON(out), false
 			default:
-				return "specify 'symbol' or 'package'", true
+				return "specify 'symbol_id' or 'package'", true
 			}
 		}),
 	}

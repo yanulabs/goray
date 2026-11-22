@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"strings"
+
 	"github.com/yanulabs/goray/internal/index"
 	"github.com/yanulabs/goray/internal/mcp"
 	"github.com/yanulabs/goray/internal/render"
@@ -45,7 +47,7 @@ func (t *toolset) hotspots() mcp.Tool {
 			}
 			opts := index.HotspotOptions{
 				Target: target, SortBy: sortBy, Limit: limit,
-				Module:           strArg(args, "module", ""),
+				Module:           strings.TrimPrefix(moduleArg(args), "mod:"),
 				ExcludeModules:   strListArg(args, "exclude_modules"),
 				MinComplexity:    intArg(args, "min_complexity", 0),
 				MinLoc:           intArg(args, "min_loc", 0),

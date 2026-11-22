@@ -115,27 +115,31 @@ type PkgInfo struct {
 	PortsCalls int      `json:"ports_calls"`
 	Goroutines int      `json:"goroutines"`
 
-	GeneratedFiles int `json:"generated_files,omitempty"`
-	UntrackedFiles int `json:"untracked_files,omitempty"`
+	GeneratedFiles   int `json:"generated_files,omitempty"`
+	GeneratedSymbols int `json:"generated_symbols,omitempty"`
+	GeneratedLOC     int `json:"generated_loc,omitempty"`
+	UntrackedFiles   int `json:"untracked_files,omitempty"`
 }
 
 // ModSummary aggregates the packages under modules/<name>.
 type ModSummary struct {
-	Name           string              `json:"name"`
-	Packages       int                 `json:"packages"`
-	Files          int                 `json:"files"`
-	GeneratedFiles int                 `json:"generated_files"`
-	UntrackedFiles int                 `json:"untracked_files"`
-	AllUntracked   bool                `json:"all_untracked,omitempty"`
-	ProdLOC        int                 `json:"prod_loc"`
-	TestLOC        int                 `json:"test_loc"`
-	TestOnly       bool                `json:"test_only,omitempty"`
-	RootExported   int                 `json:"root_exported"`
-	PortsCalls     int                 `json:"ports_calls"`
-	Goroutines     int                 `json:"goroutines"`
-	OutModules     map[string][]string `json:"out_modules"`
-	InModules      map[string][]string `json:"in_modules"`
-	LargeFiles     []FileMetric        `json:"large_files,omitempty"`
+	Name             string              `json:"name"`
+	Packages         int                 `json:"packages"`
+	Files            int                 `json:"files"`
+	GeneratedFiles   int                 `json:"generated_files"`
+	GeneratedSymbols int                 `json:"generated_symbols"`
+	GeneratedLOC     int                 `json:"generated_loc"`
+	UntrackedFiles   int                 `json:"untracked_files"`
+	AllUntracked     bool                `json:"all_untracked,omitempty"`
+	ProdLOC          int                 `json:"prod_loc"`
+	TestLOC          int                 `json:"test_loc"`
+	TestOnly         bool                `json:"test_only,omitempty"`
+	RootExported     int                 `json:"root_exported"`
+	PortsCalls       int                 `json:"ports_calls"`
+	Goroutines       int                 `json:"goroutines"`
+	OutModules       map[string][]string `json:"out_modules"`
+	InModules        map[string][]string `json:"in_modules"`
+	LargeFiles       []FileMetric        `json:"large_files,omitempty"`
 }
 
 // Index is an immutable snapshot after Build returns.

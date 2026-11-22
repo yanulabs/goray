@@ -69,10 +69,12 @@ func TestSkillDocCoversAllRegisteredTools(t *testing.T) {
 	// The documentation must name every critical parameter used by the
 	// dependency and hotspot tools; silent schema drift caused real failures.
 	for _, required := range []string{
-		"`root`", "`direction`", "`depth`", "`format`",
+		"`package`", "`direction`", "`depth`", "`format`",
 		"`include_tests`", "`from`", "`to`",
 		"`include_interface_dispatch`", "`via_interface`",
 		"`test_only`", "`untested_only`", "`sort_by`",
+		"`symbol_id`", "`detail`", "`summary_only`", "`top_modules`",
+		"`include_generated`", "`offset`", "`generated_omitted`",
 	} {
 		if !strings.Contains(doc, required) {
 			t.Errorf("SKILL.md is missing critical parameter %s", required)

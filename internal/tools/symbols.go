@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
 	"github.com/yanulabs/goray/internal/mcp"
 	"github.com/yanulabs/goray/internal/render"
@@ -17,65 +18,126 @@ import (
 func (t *toolset) lookupSymbol() mcp.Tool {
 	return mcp.Tool{
 		Name:        "lookup_symbol",
-		Description: "Find symbols by exact ID, exact name, or fuzzy substring. Returns IDs for downstream tools.",
+		Description: "Find symbols by canonical ID, full Go identifier, repository-relative shorthand, exact name, or fuzzy substring. Returns IDs for downstream tools and inline cached summaries when available.",
 		InputSchema: object(map[string]any{
-			"query": propString("Symbol name, ID, or substring"),
-			"kind":  propEnum("Optional symbol kind", "func", "method", "interface", "struct", "type", "var", "const"),
-			"limit": propInt("Max results (default: 25)"),
-		}, "query"),
+			"symbol_id": propString("Symbol ID, full Go identifier, repository-relative shorthand, name, or substring"),
+			"kind":      propEnum("Optional symbol kind", "func", "method", "interface", "struct", "type", "var", "const", "field"),
+			"limit":     propInt("Max results (default: 25)"),
+		}, "symbol_id"),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
-			symbols := idx.Resolve(strArg(args, "query", ""), strArg(args, "kind", ""), intArg(args, "limit", 25))
+			symbols := idx.Resolve(symbolArg(args), strArg(args, "kind", ""), intArg(args, "limit", 25))
 			type hit struct {
 				*index.Symbol
-				XRefCount   int             `json:"xref_count"`
-				CanonicalID string          `json:"canonical_id,omitempty"`
-				Summary     json.RawMessage `json:"summary,omitempty"`
-				SyncState   string          `json:"sync_state,omitempty"`
-				DepsChanged bool            `json:"deps_changed,omitempty"`
-				IndexState  index.State     `json:"index_state"`
+				XRefCount        int             `json:"xref_count"`
+				CanonicalID      string          `json:"canonical_id,omitempty"`
+				Summary          json.RawMessage `json:"summary,omitempty"`
+				SyncState        string          `json:"sync_state,omitempty"`
+				DepsChanged      bool            `json:"deps_changed,omitempty"`
+				EnclosingSummary json.RawMessage `json:"enclosing_summary,omitempty"`
+				EnclosingID      string          `json:"enclosing_summary_id,omitempty"`
+				EnclosingSync    string          `json:"enclosing_sync_state,omitempty"`
+				IndexState       index.State     `json:"index_state"`
 			}
 			out := make([]hit, 0, len(symbols))
 			for _, sym := range symbols {
 				summary, state, depsChanged := t.enrich(ctx, sym)
-				out = append(out, hit{
+				if sym.CanonicalID() == "" && state == "" {
+					state = cache.StateNotEligible
+				}
+				item := hit{
 					Symbol: sym, XRefCount: len(idx.XRefs[sym.ID]), CanonicalID: sym.CanonicalID(),
 					Summary: summary, SyncState: string(state), DepsChanged: depsChanged,
 					IndexState: t.src.Status().IndexState,
-				})
+				}
+				if len(summary) == 0 && t.summaries != nil {
+					item.EnclosingID, item.EnclosingSummary, item.EnclosingSync = t.enclosingSummary(ctx, sym)
+				}
+				out = append(out, item)
 			}
 			return render.JSON(out), false
 		}),
 	}
 }
 
+// enclosingSummary returns the nearest cached package or module summary for a
+// symbol that is not summary-eligible itself.
+func (t *toolset) enclosingSummary(ctx context.Context, sym *index.Symbol) (string, json.RawMessage, string) {
+	if t.summaries == nil || sym == nil {
+		return "", nil, ""
+	}
+	candidates := make([]string, 0, 2)
+	if sym.PkgPath != "" {
+		candidates = append(candidates, "pkg:"+sym.PkgPath)
+	}
+	if sym.ModuleArea != "" {
+		candidates = append(candidates, "mod:"+sym.ModuleArea)
+	}
+	for _, id := range candidates {
+		summary, state, _, err := t.summaries.Enrich(ctx, id)
+		if err != nil {
+			continue
+		}
+		if len(summary) > 0 {
+			return id, summary, string(state)
+		}
+	}
+	if len(candidates) > 0 {
+		_, state, _, _ := t.summaries.Enrich(ctx, candidates[0])
+		return candidates[0], nil, string(state)
+	}
+	return "", nil, ""
+}
+
 func (t *toolset) apiSurface() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_api_surface",
-		Description: "All exported symbols of a package or module root, grouped by kind.",
+		Description: "Paginated exported symbols of a package or module root, grouped by kind. Generated symbols are excluded by default and reported as generated_omitted.",
 		InputSchema: object(map[string]any{
-			"package": propString("Relative package path (e.g. modules/payments) or full import path"),
+			"package":           propString("Relative package path (e.g. modules/payments) or full import path"),
+			"include_generated": propBool("Include symbols from generated files (default: false)"),
+			"limit":             propInt("Max symbols per page (default: 100; 0 = unlimited)"),
+			"offset":            propInt("Pagination offset (default: 0)"),
+			"kind":              propEnum("Optional symbol kind filter", "interface", "type", "func", "const", "var"),
 		}, "package"),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
-			arg := strArg(args, "package", "")
+			arg := packageArg(args)
 			pkg, ok := idx.ResolvePackage(arg)
 			if !ok {
 				return "package not found: " + arg, true
+			}
+			info := idx.Packages[pkg]
+			includeGenerated := boolArg(args, "include_generated", false)
+			kindFilter := strArg(args, "kind", "")
+			switch kindFilter {
+			case "", "interface", "type", "func", "const", "var":
+			default:
+				return "invalid kind: " + kindFilter, true
 			}
 
 			type item struct {
 				ID          string          `json:"id"`
 				Name        string          `json:"name"`
+				Kind        string          `json:"kind"`
 				Signature   string          `json:"signature"`
 				LOC         string          `json:"loc"`
 				XRefs       int             `json:"xrefs"`
 				CanonicalID string          `json:"canonical_id,omitempty"`
+				Generated   bool            `json:"generated,omitempty"`
 				Summary     json.RawMessage `json:"summary,omitempty"`
 				SyncState   string          `json:"sync_state,omitempty"`
 				DepsChanged bool            `json:"deps_changed,omitempty"`
 			}
-			grouped := map[string][]item{}
+			items := make([]item, 0)
+			generatedOmittedSymbols := 0
 			for _, sym := range idx.Symbols {
 				if sym.PkgPath != pkg || !sym.Exported || sym.IsTest {
+					continue
+				}
+				if !apiKindMatches(sym.Kind, kindFilter) {
+					continue
+				}
+				if sym.Generated && !includeGenerated {
+					generatedOmittedSymbols++
 					continue
 				}
 				name := sym.Name
@@ -83,37 +145,119 @@ func (t *toolset) apiSurface() mcp.Tool {
 					name = "(" + sym.RecvType + ")." + sym.Name
 				}
 				summary, state, depsChanged := t.enrich(ctx, sym)
-				grouped[sym.Kind] = append(grouped[sym.Kind], item{
-					ID: sym.ID, Name: name, Signature: sym.Signature, CanonicalID: sym.CanonicalID(),
+				items = append(items, item{
+					ID: sym.ID, Name: name, Kind: sym.Kind, Signature: sym.Signature, CanonicalID: sym.CanonicalID(),
 					LOC: fmt.Sprintf("%s:%d", sym.File, sym.Line), XRefs: len(idx.XRefs[sym.ID]),
-					Summary: summary, SyncState: string(state), DepsChanged: depsChanged,
+					Generated: sym.Generated, Summary: summary, SyncState: string(state), DepsChanged: depsChanged,
 				})
 			}
-			for kind := range grouped {
-				sort.Slice(grouped[kind], func(i, j int) bool { return grouped[kind][i].Name < grouped[kind][j].Name })
+			sort.Slice(items, func(i, j int) bool {
+				ri, rj := apiKindRank(items[i].Kind), apiKindRank(items[j].Kind)
+				if ri != rj {
+					return ri < rj
+				}
+				if items[i].Name != items[j].Name {
+					return items[i].Name < items[j].Name
+				}
+				return items[i].ID < items[j].ID
+			})
+
+			total := len(items)
+			offset := nonNegativeIntArg(args, "offset", 0)
+			if offset > total {
+				offset = total
 			}
-			return render.JSON(map[string]any{
+			limit := pageSizeArg(args, "limit", 100)
+			page := items[offset:]
+			if limit > 0 && len(page) > limit {
+				page = page[:limit]
+			}
+			pageTruncated := offset+len(page) < total
+			generatedOmittedAny := !includeGenerated && (info.GeneratedFiles > 0 || generatedOmittedSymbols > 0 || info.GeneratedLOC > 0)
+			truncated := pageTruncated || generatedOmittedAny
+			grouped := map[string][]item{}
+			for _, entry := range page {
+				grouped[entry.Kind] = append(grouped[entry.Kind], entry)
+			}
+			out := map[string]any{
 				"package":     pkg,
-				"exported":    idx.Packages[pkg].Exported,
+				"exported":    info.Exported,
+				"kind_filter": kindFilter,
+				"total_count": total,
+				"offset":      offset,
+				"limit":       limit,
+				"returned":    len(page),
+				"truncated":   truncated,
 				"symbols":     grouped,
 				"index_state": t.src.Status().IndexState,
-			}), false
+			}
+			hints := make([]string, 0, 2)
+			if pageTruncated {
+				out["next_offset"] = offset + len(page)
+				hints = append(hints, fmt.Sprintf(
+					`call get_api_surface with package=%q, offset=%d, limit=%d for the next page; limit=0 returns all symbols`,
+					pkg, offset+len(page), limit,
+				))
+			}
+			if !includeGenerated {
+				files, symbols, loc := info.GeneratedFiles, generatedOmittedSymbols, info.GeneratedLOC
+				if files > 0 || symbols > 0 || loc > 0 {
+					out["generated_omitted"] = map[string]any{
+						"files": files, "symbols": symbols, "loc": loc,
+					}
+					hints = append(hints, fmt.Sprintf(`call get_api_surface with package=%q, include_generated=true to include %d generated symbol(s)`, pkg, symbols))
+				}
+			}
+			if len(hints) > 0 {
+				out["hint"] = strings.Join(hints, "; ")
+			}
+			return render.JSON(out), false
 		}),
+	}
+}
+
+func apiKindMatches(kind, filter string) bool {
+	switch filter {
+	case "":
+		return true
+	case "func":
+		return kind == "func" || kind == "method"
+	case "type":
+		return kind == "type" || kind == "struct"
+	default:
+		return kind == filter
+	}
+}
+
+func apiKindRank(kind string) int {
+	switch kind {
+	case "interface":
+		return 0
+	case "type", "struct":
+		return 1
+	case "func", "method":
+		return 2
+	case "const":
+		return 3
+	case "var":
+		return 4
+	default:
+		return 5
 	}
 }
 
 func (t *toolset) references() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_references",
-		Description: "All type-checked references to a symbol, including caller function and file:line.",
+		Description: "All type-checked references to a symbol, including caller function and file:line. Accepts canonical IDs, full Go identifiers, and repository-relative shorthands.",
 		InputSchema: object(map[string]any{
-			"symbol": propString("Symbol ID or name"),
-			"limit":  propInt("Max references (default: 100)"),
-		}, "symbol"),
+			"symbol_id": propString("Symbol ID, full Go identifier, or repository-relative shorthand"),
+			"limit":     propInt("Max references (default: 100)"),
+		}, "symbol_id"),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
-			sym, err := idx.SingleSymbol(strArg(args, "symbol", ""))
+			sym, err := idx.SingleSymbol(symbolArg(args))
 			if err != nil {
-				return err.Error(), true
+				return symbolErrorPayload(err), true
 			}
 			all := idx.XRefs[sym.ID]
 			limit := intArg(args, "limit", 100)
@@ -142,18 +286,18 @@ func (t *toolset) references() mcp.Tool {
 func (t *toolset) callGraph() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_call_graph",
-		Description: "BFS call graph (callers, callees, or both) from a function or method.",
+		Description: "BFS call graph (callers, callees, or both) from a function or method. Accepts canonical IDs, full Go identifiers, and repository-relative shorthands.",
 		InputSchema: object(map[string]any{
-			"symbol":                     propString("Function/method ID or name"),
+			"symbol_id":                  propString("Function/method ID, full Go identifier, or repository-relative shorthand"),
 			"direction":                  propEnum("Default: both", "callers", "callees", "both"),
 			"depth":                      propInt("Max depth (default: 2)"),
 			"limit":                      propInt("Max nodes (default: 80)"),
 			"include_interface_dispatch": propBool("Include in-module interface dispatch edges (default: true)"),
-		}, "symbol"),
+		}, "symbol_id"),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
-			sym, err := idx.SingleSymbol(strArg(args, "symbol", ""))
+			sym, err := idx.SingleSymbol(symbolArg(args))
 			if err != nil {
-				return err.Error(), true
+				return symbolErrorPayload(err), true
 			}
 			graph := idx.CallGraphWithOptions(
 				sym.ID,
@@ -174,14 +318,14 @@ func (t *toolset) callGraph() mcp.Tool {
 func (t *toolset) implementations() mcp.Tool {
 	return mcp.Tool{
 		Name:        "find_implementations",
-		Description: "Compiler-exact go/types.Implements lookup: interface to types, or type to interfaces.",
+		Description: "Compiler-exact go/types.Implements lookup: interface to types, or type to interfaces. Accepts canonical IDs, full Go identifiers, and repository-relative shorthands.",
 		InputSchema: object(map[string]any{
-			"symbol": propString("Interface or concrete type ID/name"),
-		}, "symbol"),
+			"symbol_id": propString("Interface or concrete type ID, full Go identifier, or repository-relative shorthand"),
+		}, "symbol_id"),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
-			sym, err := idx.SingleSymbol(strArg(args, "symbol", ""))
+			sym, err := idx.SingleSymbol(symbolArg(args))
 			if err != nil {
-				return err.Error(), true
+				return symbolErrorPayload(err), true
 			}
 			if sym.Kind == "interface" {
 				return render.JSON(map[string]any{
@@ -250,8 +394,8 @@ func (t *toolset) deadCode() mcp.Tool {
 				return "invalid group_by: " + groupBy, true
 			}
 			dead := idx.DeadCode(index.DeadCodeOptions{
-				PkgPrefix:        strings.TrimPrefix(strArg(args, "package_prefix", ""), "./"),
-				Module:           strArg(args, "module", ""),
+				PkgPrefix:        strings.TrimPrefix(firstStringArg(args, "package_prefix", "package", "pkg_path"), "./"),
+				Module:           strings.TrimPrefix(moduleArg(args), "mod:"),
 				ExcludeModules:   strListArg(args, "exclude_modules"),
 				IncludeExported:  boolArg(args, "include_exported", false),
 				IncludeGenerated: boolArg(args, "include_generated", false),
@@ -315,14 +459,14 @@ func (t *toolset) deadCode() mcp.Tool {
 func (t *toolset) functionBody() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_function_body",
-		Description: "Exact source, cyclomatic complexity, and LOC of a function or method.",
+		Description: "Exact source, cyclomatic complexity, and LOC of a function or method. Accepts canonical IDs, full Go identifiers, and repository-relative shorthands.",
 		InputSchema: object(map[string]any{
-			"symbol": propString("Function/method ID or name"),
-		}, "symbol"),
+			"symbol_id": propString("Function/method ID, full Go identifier, or repository-relative shorthand"),
+		}, "symbol_id"),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
-			sym, err := idx.SingleSymbol(strArg(args, "symbol", ""))
+			sym, err := idx.SingleSymbol(symbolArg(args))
 			if err != nil {
-				return err.Error(), true
+				return symbolErrorPayload(err), true
 			}
 			if sym.EndLine < sym.Line {
 				return "symbol has no source body: " + sym.ID, true

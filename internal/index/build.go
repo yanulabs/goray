@@ -582,14 +582,16 @@ func (b *builder) collectFileMetrics(p *packages.Package, pi *PkgInfo) {
 				mod.UntrackedFiles++
 			}
 		}
+		loc := countLines(src)
 		if generated {
 			pi.GeneratedFiles++
+			pi.GeneratedLOC += loc
 			if mod != nil {
 				mod.GeneratedFiles++
+				mod.GeneratedLOC += loc
 			}
 			continue
 		}
-		loc := countLines(src)
 		pi.ProdLOC += loc
 		if mod != nil {
 			mod.ProdLOC += loc
@@ -631,6 +633,12 @@ func (b *builder) addSymbol(sym *Symbol, pi *PkgInfo) {
 	b.idx.SymbolsByName[key] = append(b.idx.SymbolsByName[key], sym)
 	if sym.IsTest {
 		return
+	}
+	if sym.Generated {
+		pi.GeneratedSymbols++
+		if pi.ModuleArea != "" {
+			b.module(pi.ModuleArea).GeneratedSymbols++
+		}
 	}
 	if !sym.Exported {
 		return

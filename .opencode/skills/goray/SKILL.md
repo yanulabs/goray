@@ -54,21 +54,21 @@ Every registered MCP tool and its critical parameters:
 | Tool | Parameters |
 |---|---|
 | `project_info` | none. Readiness, counts, load errors, build mode, DB paths, available tool count. |
-| `get_codebase_map` | `format` (`markdown` default, plus registered formats), `tracked_only` (bool). Module scorecard with `test_only` and `test_loc`, cross-module graph/cycles, large files, hotspots. |
-| `get_module_overview` | `module` (required: module name such as `payments` or `internal/index`), `format`, `tracked_only`. Subpackages, in/out symbol deps, `.Ports()` calls, exported root API. |
-| `get_dependency_graph` | `root` (optional package path or module name; omit to rank fan-in/fan-out), `direction` (`out` default, `in`, `both`), `depth` (default `2`), `format` (default `json`). |
+| `get_codebase_map` | `format` (`markdown` default, plus registered formats), `detail` (`compact` default, `full`), `summary_only` (default `false`), `top_modules` (default `15`; `0` = all), `sort_by` (`prod_loc` default, `fan_in`, `fan_out`), `tracked_only` (bool). Compact scorecard reports generated file/symbol/LOC rollups plus `truncated`, `total_count`, and a fetch hint. |
+| `get_module_overview` | `module` (required: module name such as `payments` or `internal/index`, or `mod:` ID), `format`, `detail` (`compact` default, `full`), `include_generated` (default `false`), `tracked_only`. Compact returns package rollups, dependency edges, large files, and top hotspots with `generated_omitted`. |
+| `get_dependency_graph` | `package` (optional package path or module name; omit to rank fan-in/fan-out), `direction` (`out` default, `in`, `both`), `depth` (default `2`), `format` (default `json`). |
 | `explain_dependency` | `from` (required module name or package path), `to` (required), `include_tests` (default `false`), `limit` (max usage sites). Returns exact `file:line` imports and symbol usages, blank/dot imports flagged, counters, and reverse-edge hint. |
-| `lookup_symbol` | `query` (required: exact ID, name, `Type.Field`, or substring), `kind` (`func`, `method`, `interface`, `struct`, `type`, `var`, `const`, `field`), `limit` (default `25`). Returns `id` and `canonical_id`. |
-| `get_api_surface` | `package` (required: relative package path or full import path). Exported symbols grouped by kind with file:line and xref counts. |
-| `get_references` | `symbol` (required), `limit` (default `100`). Type-checked references with `from_func_id` and `file:line`; struct fields resolve as `Type.Field`. |
-| `get_call_graph` | `symbol` (required), `direction` (`callers`, `callees`, `both` default), `depth` (default `2`), `limit` (default `80`), `include_interface_dispatch` (default `true`). Dispatch edges carry `edge_kind: "interface_dispatch"` and `via_interface`. |
-| `find_implementations` | `symbol` (required interface or concrete type). Compiler-exact `go/types.Implements`, including test mocks. |
-| `get_impact_analysis` | `symbol` or `package`, `depth` (default `3`). Kind-aware blast radius: `implementations`, `test_mocks`, `direct_references`, `transitive_callers`, `affected_packages`, `test_packages_to_run`, `composite_literals`, `unkeyed_literals`. |
+| `lookup_symbol` | `symbol_id` (required: canonical ID, full Go identifier, repository-relative shorthand, `Type.Field`, exact name, or substring), `kind` (`func`, `method`, `interface`, `struct`, `type`, `var`, `const`, `field`), `limit` (default `25`). Returns `id` and `canonical_id`; includes `summary` or an `enclosing_summary` when the symbol itself is not eligible. |
+| `get_api_surface` | `package` (required: relative package path or full import path), `include_generated` (default `false`), `limit` (default `100`; `0` = unlimited), `offset` (default `0`), `kind` (`interface`, `type`, `func`, `const`, `var`). Reports `generated_omitted`, `total_count`, `truncated`, and `next_offset`. |
+| `get_references` | `symbol_id` (required), `limit` (default `100`). Type-checked references with `from_func_id` and `file:line`; struct fields resolve as `Type.Field`. |
+| `get_call_graph` | `symbol_id` (required), `direction` (`callers`, `callees`, `both` default), `depth` (default `2`), `limit` (default `80`), `include_interface_dispatch` (default `true`). Dispatch edges carry `edge_kind: "interface_dispatch"` and `via_interface`. |
+| `find_implementations` | `symbol_id` (required interface or concrete type). Compiler-exact `go/types.Implements`, including test mocks. |
+| `get_impact_analysis` | `symbol_id` or `package`, `depth` (default `3`). Kind-aware blast radius: `implementations`, `test_mocks`, `direct_references`, `transitive_callers`, `affected_packages`, `test_packages_to_run`, `composite_literals`, `unkeyed_literals`. |
 | `get_dead_code` | `package_prefix`, `include_exported` (default `false`), `include_generated` (default `false`), `module`, `exclude_modules`, `group_by` (`none` default, `module`, `package`), `limit` (default `100`). Test symbols are never reported. |
 | `get_hotspots` | `target` (`func` default, `file`, `type`), `sort_by` (`risk` default, `complexity`, `loc`, `fan_in`), `untested_only`, `module`, `exclude_modules`, `min_complexity`, `min_loc`, `tracked_only`, `include_generated`, `limit` (max `100`). |
-| `get_function_body` | `symbol` (required). Exact source with line numbers, LOC, cyclomatic complexity. |
+| `get_function_body` | `symbol_id` (required). Exact source with line numbers, LOC, cyclomatic complexity. |
 | `list_stale_summaries` | `kind`, `module`, `package`, `limit`, plus stale filters. Excludes `synced`, `not_eligible`, and dead symbols by default. |
-| `get_summary_context` | `symbol_ids` (required array), `max_chars` (default `40000`). Returns contexts, hashes, schema, and `truncated_ids`. |
+| `get_summary_context` | `symbol_id` (single) or `symbol_ids` (required array, max 25), `max_chars` (default `40000`). PREPARES RAW CONTEXT FOR WRITING/UPDATING SUMMARIES, not for reading cached summaries. Returns contexts, hashes, schema, `not_eligible` parent package/module IDs, and `truncated_ids`. |
 | `upsert_summaries` | `items` (required array of `symbol_id`, `summary`, `expected_self_hash`, `expected_dep_hash`), `model_id`. Use hashes returned by `get_summary_context`. |
 | `get_summary_coverage` | `module` (optional). Coverage totals and grouped counts. |
 | `run_tests` | `packages` (default `./...`), `run` (optional `-run` regex). Runs `go test -race -count=1`. |

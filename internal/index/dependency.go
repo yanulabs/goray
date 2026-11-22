@@ -238,6 +238,11 @@ func (idx *Index) resolveDependencyTarget(arg string) (map[string]bool, string, 
 	if arg == "" {
 		return nil, "", fmt.Errorf("dependency target must not be empty")
 	}
+	if strings.HasPrefix(arg, "mod:") {
+		arg = strings.TrimPrefix(arg, "mod:")
+	} else if strings.HasPrefix(arg, "pkg:") {
+		arg = strings.TrimPrefix(arg, "pkg:")
+	}
 	fullPath := false
 	for _, mod := range idx.modulePaths() {
 		if arg == mod || strings.HasPrefix(arg, mod+"/") {

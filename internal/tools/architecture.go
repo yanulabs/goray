@@ -14,15 +14,25 @@ import (
 func (t *toolset) codebaseMap() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_codebase_map",
-		Description: "High-level architecture map: module scorecard (explicit modules or standard layout groups), cross-module dependency graph, symbol coupling, and bloated files.",
+		Description: "High-level architecture map: module scorecard (explicit modules or standard layout groups), cross-module dependency edges, symbol coupling, and bloated files. Compact by default; set detail=\"full\" for the legacy full projection.",
 		InputSchema: object(map[string]any{
 			"format":       propEnum("Output format (default: markdown)", t.formats.CodebaseMapFormats()...),
+			"detail":       propEnum("Output detail (default: compact)", "compact", "full"),
+			"summary_only": propBool("Return only the module scorecard and payload metadata (default: false)"),
+			"top_modules":  propInt("Max modules in compact output, sorted by sort_by (default: 15; 0 = all)"),
+			"sort_by":      propEnum("Compact module ordering", "prod_loc", "fan_in", "fan_out"),
 			"tracked_only": propBool("Exclude git-untracked files and modules (default: false)"),
 		}),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 			format := strArg(args, "format", "markdown")
 			if boolArg(args, "tracked_only", false) {
 				idx = idx.TrackedView()
+			}
+			if strArg(args, "detail", "compact") == "compact" {
+				return t.compactCodebaseMap(idx, args)
+			}
+			if detail := strArg(args, "detail", "compact"); detail != "full" {
+				return "invalid detail: " + detail, true
 			}
 			out, ok := t.formats.RenderCodebaseMap(format, idx)
 			if !ok {
@@ -82,25 +92,54 @@ type cachedModule struct {
 func (t *toolset) moduleOverview() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_module_overview",
-		Description: "Deep dive on one module: subpackages, incoming/outgoing symbol dependencies, .Ports() calls, large files, and exported root API.",
+		Description: "Deep dive on one module: package rollups, incoming/outgoing dependency edges, .Ports() calls, large files, and top hotspots. Compact by default; generated content is excluded unless include_generated=true.",
 		InputSchema: object(map[string]any{
-			"module":       propString("Module name (e.g. payments, internal/index)"),
-			"format":       propEnum("Output format (default: markdown)", t.formats.ModuleFormats()...),
-			"tracked_only": propBool("Exclude git-untracked files (default: false)"),
+			"module":            propString("Module name (e.g. payments, internal/index) or canonical mod: ID"),
+			"format":            propEnum("Output format (default: markdown)", t.formats.ModuleFormats()...),
+			"detail":            propEnum("Output detail (default: compact)", "compact", "full"),
+			"include_generated": propBool("Include generated symbols in hotspots and omit generated_omitted (default: false)"),
+			"tracked_only":      propBool("Exclude git-untracked files (default: false)"),
 		}, "module"),
 		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 			if boolArg(args, "tracked_only", false) {
 				idx = idx.TrackedView()
 			}
-			name := strArg(args, "module", "")
-			summary, ok := idx.Modules[name]
+			name, ok := idx.ResolveModule(moduleArg(args))
 			if !ok {
-				return fmt.Sprintf("module %q not found; available: %s", name, strings.Join(idx.SortedModuleNames(), ", ")), true
+				return fmt.Sprintf("module %q not found; available: %s", moduleArg(args), strings.Join(idx.SortedModuleNames(), ", ")), true
+			}
+			summary := idx.Modules[name]
+			detail := strArg(args, "detail", "compact")
+			switch detail {
+			case "compact":
+				return t.compactModuleOverview(idx, summary, args)
+			case "full":
+			default:
+				return "invalid detail: " + detail, true
 			}
 			format := strArg(args, "format", "markdown")
 			out, ok := t.formats.RenderModule(format, idx, summary)
 			if !ok {
 				return "unsupported format: " + format, true
+			}
+			includeGenerated := boolArg(args, "include_generated", false)
+			if !includeGenerated && (summary.GeneratedFiles > 0 || summary.GeneratedSymbols > 0 || summary.GeneratedLOC > 0) {
+				omitted := generatedOmitted{Files: summary.GeneratedFiles, Symbols: summary.GeneratedSymbols, LOC: summary.GeneratedLOC}
+				hint := "set include_generated=true to include generated symbols"
+				switch format {
+				case "json":
+					var view map[string]any
+					if json.Unmarshal([]byte(out), &view) == nil {
+						view["generated_omitted"] = omitted
+						view["truncated"] = true
+						view["total_count"] = summary.Packages
+						view["hint"] = hint
+						out = render.JSON(view)
+					}
+				default:
+					out += fmt.Sprintf("\n## Generated\n\n- generated_omitted.files: %d\n- generated_omitted.symbols: %d\n- generated_omitted.loc: %d\n- truncated: true\n- total_count: %d\n- hint: %s\n",
+						omitted.Files, omitted.Symbols, omitted.LOC, summary.Packages, hint)
+				}
 			}
 			if t.summaries == nil {
 				return out, false
@@ -130,16 +169,16 @@ func (t *toolset) moduleOverview() mcp.Tool {
 func (t *toolset) dependencyGraph() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_dependency_graph",
-		Description: "Package dependency graph with optional BFS subgraph. Without a root, ranks packages by fan-in/fan-out.",
+		Description: "Package dependency graph with optional BFS subgraph. Without a package, ranks packages by fan-in/fan-out.",
 		InputSchema: object(map[string]any{
-			"root":      propString("Optional package path or module name"),
+			"package":   propString("Optional package path or module name"),
 			"direction": propEnum("Traversal direction (default: out)", "out", "in", "both"),
 			"depth":     propInt("BFS max depth (default: 2)"),
 			"format":    propEnum("Output format (default: json)", t.formats.GraphFormats()...),
 		}),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
 			format := strArg(args, "format", "json")
-			root := strings.TrimPrefix(strArg(args, "root", ""), "./")
+			root := strings.TrimPrefix(packageArg(args), "./")
 			if root == "" {
 				if format == "json" {
 					return render.JSON(idx.FanStats(40)), false
