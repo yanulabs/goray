@@ -18,9 +18,14 @@ From a local checkout:
 ```sh
 make install          # installs to GOBIN (or GOPATH/bin) with git version
 make build            # builds ./bin/goray
-make install-skill    # optional: installs the OpenCode skill to ~/.config/opencode/skills
-
+make install-skill    # installs the agent skill; prompts for target(s)
+make install-mcp      # installs the binary and registers the MCP server; prompts
 ```
+
+`make install-mcp` and `make install-skill` accept the same selection syntax:
+target numbers or names, comma/space-separated lists, `detected`, `installed`,
+`all`, or an explicit path. The MCP installer detects OpenCode, Claude Code,
+Codex, Cursor, Gemini CLI, Antigravity, and the shared `~/.agents` directory.
 
 ## Quick start
 
@@ -31,33 +36,63 @@ goray export html --open
 
 ```
 
-Connect `goray` to a Claude/Cursor-style MCP client:
+## MCP client setup
 
-```json
-{
-  "mcpServers": {
-    "goray": {
-      "command": "goray",
-      "args": ["serve", "/absolute/path/to/go/project"]
-    }
-  }
-}
+`make install-mcp` installs the binary, discovers installed clients, and prompts
+for one or more targets. `make uninstall-mcp` removes the `goray` entry using the
+same selection syntax.
 
+```sh
+make install-mcp                                  # interactive target picker
+make install-mcp MCP_TARGET=claude                # one client
+make install-mcp MCP_TARGET=opencode,cursor       # several clients
+make install-mcp MCP_TARGET=antigravity           # Antigravity App/IDE
+make install-mcp MCP_TARGET=all                   # every supported client
+make install-mcp MCP_TARGET=detected              # only detected clients
+make install-mcp MCP_SCOPE=project                # project-local configs in $PWD
+make install-mcp MCP_ARGS='serve /absolute/path/to/repo'  # pin a repository
+make install-mcp MCP_CONFIG=/tmp/mcp.json         # explicit file, no prompt
 ```
 
-With OpenCode (project-local):
+Supported targets:
+
+| Target | Global config | Project config | Entry format |
+| --- | --- | --- | --- |
+| `opencode` | `~/.config/opencode/opencode.json` | `./opencode.json` | `mcp.servers.<name>` |
+| `claude` | `~/.claude.json` | `./.mcp.json` | `mcpServers.<name>` |
+| `codex` | `~/.codex/config.toml` | `./.codex/config.toml` | `[mcp_servers.<name>]` |
+| `cursor` | `~/.cursor/mcp.json` | `./.cursor/mcp.json` | `mcpServers.<name>` |
+| `gemini` | `~/.gemini/settings.json` | `./.gemini/settings.json` | `mcpServers.<name>` |
+| `antigravity` | `~/.gemini/config/mcp_config.json` | `./.agents/mcp_config.json` | `mcpServers.<name>` |
+| `agents` | `~/.agents/mcp.json` | `./.agents/mcp.json` | `mcpServers.<name>` |
+
+`MCP_NAME` defaults to `goray` and `MCP_ARGS` defaults to `serve`; names are
+restricted to letters, digits, `_`, and `-`. `MCP_FORMAT` overrides format
+inference for `MCP_CONFIG` (`opencode`, `claude`, `codex`, `cursor`, `gemini`,
+`antigravity`, `agents`, or `generic`). `OPENCODE_CONFIG` remains available as an
+OpenCode-only override. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are honored.
+Project-scoped Codex configs load only for trusted projects.
+
+Antigravity App/IDE never reads Gemini CLI's `~/.gemini/settings.json`; it reads
+`~/.gemini/config/mcp_config.json` globally and `.agents/mcp_config.json` per
+workspace. Antigravity also spawns MCP servers with cwd `/`, so the installer
+writes `args: ["serve", "${workspaceFolder}"]` for `goray`. If your Antigravity
+build passes `${workspaceFolder}` through literally, pin the repo with
+`MCP_CWD=/absolute/path/to/repo`; that writes a `cwd` entry. Restart Antigravity
+or use **Customizations → Installed → MCP Servers → Restart** after installing.
+
+The installer edits JSON/TOML files with `python3` and follows symlinked config
+files. It refuses to rewrite JSONC files; use the client's own command for those.
+When stdin is not a terminal and no target is supplied, `make install-mcp`
+defaults to `opencode` for backwards compatibility.
+
+Equivalent per-client commands:
 
 ```sh
 opencode mcp add goray -- goray serve .
-
-```
-
-Install globally into OpenCode with the Makefile target:
-
-```sh
-make install-mcp
-# or explicitly:
-opencode mcp add goray --global -- goray serve
+claude mcp add --scope user goray -- goray serve
+codex mcp add goray -- goray serve
+gemini mcp add --scope user goray goray serve
 ```
 
 OpenCode V2 reads servers from `mcp.servers` (not directly under `mcp`). The generated configuration looks like:
@@ -317,8 +352,8 @@ all tables live in that one database and no shared summary file is created.
 | Tool | Purpose |
 | --- | --- |
 | `project_info` | Index state, module path, working and summary DB paths, symbol counts, load errors |
-| `get_codebase_map` | Concise module scorecard, cross-module edges and cycles, large files, top hotspots; `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
-| `get_module_overview` | Single module packages, dependencies, large files, exported API, `tracked_only` (`md`/`json`) |
+| `get_codebase_map` | Compact module scorecard with generated symbol/LOC rollups, cross-module edge counts, cycles, large files, top hotspots, pagination metadata; `detail`, `summary_only`, `top_modules`, `sort_by`, `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
+| `get_module_overview` | Compact package rollups, dependency edges, large files, and top hotspots with `include_generated`; `detail=full` for the legacy projection (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
 | `explain_dependency` | Exact imports, `file:line` symbol usages, blank/dot imports, enclosing callers, and counters behind a module/package edge |
 
@@ -326,8 +361,8 @@ all tables live in that one database and no shared summary file is created.
 
 | Tool | Purpose |
 | --- | --- |
-| `lookup_symbol` | Exact or fuzzy symbol lookup with cached summary metadata |
-| `get_api_surface` | Exported symbols with cached summary metadata |
+| `lookup_symbol` | Canonical ID/full Go path/repo-relative/fuzzy symbol lookup with cached or enclosing summary metadata |
+| `get_api_surface` | Paginated exported symbols with generated-symbol collapsing, kind filter, and cached summary metadata |
 | `get_references` | Type-checked references with enclosing caller and `file:line` |
 | `get_call_graph` | BFS callers/callees with typed `direct` and in-module `interface_dispatch` edges |
 | `find_implementations` | `go/types.Implements` interface-to-type matrix, including test mocks |
@@ -367,6 +402,7 @@ internal/render          Markdown/DOT/HTML renderers and embedded web assets
 internal/render/dist     Committed single-file Vite build (report.html)
 web                      Quarantined React/TypeScript/Tailwind report source
 .opencode/skills/goray   OpenCode skill definition
+scripts/mcp-config.py    MCP client config installer for make install-mcp
 
 ```
 

@@ -41,5 +41,9 @@ go.work.sum
 # Web frontend dependencies
 web/node_modules/
 
+# Python bytecode (scripts/mcp-config.py)
+__pycache__/
+*.pyc
+
 # macOS metadata
 .DS_Store
