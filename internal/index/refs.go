@@ -72,7 +72,12 @@ func (b *builder) recordUse(p *packages.Package, srcMod string, id *ast.Ident, f
 		Line:       pos.Line,
 		Test:       test,
 	})
-	if srcMod != "" && target.ModuleArea != "" && srcMod != target.ModuleArea {
+	// Architecture edges describe production structure. Test files routinely
+	// import many modules (gate/e2e suites), which would manufacture module
+	// cycles that do not exist in production. Test references remain available
+	// through XRefs, impact analysis, explain_dependency(include_tests=true),
+	// and test coverage.
+	if !test && srcMod != "" && target.ModuleArea != "" && srcMod != target.ModuleArea {
 		addNested(b.modOut, srcMod, target.ModuleArea, target.Name)
 		addNested(b.modIn, target.ModuleArea, srcMod, target.Name)
 	}

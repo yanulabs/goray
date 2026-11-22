@@ -164,7 +164,13 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 	b.addSymbol(sym, pi)
 
 	if structType, ok := tn.Type().Underlying().(*types.Struct); ok {
-		b.indexFields(p, pi, tn, structType, meta)
+		// A type alias shares the original type's *types.Var field objects.
+		// Re-indexing them under the alias package would create duplicate field
+		// symbols and overwrite the declaring type's ownership, inventing
+		// module dependencies and cycles.
+		if _, alias := tn.Type().(*types.Alias); !alias {
+			b.indexFields(p, pi, tn, structType, meta)
+		}
 	}
 
 	if iface, ok := tn.Type().Underlying().(*types.Interface); ok && iface.NumMethods() > 0 {
@@ -187,7 +193,9 @@ func (b *builder) indexFields(p *packages.Package, pi *PkgInfo, tn *types.TypeNa
 			continue
 		}
 		pos := p.Fset.Position(field.Pos())
-		b.fieldVarOwner[field] = typeID
+		if _, owned := b.fieldVarOwner[field]; !owned {
+			b.fieldVarOwner[field] = typeID
+		}
 		b.addSymbol(&Symbol{
 			ID:         typeID + "." + field.Name(),
 			Name:       field.Name(),
