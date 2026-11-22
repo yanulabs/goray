@@ -1,25 +1,23 @@
 package render
 
 import (
-	"bytes"
-	"embed"
+	_ "embed"
 	"encoding/json"
+	"fmt"
 	"sort"
-	"text/template"
+	"strconv"
+	"strings"
 )
 
-//go:embed html/template.html html/app.js html/styles.css
-var htmlAssets embed.FS
+// reportHTML is the Vite single-file build committed at dist/report.html.
+//
+//go:embed dist/report.html
+var reportHTML string
 
-var htmlTemplate = template.Must(template.New("report").Parse(mustHTMLAsset("html/template.html")))
-
-func mustHTMLAsset(name string) string {
-	data, err := htmlAssets.ReadFile(name)
-	if err != nil {
-		panic(err)
-	}
-	return string(data)
-}
+const (
+	reportDataPlaceholder = "__GORAY_REPORT_DATA__"
+	reportLivePlaceholder = "__GORAY_LIVE__"
+)
 
 // HTMLReport is the self-contained data payload rendered into the HTML report.
 type HTMLReport struct {
@@ -36,6 +34,7 @@ type HTMLReport struct {
 	Interfaces      []HTMLInterface   `json:"interfaces"`
 	Graphs          HTMLGraphs        `json:"graphs"`
 	Tree            []*HTMLTreeNode   `json:"tree"`
+	ModuleCycles    [][]string        `json:"module_cycles"`
 }
 
 type HTMLMetrics struct {
@@ -89,7 +88,11 @@ type HTMLSymbol struct {
 	Eligible    bool         `json:"eligible"`
 	IsTest      bool         `json:"is_test"`
 	IsGenerated bool         `json:"is_generated"`
+	Untracked   bool         `json:"untracked"`
+	TestCovered *bool        `json:"test_covered,omitempty"`
 	SyncState   string       `json:"sync_state"`
+	Signature   string       `json:"signature,omitempty"`
+	Doc         string       `json:"doc,omitempty"`
 	Summary     *HTMLSummary `json:"summary,omitempty"`
 	Callers     []string     `json:"callers,omitempty"`
 	Callees     []string     `json:"callees,omitempty"`
@@ -102,38 +105,43 @@ type HTMLCoupled struct {
 }
 
 type HTMLModuleCard struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Packages     int          `json:"packages"`
-	ProdLOC      int          `json:"prod_loc"`
-	TestLOC      int          `json:"test_loc"`
-	RootExported int          `json:"root_exported"`
-	PortsCalls   int          `json:"ports_calls"`
-	Goroutines   int          `json:"goroutines"`
-	OutModules   int          `json:"out_modules"`
-	InModules    int          `json:"in_modules"`
-	SyncState    string       `json:"sync_state"`
-	Summary      *HTMLSummary `json:"summary,omitempty"`
+	ID             string       `json:"id"`
+	Name           string       `json:"name"`
+	Packages       int          `json:"packages"`
+	ProdLOC        int          `json:"prod_loc"`
+	TestLOC        int          `json:"test_loc"`
+	RootExported   int          `json:"root_exported"`
+	PortsCalls     int          `json:"ports_calls"`
+	Goroutines     int          `json:"goroutines"`
+	OutModules     int          `json:"out_modules"`
+	InModules      int          `json:"in_modules"`
+	UntrackedFiles int          `json:"untracked_files"`
+	AllUntracked   bool         `json:"all_untracked,omitempty"`
+	SyncState      string       `json:"sync_state"`
+	Summary        *HTMLSummary `json:"summary,omitempty"`
 }
 
 type HTMLPackageCard struct {
-	ID        string       `json:"id"`
-	PkgPath   string       `json:"pkg_path"`
-	RelPath   string       `json:"rel_path"`
-	Module    string       `json:"module"`
-	ProdLOC   int          `json:"prod_loc"`
-	TestLOC   int          `json:"test_loc"`
-	Exported  int          `json:"exported"`
-	FanIn     int          `json:"fan_in"`
-	FanOut    int          `json:"fan_out"`
-	SyncState string       `json:"sync_state"`
-	Summary   *HTMLSummary `json:"summary,omitempty"`
+	ID             string       `json:"id"`
+	PkgPath        string       `json:"pkg_path"`
+	RelPath        string       `json:"rel_path"`
+	Module         string       `json:"module"`
+	ProdLOC        int          `json:"prod_loc"`
+	TestLOC        int          `json:"test_loc"`
+	Exported       int          `json:"exported"`
+	FanIn          int          `json:"fan_in"`
+	FanOut         int          `json:"fan_out"`
+	GeneratedFiles int          `json:"generated_files,omitempty"`
+	UntrackedFiles int          `json:"untracked_files,omitempty"`
+	SyncState      string       `json:"sync_state"`
+	Summary        *HTMLSummary `json:"summary,omitempty"`
 }
 
 type HTMLInterface struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
 	PkgPath         string     `json:"pkg_path"`
+	Module          string     `json:"module"`
 	Methods         int        `json:"methods"`
 	Implementations []HTMLImpl `json:"implementations"`
 }
@@ -164,6 +172,7 @@ type HTMLGraphNode struct {
 	FanIn     int          `json:"fan_in"`
 	FanOut    int          `json:"fan_out"`
 	Eligible  bool         `json:"eligible"`
+	Untracked bool         `json:"untracked"`
 	Layer     int          `json:"layer"`
 	Order     int          `json:"order"`
 	SyncState string       `json:"sync_state"`
@@ -186,26 +195,51 @@ type HTMLTreeNode struct {
 
 // RenderHTML renders the single-file offline report.
 func RenderHTML(report HTMLReport) (string, error) {
+	return renderHTML(report, false)
+}
+
+// RenderHTMLLive renders the same document with the live-refresh flag enabled.
+// The local server uses it while static exports keep RenderHTML.
+func RenderHTMLLive(report HTMLReport) (string, error) {
+	return renderHTML(report, true)
+}
+
+func renderHTML(report HTMLReport, live bool) (string, error) {
 	// Hotspots are a derived production-risk view; never trust stale or noisy input.
 	report.Hotspots = BuildHotspots(report.Symbols)
+	if report.ModuleCycles == nil {
+		report.ModuleCycles = [][]string{}
+	}
 	payload, err := json.Marshal(report)
 	if err != nil {
 		return "", err
 	}
-	data := struct {
-		CSS        string
-		JS         string
-		ReportJSON string
-	}{
-		CSS:        mustHTMLAsset("html/styles.css"),
-		JS:         mustHTMLAsset("html/app.js"),
-		ReportJSON: string(payload),
+
+	out := strings.Replace(reportHTML, reportLivePlaceholder, strconv.FormatBool(live), 1)
+	if strings.Contains(out, reportLivePlaceholder) {
+		return "", fmt.Errorf("report template is missing the live placeholder")
 	}
-	var out bytes.Buffer
-	if err := htmlTemplate.Execute(&out, data); err != nil {
-		return "", err
+
+	marker := `id="goray-data"`
+	markerStart := strings.Index(out, marker)
+	if markerStart < 0 {
+		return "", fmt.Errorf("report template is missing the goray-data script tag")
 	}
-	return out.String(), nil
+	payloadStart := strings.Index(out[markerStart:], ">")
+	if payloadStart < 0 {
+		return "", fmt.Errorf("report template has a malformed goray-data script tag")
+	}
+	payloadStart += markerStart + 1
+	payloadEnd := strings.Index(out[payloadStart:], "</script>")
+	if payloadEnd < 0 {
+		return "", fmt.Errorf("report template has an unclosed goray-data script tag")
+	}
+	payloadEnd += payloadStart
+	if strings.TrimSpace(out[payloadStart:payloadEnd]) != reportDataPlaceholder {
+		return "", fmt.Errorf("report template is missing the data placeholder")
+	}
+
+	return out[:payloadStart] + string(payload) + out[payloadEnd:], nil
 }
 
 // BuildHotspots selects the highest-risk production symbols. Test and generated

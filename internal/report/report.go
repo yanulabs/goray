@@ -58,8 +58,12 @@ func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HT
 			FanOut: fanOut(idx, summary, sym), Exported: summary.Exported,
 			Dead: summary.Dead, Eligible: summary.Eligible,
 			IsTest: summary.IsTest, IsGenerated: summary.IsGenerated,
-			SyncState: stateFor(cached, summary),
-			Summary:   summaryView(cached[summary.ID]),
+			Untracked:   untrackedFor(idx, summary, sym),
+			TestCovered: testCoveredFor(idx, sym),
+			SyncState:   stateFor(cached, summary),
+			Signature:   signatureFor(summary, sym),
+			Doc:         docFor(summary),
+			Summary:     summaryView(cached[summary.ID]),
 		}
 		if sym != nil && (sym.Kind == "func" || sym.Kind == "method") {
 			row.Callers = canonicalRefs(idx.Callers[sym.ID], canonicalByExisting)
@@ -73,6 +77,10 @@ func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HT
 	coverage, err := buildCoverage(ctx, store)
 	if err != nil {
 		return render.HTMLReport{}, err
+	}
+	cycles := idx.ModuleCycles()
+	if cycles == nil {
+		cycles = [][]string{}
 	}
 	report := render.HTMLReport{
 		Repo: idx.RootDir, ModulePath: idx.ModulePath,
@@ -88,9 +96,39 @@ func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HT
 			Modules:  render.LayoutGraph(buildModuleGraph(idx, cached)),
 			Packages: render.LayoutGraph(buildPackageGraph(idx, cached)),
 		},
-		Tree: buildTree(idx, cached, canonical),
+		Tree:         buildTree(idx, cached, canonical),
+		ModuleCycles: cycles,
 	}
 	return report, nil
+}
+
+func untrackedFor(idx *index.Index, summary *index.SummarySymbol, sym *index.Symbol) bool {
+	if sym != nil {
+		return sym.Untracked
+	}
+	return idx.UntrackedFiles[summary.FilePath]
+}
+
+func testCoveredFor(idx *index.Index, sym *index.Symbol) *bool {
+	if sym == nil || (sym.Kind != "func" && sym.Kind != "method") {
+		return nil
+	}
+	covered := idx.TestCovered[sym.ID]
+	return &covered
+}
+
+func signatureFor(summary *index.SummarySymbol, sym *index.Symbol) string {
+	if summary.Signature != "" {
+		return summary.Signature
+	}
+	if sym != nil {
+		return sym.Signature
+	}
+	return ""
+}
+
+func docFor(summary *index.SummarySymbol) string {
+	return summary.Doc
 }
 
 func symbolLabel(summary *index.SummarySymbol, sym *index.Symbol) string {
@@ -251,6 +289,7 @@ func buildModuleCards(idx *index.Index, cached map[string]cache.Cached) []render
 			ProdLOC: module.ProdLOC, TestLOC: module.TestLOC,
 			RootExported: module.RootExported, PortsCalls: module.PortsCalls,
 			Goroutines: module.Goroutines, OutModules: len(module.OutModules), InModules: len(module.InModules),
+			UntrackedFiles: module.UntrackedFiles, AllUntracked: module.AllUntracked,
 			SyncState: stateForID(cached, id, idx.Summary.Get(id)), Summary: summaryView(cached[id]),
 		})
 	}
@@ -270,6 +309,7 @@ func buildPackageCards(idx *index.Index, cached map[string]cache.Cached) []rende
 			ID: id, PkgPath: pkg.PkgPath, RelPath: pkg.RelPath, Module: pkg.ModuleArea,
 			ProdLOC: pkg.ProdLOC, TestLOC: pkg.TestLOC, Exported: pkg.Exported,
 			FanIn: len(idx.RevImports[pkg.PkgPath]), FanOut: len(pkg.Imports),
+			GeneratedFiles: pkg.GeneratedFiles, UntrackedFiles: pkg.UntrackedFiles,
 			SyncState: stateForID(cached, id, idx.Summary.Get(id)), Summary: summaryView(cached[id]),
 		})
 	}
@@ -296,6 +336,7 @@ func buildModuleGraph(idx *index.Index, cached map[string]cache.Cached) render.H
 			ID: id, Label: name, Kind: "module", Module: name, LOC: module.ProdLOC,
 			FanIn: len(module.InModules), FanOut: len(module.OutModules),
 			Eligible:  summary != nil && summary.Eligible,
+			Untracked: module.UntrackedFiles > 0,
 			SyncState: stateForID(cached, id, summary), Summary: summaryView(cached[id]),
 		}
 		graph.Nodes = append(graph.Nodes, node)
@@ -321,6 +362,7 @@ func buildPackageGraph(idx *index.Index, cached map[string]cache.Cached) render.
 			ID: id, Label: pkg.RelPath, Kind: "package", Module: pkg.ModuleArea, LOC: pkg.ProdLOC,
 			FanIn: len(idx.RevImports[pkgPath]), FanOut: len(pkg.Imports),
 			Eligible:  summary != nil && summary.Eligible,
+			Untracked: pkg.UntrackedFiles > 0,
 			SyncState: stateForID(cached, id, summary), Summary: summaryView(cached[id]),
 		}
 		graph.Nodes = append(graph.Nodes, node)
@@ -341,7 +383,11 @@ func buildInterfaces(idx *index.Index, canonicalByExisting map[string]string) []
 		if id == "" {
 			continue
 		}
-		iface := render.HTMLInterface{ID: id, Name: sym.Name, PkgPath: sym.PkgPath, Methods: sym.Methods}
+		iface := render.HTMLInterface{
+			ID: id, Name: sym.Name, PkgPath: sym.PkgPath,
+			Module: sym.ModuleArea, Methods: sym.Methods,
+			Implementations: make([]render.HTMLImpl, 0),
+		}
 		for _, match := range idx.IfaceImpls[sym.ID] {
 			impl := idx.Symbols[match.TypeID]
 			if impl == nil {
@@ -375,9 +421,16 @@ func buildInterfaces(idx *index.Index, canonicalByExisting map[string]string) []
 func buildTree(idx *index.Index, cached map[string]cache.Cached, canonical map[string]*index.Symbol) []*render.HTMLTreeNode {
 	byID := make(map[string]*render.HTMLTreeNode, len(idx.Summary.Symbols))
 	for _, summary := range idx.Summary.Symbols {
-		if summary.Kind == "package" || summary.Kind == "module" || summary.Kind == "file" || summary.Kind == "type" || summary.Kind == "func" || summary.Kind == "method" {
+		kind := summary.Kind
+		if kind == "type" {
+			if sym := canonical[summary.ID]; sym != nil && (sym.Kind == "interface" || sym.Kind == "struct") {
+				kind = sym.Kind
+			}
+		}
+		switch kind {
+		case "package", "module", "file", "type", "struct", "interface", "func", "method":
 			byID[summary.ID] = &render.HTMLTreeNode{
-				ID: summary.ID, Kind: summary.Kind,
+				ID: summary.ID, Kind: kind,
 				Label:     symbolLabel(summary, canonical[summary.ID]),
 				SyncState: stateFor(cached, summary),
 			}
@@ -419,7 +472,7 @@ func kindRank(kind string) int {
 		return 1
 	case "file":
 		return 2
-	case "type":
+	case "type", "struct", "interface":
 		return 3
 	case "func", "method":
 		return 4

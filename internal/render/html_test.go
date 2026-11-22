@@ -2,21 +2,22 @@ package render
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 func htmlPayload(t *testing.T, html string) string {
 	t.Helper()
-	marker := `<script id="report-data" type="application/json">`
+	marker := `id="goray-data"`
 	start := strings.Index(html, marker)
 	if start < 0 {
-		t.Fatal("report-data script not found")
+		t.Fatal("goray-data script not found")
 	}
-	start += len(marker)
+	start = strings.Index(html[start:], ">") + start + 1
 	end := strings.Index(html[start:], "</script>")
 	if end < 0 {
-		t.Fatal("report-data script not closed")
+		t.Fatal("goray-data script not closed")
 	}
 	return html[start : start+end]
 }
@@ -53,9 +54,20 @@ func TestRenderHTMLSelfContainedAndEmptySummaries(t *testing.T) {
 	if !json.Valid([]byte(payload)) {
 		t.Fatal("embedded report-data is not valid JSON")
 	}
-	for _, forbidden := range []string{"http://", "https://", "@import"} {
-		if strings.Contains(html, forbidden) {
-			t.Fatalf("report contains external/network reference %q", forbidden)
+	if strings.Contains(html, "__GORAY_REPORT_DATA__") || strings.Contains(html, "__GORAY_LIVE__") {
+		t.Fatal("report contains an unresolved template placeholder")
+	}
+	if !strings.Contains(html, `data-goray-live="false"`) {
+		t.Fatal("static report should disable live refresh")
+	}
+	for _, pattern := range []string{
+		`<script[^>]+src\s*=`,
+		`<link[^>]+href\s*=`,
+		`@import\s`,
+		`url\(\s*["']?https?://`,
+	} {
+		if regexp.MustCompile(pattern).MatchString(html) {
+			t.Fatalf("report contains external asset reference matching %q", pattern)
 		}
 	}
 	if !strings.Contains(html, "No cached LLM summary") {
@@ -64,8 +76,21 @@ func TestRenderHTMLSelfContainedAndEmptySummaries(t *testing.T) {
 	if !strings.Contains(html, "goray · Architecture Report") {
 		t.Fatal("goray report title is missing")
 	}
-	if !strings.Contains(html, `localStorage.getItem("goray-theme")`) {
+	if !strings.Contains(html, "goray-theme") {
 		t.Fatal("goray theme storage key is missing")
+	}
+}
+
+func TestRenderHTMLLiveFlag(t *testing.T) {
+	html, err := RenderHTMLLive(emptyReport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, `data-goray-live="true"`) {
+		t.Fatal("live report does not enable the refresh flag")
+	}
+	if !json.Valid([]byte(htmlPayload(t, html))) {
+		t.Fatal("live embedded report-data is not valid JSON")
 	}
 }
 
@@ -73,6 +98,7 @@ func TestRenderHTMLEscapesScriptBreakout(t *testing.T) {
 	attack := `</script><img src=x onerror=alert(1)>`
 	report := emptyReport()
 	report.Symbols[0].Name = attack
+	report.Symbols[0].Doc = `<!-- marker & value`
 	report.Symbols[0].Summary = &HTMLSummary{
 		Intent: attack, SideEffects: []string{"db_write"}, Invariants: []string{attack},
 		SyncState: "soft_stale", DepsChanged: true,
@@ -85,11 +111,48 @@ func TestRenderHTMLEscapesScriptBreakout(t *testing.T) {
 		t.Fatal("summary broke out of the report-data script")
 	}
 	payload := htmlPayload(t, html)
-	if !strings.Contains(payload, `\u003c/script\u003e`) || !strings.Contains(payload, `\u003cimg`) {
-		t.Fatalf("payload was not HTML-escaped: %s", payload)
+	for _, escaped := range []string{`\u003c/script\u003e`, `\u003cimg`, `\u003c!--`, `\u0026`} {
+		if !strings.Contains(payload, escaped) {
+			t.Fatalf("payload was not HTML-escaped (%s): %s", escaped, payload)
+		}
 	}
 	if !json.Valid([]byte(payload)) {
 		t.Fatal("escaped payload is not valid JSON")
+	}
+}
+
+func TestRenderHTMLSerializesAuditFields(t *testing.T) {
+	covered := true
+	report := emptyReport()
+	report.Symbols[0].TestCovered = &covered
+	report.Symbols[0].Untracked = true
+	report.Symbols[0].Signature = "func F()"
+	report.Symbols[0].Doc = "F does work."
+	report.Interfaces = []HTMLInterface{{
+		ID: "sym:example.com/app.I", Name: "I", PkgPath: "example.com/app",
+		Module: "app", Methods: 1,
+		Implementations: []HTMLImpl{{ID: "sym:example.com/app.T", Name: "T", PkgPath: "example.com/app", ViaPtr: true}},
+	}}
+	report.ModuleCycles = [][]string{{"a", "b", "a"}}
+	html, err := RenderHTML(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded HTMLReport
+	if err := json.Unmarshal([]byte(htmlPayload(t, html)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Symbols[0].TestCovered == nil || !*decoded.Symbols[0].TestCovered {
+		t.Fatal("test coverage was not serialized")
+	}
+	if !decoded.Symbols[0].Untracked || decoded.Symbols[0].Signature == "" || decoded.Symbols[0].Doc == "" {
+		t.Fatalf("audit fields missing: %+v", decoded.Symbols[0])
+	}
+	if len(decoded.Interfaces) != 1 || decoded.Interfaces[0].Module != "app" {
+		t.Fatalf("interface module missing: %+v", decoded.Interfaces)
+	}
+	if len(decoded.ModuleCycles) != 1 || len(decoded.ModuleCycles[0]) != 3 {
+		t.Fatalf("module cycles missing: %+v", decoded.ModuleCycles)
 	}
 }
 

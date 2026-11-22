@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -76,6 +77,13 @@ func startReportServer(ctx context.Context, ln net.Listener, store *index.Store,
 
 func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
+	build := func(ctx context.Context) (render.HTMLReport, error) {
+		idx, err := store.Wait(ctx)
+		if err != nil {
+			return render.HTMLReport{}, fmt.Errorf("index is not ready: %w", err)
+		}
+		return report.Build(ctx, idx, summaries)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -86,19 +94,13 @@ func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logg
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		idx, err := store.Wait(r.Context())
+		data, err := build(r.Context())
 		if err != nil {
 			logger.Warn("report request failed", "err", err)
-			http.Error(w, "index is not ready: "+err.Error(), http.StatusServiceUnavailable)
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		data, err := report.Build(r.Context(), idx, summaries)
-		if err != nil {
-			logger.Warn("report build failed", "err", err)
-			http.Error(w, "report build failed: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		html, err := render.RenderHTML(data)
+		html, err := render.RenderHTMLLive(data)
 		if err != nil {
 			logger.Warn("report render failed", "err", err)
 			http.Error(w, "report render failed: "+err.Error(), http.StatusInternalServerError)
@@ -112,6 +114,33 @@ func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logg
 			return
 		}
 		_, _ = io.WriteString(w, html)
+	})
+	mux.HandleFunc("/api/report", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/report" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		data, err := build(r.Context())
+		if err != nil {
+			logger.Warn("report API request failed", "err", err)
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(data); err != nil {
+			logger.Warn("report API encode failed", "err", err)
+		}
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

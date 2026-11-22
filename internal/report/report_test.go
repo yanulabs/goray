@@ -150,7 +150,7 @@ func Caller() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(html, "report-data") || !strings.Contains(html, "db_write") {
+	if !strings.Contains(html, `id="goray-data"`) || !strings.Contains(html, "db_write") {
 		t.Fatal("HTML report missing data or summaries")
 	}
 }

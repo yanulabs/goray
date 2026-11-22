@@ -26,7 +26,7 @@ CGO_ENABLED ?= 0
 
 .DEFAULT_GOAL := help
 
-.PHONY: all build install uninstall install-skill uninstall-skill install-mcp uninstall-mcp install-all uninstall-all test test-race vet lint fmt fmt-check verify tidy db-info clean help
+.PHONY: all build install uninstall install-skill uninstall-skill install-mcp uninstall-mcp install-all uninstall-all test test-race vet lint fmt fmt-check verify tidy db-info clean help web-install web-dev web-typecheck web-build
 
 define RESOLVE_BIN
 	bin="$$($(GO) env GOBIN)"; \
@@ -473,6 +473,18 @@ verify: fmt-check vet lint test-race ## Run fmt-check, vet, lint, and test-race
 
 tidy: ## Run go mod tidy
 	$(GO) mod tidy
+
+web-install: ## Install web dependencies from the committed lockfile
+	cd web && npm ci
+
+web-dev: ## Run the Vite dev server (proxies /api to a running goray serve)
+	cd web && npm run dev
+
+web-typecheck: ## Typecheck the report frontend
+	cd web && npm run typecheck
+
+web-build: ## Typecheck and build the single-file report into internal/render/dist
+	cd web && npm run typecheck && npm run build
 
 db-info: build ## Print populated cache statistics (ROOT=$(ROOT))
 	"$(BIN_DIR)/$(BINARY)" -db-info "$(ROOT)"

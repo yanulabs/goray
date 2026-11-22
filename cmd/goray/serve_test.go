@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
+	"github.com/yanulabs/goray/internal/render"
 )
 
 func TestListenLocalAndBanner(t *testing.T) {
@@ -60,10 +62,32 @@ func TestReportHandler(t *testing.T) {
 		t.Fatalf("content type = %q", got)
 	}
 	body := recorder.Body.String()
-	for _, want := range []string{`<script id="report-data"`, "goray · Architecture Report"} {
+	for _, want := range []string{`id="goray-data"`, "goray · Architecture Report", `data-goray-live="true"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("report missing %q", want)
 		}
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/report", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /api/report = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("API content type = %q", got)
+	}
+	var payload render.HTMLReport
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode API payload: %v", err)
+	}
+	if payload.ModulePath == "" || payload.GeneratedAt == "" {
+		t.Fatalf("API payload missing metadata: %+v", payload)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/report", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/report = %d", recorder.Code)
 	}
 
 	recorder = httptest.NewRecorder()

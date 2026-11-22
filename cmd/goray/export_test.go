@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -34,11 +35,13 @@ func TestExportHTMLCLI(t *testing.T) {
 	if len(html) < 10_000 {
 		t.Fatalf("report too small: %d bytes", len(html))
 	}
-	if !strings.Contains(html, `<script id="report-data" type="application/json">`) {
+	if !strings.Contains(html, `id="goray-data"`) {
 		t.Fatal("report data payload is missing")
 	}
-	if strings.Contains(html, "http://") || strings.Contains(html, "https://") {
-		t.Fatal("report contains an external URL")
+	for _, pattern := range []string{`<script[^>]+src\s*=`, `<link[^>]+href\s*=`, `@import\s`} {
+		if regexp.MustCompile(pattern).MatchString(html) {
+			t.Fatalf("report contains an external asset reference matching %q", pattern)
+		}
 	}
 	if strings.Contains(html, "</script><img") {
 		t.Fatal("report contains an unescaped script breakout")

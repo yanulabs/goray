@@ -1,0 +1,2 @@
+# The single-file report is a generated Vite build committed for Node-free Go builds.
+internal/render/dist/** linguist-generated=true -diff

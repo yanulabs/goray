@@ -121,7 +121,7 @@ goray serve [path] [--db <path>] [--log-level off|error|info] [--port <n>] [--op
   ➜  Press Ctrl+C to stop
 ```
 
-The report reflects the current index snapshot and summary cache, and refreshes on each page load after rebuilds. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
+The report reflects the current index snapshot and summary cache. The live page reads `GET /api/report` every five seconds and updates in place, preserving the active view, filters, selection, and graph zoom. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
 
 ### `export`
 
@@ -142,7 +142,7 @@ goray export dot | dot -T svg > deps.svg
 
 ```
 
-The HTML export is a single offline file with all CSS, JS, and indexed metadata embedded (no external assets, no source dumps). It includes overview metrics, a layered dependency graph with cycle/back-edge detection, a sortable complexity/fan-in hotspots table, an interface implementation matrix, a hierarchy explorer, and a symbol inspector with upstream blast radius.
+The HTML export is a single offline file with all CSS, JS, and indexed metadata embedded (no external assets, no source dumps). The UI is a React + TypeScript + Tailwind build compiled by Vite into `internal/render/dist/report.html` and embedded with `go:embed`. It includes a viewport-locked workbench with graph, hotspots, interfaces, and explorer views, a resizable inspector, and a `Cmd+K` command palette. The committed artifact means `go install`, `go build`, and `go test` never require Node.js.
 
 ### `db`
 
@@ -309,6 +309,8 @@ internal/mcp             JSON-RPC 2.0 stdio transport
 internal/tools           MCP tool registry and handlers
 internal/report          HTML report view-model builder
 internal/render          Markdown/DOT/HTML renderers and embedded web assets
+internal/render/dist     Committed single-file Vite build (report.html)
+web                      Quarantined React/TypeScript/Tailwind report source
 .opencode/skills/goray   OpenCode skill definition
 
 ```
@@ -316,9 +318,13 @@ internal/render          Markdown/DOT/HTML renderers and embedded web assets
 ## Development
 
 ```sh
-make verify   # gofmt check, go vet, go test -race -count=1, golangci-lint
-
+make verify       # gofmt check, go vet, go test -race -count=1, golangci-lint
+make web-install  # npm ci inside web/
+make web-dev      # Vite dev server; proxies /api to http://127.0.0.1:4321
+make web-build    # typecheck + build internal/render/dist/report.html
 ```
+
+`make build` and `make verify` stay Node-free. Only `make web-build` requires Node.js, and its output is committed. For frontend work, run `goray serve` in one terminal and `make web-dev` in another; edit `web/src` without rebuilding the Go binary. If `serve` picks a port other than `4321`, point the proxy at it with `GORAY_DEV_API=http://127.0.0.1:<port> make web-dev`.
 
 ## License
 

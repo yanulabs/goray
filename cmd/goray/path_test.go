@@ -361,12 +361,12 @@ func TestExportOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `<script id="report-data"`) || !strings.Contains(string(body), "goray · Architecture Report") {
+	if !strings.Contains(string(body), `id="goray-data"`) || !strings.Contains(string(body), "goray · Architecture Report") {
 		t.Fatal("html report is missing expected content")
 	}
 
 	code, stdout, stderr = runDirect(t, "export", "html", root, "-db", ":memory:")
-	if code != 0 || stderr != "" || !strings.Contains(stdout, `<script id="report-data"`) {
+	if code != 0 || stderr != "" || !strings.Contains(stdout, `id="goray-data"`) {
 		t.Fatalf("export html stdout: code=%d stderr=%q", code, stderr)
 	}
 

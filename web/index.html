@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>goray · Architecture Report</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("goray-theme");
+          const dark =
+            stored === "dark" ||
+            (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch {
+          /* localStorage may be unavailable under file:// */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script id="goray-data" type="application/json" data-goray-live="__GORAY_LIVE__">__GORAY_REPORT_DATA__</script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

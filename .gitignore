@@ -38,5 +38,8 @@ go.work.sum
 # Local build output
 /bin/
 
+# Web frontend dependencies
+web/node_modules/
+
 # macOS metadata
 .DS_Store
