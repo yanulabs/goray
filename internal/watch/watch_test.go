@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func waitChange(t *testing.T, changes <-chan struct{}) {
+func waitChange(t *testing.T, changes <-chan []string) {
 	t.Helper()
 	select {
 	case <-changes:
@@ -21,10 +21,10 @@ func TestWatcherRecursiveAndIgnored(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	changes := make(chan struct{}, 1)
-	notify := func() {
+	changes := make(chan []string, 1)
+	notify := func(paths []string) {
 		select {
-		case changes <- struct{}{}:
+		case changes <- paths:
 		default:
 		}
 	}

@@ -106,7 +106,7 @@ func TestWatcherBurstCoalescesAndKeepsFinalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.StartAutoRebuild(ctx)
-	watcher, err := watch.New(dir, nil, store.MarkDirty)
+	watcher, err := watch.New(dir, nil, func(paths []string) { store.MarkDirty(paths...) })
 	if err != nil {
 		t.Fatal(err)
 	}

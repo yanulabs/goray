@@ -198,6 +198,7 @@ export function Inspector({
   onWidth,
   onClose,
   onSelect,
+  hiddenDirectEdges = 0,
 }: {
   selectedId: string;
   entity: Entity | undefined;
@@ -206,6 +207,7 @@ export function Inspector({
   onWidth: (width: number) => void;
   onClose: () => void;
   onSelect: (id: string) => void;
+  hiddenDirectEdges?: number;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
   const resize = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -279,11 +281,24 @@ export function Inspector({
         ? "text-red-700 dark:text-red-400"
         : "text-zinc-400 dark:text-zinc-500";
 
+  const testOnly = entity.metrics.testOnly === true;
+  const testLoc = entity.metrics.testLoc ?? 0;
+  const testOnlyTone = "text-indigo-700 dark:text-indigo-300";
+  // Test-only modules/packages genuinely have zero production LOC. Showing
+  // "prod loc 0" reads like an empty module, so lead with the test LOC that
+  // explains the node instead.
+  const locMetrics = (prodLoc: number): Array<{ label: string; value: string; tone?: string }> =>
+    testOnly
+      ? [{ label: "test loc", value: formatInt(testLoc), tone: testOnlyTone }]
+      : [
+          { label: "prod loc", value: formatInt(prodLoc) },
+          { label: "test loc", value: formatInt(testLoc) },
+        ];
+
   const moduleMetrics: Array<{ label: string; value: string; tone?: string }> = moduleCard
     ? [
         { label: "packages", value: formatInt(moduleCard.packages) },
-        { label: "prod loc", value: formatInt(moduleCard.prod_loc) },
-        { label: "test loc", value: formatInt(moduleCard.test_loc) },
+        ...locMetrics(moduleCard.prod_loc),
         { label: "exports", value: formatInt(moduleCard.root_exported) },
         { label: "ports", value: formatInt(moduleCard.ports_calls) },
         { label: "goroutines", value: formatInt(moduleCard.goroutines) },
@@ -296,8 +311,7 @@ export function Inspector({
       ]
     : packageCard
       ? [
-          { label: "prod loc", value: formatInt(packageCard.prod_loc) },
-          { label: "test loc", value: formatInt(packageCard.test_loc) },
+          ...locMetrics(packageCard.prod_loc),
           { label: "exports", value: formatInt(packageCard.exported) },
           { label: "fan-in", value: formatInt(packageCard.fan_in) },
           { label: "fan-out", value: formatInt(packageCard.fan_out) },
@@ -357,6 +371,7 @@ export function Inspector({
             <span className="font-mono text-[9px] text-zinc-400 dark:text-zinc-500">
               {syncLabel(entity.syncState)}
             </span>
+            {entity.metrics.testOnly ? <Badge tone="indigo">test-only</Badge> : null}
             {symbol?.exported ? <Badge>exported</Badge> : null}
             {symbol?.dead ? <Badge tone="amber">dead</Badge> : null}
             {entity.untracked ? <Badge tone="amber">untracked</Badge> : null}
@@ -442,6 +457,19 @@ export function Inspector({
             </div>
           </div>
         )}
+
+        {hiddenDirectEdges > 0 ? (
+          <div className="border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <div className="flex items-start gap-1.5 font-mono text-[10px] leading-4 text-indigo-700 dark:text-indigo-300">
+              <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-indigo-500" />
+              <span>
+                Simplify paths hides {formatInt(hiddenDirectEdges)} redundant direct{" "}
+                {hiddenDirectEdges === 1 ? "edge" : "edges"} involving this node. Turn the
+                toggle off to show every direct edge.
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         {iface ? (
           <div className="space-y-2 border-b border-zinc-200 px-3 py-2.5 dark:border-zinc-800">

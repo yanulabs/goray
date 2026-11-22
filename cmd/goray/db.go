@@ -12,12 +12,14 @@ import (
 	"github.com/yanulabs/goray/internal/render"
 )
 
-var dbValueFlags = map[string]bool{"db": true}
+var dbValueFlags = map[string]bool{"db": true, "tags": true}
 
 type dbOptions struct {
 	command   string
 	path      string
 	dbPath    string
+	tags      []string
+	workspace bool
 	summaries bool
 	all       bool
 	dryRun    bool
@@ -38,6 +40,9 @@ func parseDBArgs(args []string) (dbOptions, error) {
 	fs := flag.NewFlagSet("db "+opts.command, flag.ContinueOnError)
 	quietFlagSet(fs)
 	fs.StringVar(&opts.dbPath, "db", "", "SQLite cache path")
+	var tags string
+	fs.StringVar(&tags, "tags", "", "Go build tags (comma- or space-separated)")
+	fs.BoolVar(&opts.workspace, "workspace", false, "resolve paths in the active go.work")
 	fs.BoolVar(&opts.summaries, "summaries", false, "target the shared summary database")
 	fs.BoolVar(&opts.all, "all", false, "target both the working and summary databases")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print targets without deleting them")
@@ -46,6 +51,7 @@ func parseDBArgs(args []string) (dbOptions, error) {
 	if err != nil {
 		return dbOptions{}, err
 	}
+	opts.tags = buildTags(tags)
 	if opts.command == "prune" {
 		if len(positionals) != 0 {
 			return dbOptions{}, usagef("db prune accepts no path")
@@ -78,7 +84,7 @@ func runDB(args []string, stdout io.Writer) error {
 			return nil
 		}
 	}
-	root, err := index.ResolveModuleRoot(opts.path)
+	root, err := index.ResolveProjectRoot(opts.path, opts.workspace)
 	if err != nil {
 		return err
 	}
@@ -87,7 +93,7 @@ func runDB(args []string, stdout io.Writer) error {
 		if opts.summaries {
 			dbPath, err = cache.ResolveSummaryPath(root, opts.dbPath)
 		} else {
-			dbPath, err = cache.ResolvePath(root, opts.dbPath)
+			dbPath, err = cache.ResolvePathWithTags(root, opts.dbPath, opts.tags)
 		}
 		if err != nil {
 			return err
@@ -99,7 +105,7 @@ func runDB(args []string, stdout io.Writer) error {
 		return runDBRemove(opts, root, stdout)
 	}
 
-	workingPath, summaryPath, err := cache.ResolvePaths(root, opts.dbPath)
+	workingPath, summaryPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, opts.tags)
 	if err != nil {
 		return err
 	}
@@ -149,7 +155,7 @@ func printRemoved(stdout io.Writer, result cache.RemoveResult, dryRun bool) {
 
 func runDBRemove(opts dbOptions, root string, stdout io.Writer) error {
 	removeFlags := removeOptions(opts)
-	working, summary, err := cache.ResolvePaths(root, "")
+	working, summary, err := cache.ResolvePathsWithTags(root, "", opts.tags)
 	if err != nil {
 		return err
 	}

@@ -84,6 +84,7 @@ func Build(ctx context.Context, idx *index.Index, store *cache.Cache) (render.HT
 	}
 	report := render.HTMLReport{
 		Repo: idx.RootDir, ModulePath: idx.ModulePath,
+		ModulePaths: idx.ModulePaths, BuildTags: idx.BuildTags, Workspace: idx.Workspace,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Metrics:     metrics, Coverage: coverage,
 		Hotspots:        render.BuildHotspots(rows),
@@ -286,7 +287,7 @@ func buildModuleCards(idx *index.Index, cached map[string]cache.Cached) []render
 		id := "mod:" + module.Name
 		out = append(out, render.HTMLModuleCard{
 			ID: id, Name: module.Name, Packages: module.Packages,
-			ProdLOC: module.ProdLOC, TestLOC: module.TestLOC,
+			ProdLOC: module.ProdLOC, TestLOC: module.TestLOC, TestOnly: module.TestOnly,
 			RootExported: module.RootExported, PortsCalls: module.PortsCalls,
 			Goroutines: module.Goroutines, OutModules: len(module.OutModules), InModules: len(module.InModules),
 			UntrackedFiles: module.UntrackedFiles, AllUntracked: module.AllUntracked,
@@ -307,7 +308,7 @@ func buildPackageCards(idx *index.Index, cached map[string]cache.Cached) []rende
 		id := "pkg:" + pkg.PkgPath
 		out = append(out, render.HTMLPackageCard{
 			ID: id, PkgPath: pkg.PkgPath, RelPath: pkg.RelPath, Module: pkg.ModuleArea,
-			ProdLOC: pkg.ProdLOC, TestLOC: pkg.TestLOC, Exported: pkg.Exported,
+			ProdLOC: pkg.ProdLOC, TestLOC: pkg.TestLOC, TestOnly: pkg.TestOnly, Exported: pkg.Exported,
 			FanIn: len(idx.RevImports[pkg.PkgPath]), FanOut: len(pkg.Imports),
 			GeneratedFiles: pkg.GeneratedFiles, UntrackedFiles: pkg.UntrackedFiles,
 			SyncState: stateForID(cached, id, idx.Summary.Get(id)), Summary: summaryView(cached[id]),
@@ -334,6 +335,7 @@ func buildModuleGraph(idx *index.Index, cached map[string]cache.Cached) render.H
 		summary := idx.Summary.Get(id)
 		node := render.HTMLGraphNode{
 			ID: id, Label: name, Kind: "module", Module: name, LOC: module.ProdLOC,
+			TestLOC: module.TestLOC, TestOnly: module.TestOnly,
 			FanIn: len(module.InModules), FanOut: len(module.OutModules),
 			Eligible:  summary != nil && summary.Eligible,
 			Untracked: module.UntrackedFiles > 0,
@@ -360,6 +362,7 @@ func buildPackageGraph(idx *index.Index, cached map[string]cache.Cached) render.
 		summary := idx.Summary.Get(id)
 		node := render.HTMLGraphNode{
 			ID: id, Label: pkg.RelPath, Kind: "package", Module: pkg.ModuleArea, LOC: pkg.ProdLOC,
+			TestLOC: pkg.TestLOC, TestOnly: pkg.TestOnly,
 			FanIn: len(idx.RevImports[pkgPath]), FanOut: len(pkg.Imports),
 			Eligible:  summary != nil && summary.Eligible,
 			Untracked: pkg.UntrackedFiles > 0,

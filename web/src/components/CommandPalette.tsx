@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { isTestOnlyCard } from "../lib/derive";
 import { fuzzyMatch, highlightSegments } from "../lib/fuzzy";
 import { formatInt } from "../lib/format";
 import type { Report } from "../types/report";
@@ -35,9 +36,11 @@ function buildCandidates(report: Report): Candidate[] {
     push({
       id: module.id,
       name: module.name,
-      detail: `${formatInt(module.packages)} pkgs · ${formatInt(module.prod_loc)} loc`,
+      detail: isTestOnlyCard(module)
+        ? `${formatInt(module.packages)} pkgs · ${formatInt(module.test_loc)} test loc`
+        : `${formatInt(module.packages)} pkgs · ${formatInt(module.prod_loc)} loc`,
       kind: "module",
-      searchText: `${module.name} module`,
+      searchText: `${module.name} module${isTestOnlyCard(module) ? " test-only" : ""}`,
     });
   }
 
@@ -45,9 +48,13 @@ function buildCandidates(report: Report): Candidate[] {
     push({
       id: pkg.id,
       name: pkg.rel_path === "." ? pkg.pkg_path : pkg.rel_path,
-      detail: pkg.pkg_path,
+      detail: isTestOnlyCard(pkg)
+        ? `${pkg.pkg_path} · ${formatInt(pkg.test_loc)} test loc`
+        : pkg.pkg_path,
       kind: "package",
-      searchText: `${pkg.rel_path} ${pkg.pkg_path} package ${pkg.module}`,
+      searchText: `${pkg.rel_path} ${pkg.pkg_path} package ${pkg.module}${
+        isTestOnlyCard(pkg) ? " test-only" : ""
+      }`,
     });
   }
 

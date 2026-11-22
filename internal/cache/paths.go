@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -63,34 +64,56 @@ func parseModuleDirective(data []byte) string {
 // repository. Distinct worktrees of the same module resolve to different
 // files because the canonical checkout root is hashed.
 func DefaultPath(projectRoot string) (string, error) {
-	root, err := index.ResolveModuleRoot(projectRoot)
+	root, err := resolveRoot(projectRoot)
 	if err != nil {
 		return "", err
 	}
-	return defaultWorktreePath(root)
+	return defaultWorktreePath(root, nil)
+}
+
+// DefaultPathWithTags returns the per-checkout working database path for the
+// given build tag set. Non-empty tag sets get a distinct database so an
+// integration-tag index cannot overwrite the default snapshot.
+func DefaultPathWithTags(projectRoot string, tags []string) (string, error) {
+	root, err := resolveRoot(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return defaultWorktreePath(root, tags)
+}
+
+// DefaultSummaryPathWithTags returns the shared summary database path. Build
+// tags do not affect it: summary hashes are content-addressed.
+func DefaultSummaryPathWithTags(projectRoot string, _ []string) (string, error) {
+	return DefaultSummaryPath(projectRoot)
 }
 
 // DefaultSummaryPath returns the content-addressed shared summary database
 // path. Worktrees and clones of the same module path resolve to the same file.
 func DefaultSummaryPath(projectRoot string) (string, error) {
-	root, err := index.ResolveModuleRoot(projectRoot)
+	root, err := resolveRoot(projectRoot)
 	if err != nil {
 		return "", err
 	}
 	return defaultSummaryPath(root)
 }
 
-func defaultWorktreePath(canonicalRoot string) (string, error) {
+func defaultWorktreePath(canonicalRoot string, tags []string) (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	name := RepoSlug(canonicalRoot) + "-" + shortHash(canonicalRoot) + ".db"
+	tags = index.NormalizeTags(tags)
+	key := canonicalRoot
+	if len(tags) > 0 {
+		key += "\x00" + strings.Join(tags, ",")
+	}
+	name := RepoSlug(canonicalRoot) + "-" + shortHash(key) + ".db"
 	return filepath.Join(base, "goray", "worktrees", name), nil
 }
 
 func defaultSummaryPath(canonicalRoot string) (string, error) {
-	modulePath, err := ReadModulePath(canonicalRoot)
+	identity, err := projectIdentity(canonicalRoot)
 	if err != nil {
 		return "", err
 	}
@@ -98,22 +121,60 @@ func defaultSummaryPath(canonicalRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := RepoSlug(modulePath) + "-" + shortHash(modulePath) + ".db"
+	name := RepoSlug(identity) + "-" + shortHash(identity) + ".db"
 	return filepath.Join(base, "goray", "summaries", name), nil
+}
+
+// projectIdentity is the deterministic summary-cache identity: the module path
+// for a single module, or the sorted set of workspace module paths for a
+// go.work workspace.
+func projectIdentity(canonicalRoot string) (string, error) {
+	if modulePath, err := ReadModulePath(canonicalRoot); err == nil {
+		return modulePath, nil
+	}
+	data, err := os.ReadFile(filepath.Join(canonicalRoot, "go.work"))
+	if err != nil {
+		return "", fmt.Errorf("read project identity: %w", err)
+	}
+	work, err := modfile.ParseWork(filepath.Join(canonicalRoot, "go.work"), data, nil)
+	if err != nil {
+		return "", fmt.Errorf("parse go.work: %w", err)
+	}
+	modules := make([]string, 0, len(work.Use))
+	for _, use := range work.Use {
+		dir := use.Path
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(canonicalRoot, dir)
+		}
+		if path, err := ReadModulePath(filepath.Clean(dir)); err == nil {
+			modules = append(modules, path)
+		}
+	}
+	if len(modules) == 0 {
+		return "", fmt.Errorf("cannot determine workspace identity for %s", canonicalRoot)
+	}
+	sort.Strings(modules)
+	return "workspace:" + strings.Join(modules, ","), nil
 }
 
 // ResolvePaths applies flag, env, and default precedence. An explicit --db or
 // GORAY_DB (including :memory:) puts the store in single-database mode, so both
 // returned paths are identical.
 func ResolvePaths(projectRoot, flagPath string) (string, string, error) {
+	return ResolvePathsWithTags(projectRoot, flagPath, nil)
+}
+
+// ResolvePathsWithTags is ResolvePaths with build-tag-aware working DB
+// selection. The shared summary DB is tag-independent.
+func ResolvePathsWithTags(projectRoot, flagPath string, tags []string) (string, string, error) {
 	if path, ok, err := overridePath(flagPath); ok || err != nil {
 		return path, path, err
 	}
-	root, err := index.ResolveModuleRoot(projectRoot)
+	root, err := resolveRoot(projectRoot)
 	if err != nil {
 		return "", "", err
 	}
-	working, err := defaultWorktreePath(root)
+	working, err := defaultWorktreePath(root, tags)
 	if err != nil {
 		return "", "", err
 	}
@@ -124,13 +185,31 @@ func ResolvePaths(projectRoot, flagPath string) (string, string, error) {
 	return working, summary, nil
 }
 
+// resolveRoot accepts either a module root or a go.work workspace root.
+func resolveRoot(projectRoot string) (string, error) {
+	root, err := index.ResolveModuleRoot(projectRoot)
+	if err == nil {
+		return root, nil
+	}
+	if workspace, ok := index.FindGoWork(projectRoot); ok {
+		return workspace, nil
+	}
+	return "", err
+}
+
 // ResolvePath returns only the working database path without deriving or
 // reading the module path.
 func ResolvePath(projectRoot, flagPath string) (string, error) {
+	return ResolvePathWithTags(projectRoot, flagPath, nil)
+}
+
+// ResolvePathWithTags returns only the working database path with build-tag
+// aware selection.
+func ResolvePathWithTags(projectRoot, flagPath string, tags []string) (string, error) {
 	if path, ok, err := overridePath(flagPath); ok || err != nil {
 		return path, err
 	}
-	return DefaultPath(projectRoot)
+	return DefaultPathWithTags(projectRoot, tags)
 }
 
 // ResolveSummaryPath returns only the shared summary database path. Explicit

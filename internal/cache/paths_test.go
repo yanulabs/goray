@@ -95,6 +95,76 @@ func TestResolvePathsSingleDBOverride(t *testing.T) {
 	}
 }
 
+func TestWorkingDBPathVariesByBuildTags(t *testing.T) {
+	isolateCacheHome(t)
+	project := t.TempDir()
+	writeCacheModule(t, project, map[string]string{})
+
+	plain, err := ResolvePathWithTags(project, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ab, err := ResolvePathWithTags(project, "", []string{"a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ba, err := ResolvePathWithTags(project, "", []string{"b", "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	integration, err := ResolvePathWithTags(project, "", []string{"integration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain == ab || ab == integration {
+		t.Fatalf("tag sets share a working DB: plain=%q ab=%q integration=%q", plain, ab, integration)
+	}
+	if ab != ba {
+		t.Fatalf("tag order changed the working DB: %q != %q", ab, ba)
+	}
+
+	plainSummary, err := DefaultSummaryPathWithTags(project, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taggedSummary, err := DefaultSummaryPathWithTags(project, []string{"integration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plainSummary != taggedSummary {
+		t.Fatalf("build tags changed the shared summary DB: %q != %q", plainSummary, taggedSummary)
+	}
+}
+
+func TestResolvePathsWorkspace(t *testing.T) {
+	isolateCacheHome(t)
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	writeCacheModule(t, first, map[string]string{})
+	writeCacheModule(t, second, map[string]string{})
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("go 1.23\n\nuse (\n\t./first\n\t./second\n)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	work, summary, err := ResolvePaths(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work == "" || summary == "" {
+		t.Fatalf("workspace paths = %q, %q", work, summary)
+	}
+	firstSummary, err := DefaultSummaryPath(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary == firstSummary {
+		t.Fatalf("workspace summary DB collides with a module summary: %q", summary)
+	}
+	if filepath.Base(filepath.Dir(summary)) != "summaries" {
+		t.Fatalf("workspace summary directory = %q", filepath.Dir(summary))
+	}
+}
+
 func TestReadModulePath(t *testing.T) {
 	cases := map[string]string{
 		"module example.com/plain\n":               "example.com/plain",

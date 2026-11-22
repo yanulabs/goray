@@ -75,7 +75,7 @@ func (t *toolset) apiSurface() mcp.Tool {
 			}
 			grouped := map[string][]item{}
 			for _, sym := range idx.Symbols {
-				if sym.PkgPath != pkg || !sym.Exported {
+				if sym.PkgPath != pkg || !sym.Exported || sym.IsTest {
 					continue
 				}
 				name := sym.Name
@@ -144,17 +144,24 @@ func (t *toolset) callGraph() mcp.Tool {
 		Name:        "get_call_graph",
 		Description: "BFS call graph (callers, callees, or both) from a function or method.",
 		InputSchema: object(map[string]any{
-			"symbol":    propString("Function/method ID or name"),
-			"direction": propEnum("Default: both", "callers", "callees", "both"),
-			"depth":     propInt("Max depth (default: 2)"),
-			"limit":     propInt("Max nodes (default: 80)"),
+			"symbol":                     propString("Function/method ID or name"),
+			"direction":                  propEnum("Default: both", "callers", "callees", "both"),
+			"depth":                      propInt("Max depth (default: 2)"),
+			"limit":                      propInt("Max nodes (default: 80)"),
+			"include_interface_dispatch": propBool("Include in-module interface dispatch edges (default: true)"),
 		}, "symbol"),
 		Run: t.indexed(func(idx *index.Index, args map[string]any) (string, bool) {
 			sym, err := idx.SingleSymbol(strArg(args, "symbol", ""))
 			if err != nil {
 				return err.Error(), true
 			}
-			graph := idx.CallGraph(sym.ID, strArg(args, "direction", "both"), intArg(args, "depth", 2), intArg(args, "limit", 80))
+			graph := idx.CallGraphWithOptions(
+				sym.ID,
+				strArg(args, "direction", "both"),
+				intArg(args, "depth", 2),
+				intArg(args, "limit", 80),
+				boolArg(args, "include_interface_dispatch", true),
+			)
 			out := struct {
 				index.Graph
 				IndexState index.State `json:"index_state"`

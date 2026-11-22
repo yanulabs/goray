@@ -9,11 +9,68 @@ import { Inspector } from "./components/Inspector";
 import { InterfacesView } from "./components/InterfacesView";
 import { MetricStrip } from "./components/MetricStrip";
 import { Topbar, type LiveStatus } from "./components/Topbar";
-import { buildEntityIndex, reportCounts, type ReportCounts } from "./lib/derive";
+import {
+  buildEntityIndex,
+  buildGraphNodeMeta,
+  reportCounts,
+  type GraphNodeMeta,
+  type ReportCounts,
+} from "./lib/derive";
 import { fetchLiveReport, readEmbeddedReport, type ReportSource } from "./lib/data";
-import type { GraphScope, ViewMode } from "./types/report";
+import {
+  analyzeGraph,
+  findHubs,
+  type GraphAnalysis,
+  type GraphFilterReason,
+  type HiddenGraphNode,
+} from "./lib/graphLayout";
+import type { GraphScope, ReportGraph, ReportGraphNode, ViewMode } from "./types/report";
 
 const embeddedSource = readEmbeddedReport();
+
+const SIMPLIFY_KEY = "goray-graph-simplify";
+const HIDE_HUBS_KEY = "goray-graph-hide-hubs";
+const HIDE_UNTRACKED_KEY = "goray-graph-hide-untracked";
+const HIDE_ISOLATED_KEY = "goray-graph-hide-isolated";
+const HIDE_TEST_ONLY_KEY = "goray-graph-hide-test-only";
+
+const EMPTY_GRAPH_ANALYSIS: GraphAnalysis = {
+  edges: [],
+  nodesInCycle: new Set<string>(),
+  hiddenByNode: new Map<string, number>(),
+  transitiveCount: 0,
+};
+
+const EMPTY_NODE_META: ReadonlyMap<string, GraphNodeMeta> = new Map();
+const EMPTY_GRAPH_NODES: ReportGraphNode[] = [];
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+function readStoredToggle(key: string): boolean | null {
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored === "1") {
+      return true;
+    }
+    if (stored === "0") {
+      return false;
+    }
+  } catch {
+    // View-state persistence is best effort.
+  }
+  return null;
+}
+
+function writeStoredToggle(key: string, value: boolean | null): void {
+  try {
+    if (value === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, value ? "1" : "0");
+    }
+  } catch {
+    // View-state persistence is best effort.
+  }
+}
 
 const EMPTY_COUNTS: ReportCounts = {
   modules: 0,
@@ -52,10 +109,181 @@ export default function App() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(384);
+  const [simplifyPaths, setSimplifyPaths] = useState<boolean | null>(() =>
+    readStoredToggle(SIMPLIFY_KEY),
+  );
+  const [hideHubs, setHideHubs] = useState<boolean>(
+    () => readStoredToggle(HIDE_HUBS_KEY) ?? false,
+  );
+  const [hideUntracked, setHideUntracked] = useState<boolean | null>(() =>
+    readStoredToggle(HIDE_UNTRACKED_KEY),
+  );
+  const [hideIsolated, setHideIsolated] = useState<boolean | null>(() =>
+    readStoredToggle(HIDE_ISOLATED_KEY),
+  );
+  const [hideTestOnly, setHideTestOnly] = useState<boolean | null>(() =>
+    readStoredToggle(HIDE_TEST_ONLY_KEY),
+  );
+  const [unhiddenNodes, setUnhiddenNodes] = useState<Set<string>>(() => new Set());
 
   const report = source?.report ?? null;
   const index = useMemo(() => (report ? buildEntityIndex(report) : null), [report]);
   const counts = useMemo(() => (report ? reportCounts(report) : EMPTY_COUNTS), [report]);
+  const scopeGraph = useMemo<ReportGraph | null>(() => {
+    if (!report) {
+      return null;
+    }
+    return scope === "modules" ? report.graphs.modules : report.graphs.packages;
+  }, [report, scope]);
+  const nodeMeta = useMemo<ReadonlyMap<string, GraphNodeMeta>>(() => {
+    if (!report || !scopeGraph) {
+      return EMPTY_NODE_META;
+    }
+    return buildGraphNodeMeta(report, scope, scopeGraph);
+  }, [report, scope, scopeGraph]);
+  const graphHubs = useMemo(() => (scopeGraph ? findHubs(scopeGraph) : []), [scopeGraph]);
+  const untrackedNodes = useMemo(
+    () => scopeGraph?.nodes.filter((node) => node.untracked) ?? EMPTY_GRAPH_NODES,
+    [scopeGraph],
+  );
+  const connectedNodeIds = useMemo<ReadonlySet<string>>(() => {
+    if (!scopeGraph) {
+      return EMPTY_IDS;
+    }
+    const ids = new Set<string>();
+    for (const edge of scopeGraph.edges) {
+      ids.add(edge.from);
+      ids.add(edge.to);
+    }
+    return ids;
+  }, [scopeGraph]);
+  const isolatedNodes = useMemo(
+    () =>
+      scopeGraph?.nodes.filter((node) => !connectedNodeIds.has(node.id)) ?? EMPTY_GRAPH_NODES,
+    [scopeGraph, connectedNodeIds],
+  );
+  const testOnlyNodes = useMemo(
+    () =>
+      scopeGraph?.nodes.filter((node) => nodeMeta.get(node.id)?.testOnly === true) ??
+      EMPTY_GRAPH_NODES,
+    [scopeGraph, nodeMeta],
+  );
+  const hasTrackedNodes = scopeGraph?.nodes.some((node) => !node.untracked) ?? false;
+  const hasConnectedNodes = connectedNodeIds.size > 0;
+  // Defaults follow the payload: hide untracked work only while some tracked
+  // node remains, hide isolated nodes only when a connected graph exists, and
+  // hide test-only nodes only when this scope actually contains one.
+  const hideUntrackedActive =
+    untrackedNodes.length > 0 && (hideUntracked ?? hasTrackedNodes);
+  const hideIsolatedActive = isolatedNodes.length > 0 && (hideIsolated ?? hasConnectedNodes);
+  const hideTestOnlyActive = testOnlyNodes.length > 0 && (hideTestOnly ?? true);
+
+  const hidden = useMemo(() => {
+    const reasonsByID = new Map<string, GraphFilterReason[]>();
+    const mark = (
+      nodes: readonly ReportGraphNode[],
+      reason: GraphFilterReason,
+      active: boolean,
+    ) => {
+      if (!active) {
+        return;
+      }
+      for (const node of nodes) {
+        if (unhiddenNodes.has(node.id)) {
+          continue;
+        }
+        const reasons = reasonsByID.get(node.id);
+        if (reasons) {
+          reasons.push(reason);
+        } else {
+          reasonsByID.set(node.id, [reason]);
+        }
+      }
+    };
+    mark(
+      graphHubs.map((hub) => hub.node),
+      "hub",
+      hideHubs,
+    );
+    mark(untrackedNodes, "untracked", hideUntrackedActive);
+    mark(isolatedNodes, "isolated", hideIsolatedActive);
+    mark(testOnlyNodes, "testOnly", hideTestOnlyActive);
+
+    const nodes: HiddenGraphNode[] = [];
+    const counts: Record<GraphFilterReason, number> = {
+      hub: 0,
+      untracked: 0,
+      isolated: 0,
+      testOnly: 0,
+    };
+    for (const node of scopeGraph?.nodes ?? EMPTY_GRAPH_NODES) {
+      const reasons = reasonsByID.get(node.id);
+      if (!reasons) {
+        continue;
+      }
+      nodes.push({ node, reasons });
+      for (const reason of reasons) {
+        counts[reason] += 1;
+      }
+    }
+    nodes.sort((left, right) => left.node.label.localeCompare(right.node.label));
+    return {
+      ids: new Set(reasonsByID.keys()),
+      nodes,
+      counts,
+    };
+  }, [
+    graphHubs,
+    hideHubs,
+    untrackedNodes,
+    hideUntrackedActive,
+    isolatedNodes,
+    hideIsolatedActive,
+    testOnlyNodes,
+    hideTestOnlyActive,
+    scopeGraph,
+    unhiddenNodes,
+  ]);
+
+  // Transitive reduction, cycle marking, and the Inspector's hidden-edge
+  // count all describe the graph that is actually on screen. Recompute them
+  // after filtered nodes are removed so an edge whose alternate path ran
+  // through a hidden node is not reported (or removed) as redundant.
+  const visibleGraph = useMemo<ReportGraph | null>(() => {
+    if (!scopeGraph || hidden.ids.size === 0) {
+      return scopeGraph;
+    }
+    return {
+      nodes: scopeGraph.nodes.filter((node) => !hidden.ids.has(node.id)),
+      edges: scopeGraph.edges.filter(
+        (edge) => !hidden.ids.has(edge.from) && !hidden.ids.has(edge.to),
+      ),
+    };
+  }, [scopeGraph, hidden.ids]);
+  const graphAnalysis = useMemo<GraphAnalysis>(
+    () => (visibleGraph ? analyzeGraph(visibleGraph) : EMPTY_GRAPH_ANALYSIS),
+    [visibleGraph],
+  );
+  const graphEdgeCount = scopeGraph?.edges.length ?? 0;
+  const simplifyEnabled = simplifyPaths ?? graphEdgeCount > 15;
+  const filterCounts = useMemo(
+    () => ({
+      hubs: graphHubs.length,
+      untracked: untrackedNodes.length,
+      isolated: isolatedNodes.length,
+      testOnly: testOnlyNodes.length,
+    }),
+    [graphHubs.length, untrackedNodes.length, isolatedNodes.length, testOnlyNodes.length],
+  );
+  const hiddenDirectForSelection =
+    simplifyEnabled && selectedId !== null
+      ? graphAnalysis.edges.reduce(
+          (count, edge) =>
+            count +
+            (edge.transitive && (edge.from === selectedId || edge.to === selectedId) ? 1 : 0),
+          0,
+        )
+      : 0;
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -65,6 +293,32 @@ export default function App() {
       // Theme persistence is best effort.
     }
   }, [theme]);
+
+  useEffect(() => {
+    writeStoredToggle(SIMPLIFY_KEY, simplifyPaths);
+  }, [simplifyPaths]);
+
+  useEffect(() => {
+    writeStoredToggle(HIDE_HUBS_KEY, hideHubs);
+  }, [hideHubs]);
+
+  useEffect(() => {
+    writeStoredToggle(HIDE_UNTRACKED_KEY, hideUntracked);
+  }, [hideUntracked]);
+
+  useEffect(() => {
+    writeStoredToggle(HIDE_ISOLATED_KEY, hideIsolated);
+  }, [hideIsolated]);
+
+  useEffect(() => {
+    writeStoredToggle(HIDE_TEST_ONLY_KEY, hideTestOnly);
+  }, [hideTestOnly]);
+
+  // Manual unhides are a temporary escape hatch from the active filters. Reset
+  // them when the scope or the filter state itself changes.
+  useEffect(() => {
+    setUnhiddenNodes(new Set());
+  }, [scope, hideHubs, hideUntrackedActive, hideIsolatedActive, hideTestOnlyActive]);
 
   useEffect(() => {
     if (source !== null) {
@@ -218,6 +472,30 @@ cd web && npm run dev`}
               focusId={focusId}
               onSelect={setSelectedId}
               onFocus={setFocusId}
+              analysis={graphAnalysis}
+              hubs={graphHubs}
+              nodeMeta={nodeMeta}
+              filterCounts={filterCounts}
+              hiddenCounts={hidden.counts}
+              simplifyPaths={simplifyEnabled}
+              onSimplifyPaths={setSimplifyPaths}
+              hideHubs={hideHubs}
+              onHideHubs={setHideHubs}
+              hideUntracked={hideUntrackedActive}
+              onHideUntracked={setHideUntracked}
+              hideIsolated={hideIsolatedActive}
+              onHideIsolated={setHideIsolated}
+              hideTestOnly={hideTestOnlyActive}
+              onHideTestOnly={setHideTestOnly}
+              hiddenNodeIds={hidden.ids}
+              hiddenNodes={hidden.nodes}
+              onUnhideNode={(id) => {
+                setUnhiddenNodes((current) => {
+                  const next = new Set(current);
+                  next.add(id);
+                  return next;
+                });
+              }}
             />
           ) : null}
           {view === "hotspots" ? (
@@ -240,6 +518,7 @@ cd web && npm run dev`}
             onWidth={setInspectorWidth}
             onClose={() => setSelectedId(null)}
             onSelect={setSelectedId}
+            hiddenDirectEdges={hiddenDirectForSelection}
           />
         ) : null}
       </div>

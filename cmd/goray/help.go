@@ -16,12 +16,19 @@ Commands:
   export <html|md|dot> [path]  Export an architecture report or dependency graph
   db <info|path|rm|prune>      Inspect, locate, remove, or prune SQLite databases
   index [path]                 Build and sync the semantic index once
+  diff [base-ref] [path]       Compare architecture against a git ref (CI gate)
   version                      Print version and exit
   help [command]               Show help for goray or a command
 
 Environment:
-  GORAY_DB          SQLite cache path (supports :memory:)
-  GORAY_LOG_LEVEL   serve log level: off, error, or info (default: info)
+  GORAY_DB            SQLite cache path (supports :memory:)
+  GORAY_LOG_LEVEL     serve log level: off, error, or info (default: info)
+  GORAY_PORT          serve preferred port (default: 4321)
+  GORAY_PORT_RANGE    serve fallback window size (default: 100)
+  GORAY_HOST          serve bind host (default: 127.0.0.1)
+  GORAY_STRICT_PORT   fail instead of moving to another port
+  GORAY_PORT_FILE     write the chosen report URL and PID to a file
+  GORAY_BUILD_TAGS    Go build tags (comma- or space-separated)
 
 Examples:
   goray serve
@@ -30,6 +37,7 @@ Examples:
   goray export html -o report.html
   goray export dot | dot -Tsvg > deps.svg
   goray index --json .
+  goray diff main --fail-on cycles,breaking_api
   sqlite3 "$(goray db path)"
   goray db info
   goray db rm --dry-run
@@ -48,7 +56,13 @@ stays reserved for MCP JSON-RPC.
 Flags:
   --db <path>          SQLite cache path (default: user cache directory; env GORAY_DB)
   --log-level <level>  Log level: off, error, or info (default: info; env GORAY_LOG_LEVEL)
-  --port <n>           Local HTTP port (default: 4321; 0 picks a free port)
+  --port <n>           Preferred HTTP port (default: 4321; env GORAY_PORT; 0 = OS pick)
+  --port-range <n>     Fallback window size (default: 100; env GORAY_PORT_RANGE)
+  --strict-port        Fail when the preferred port is busy (env GORAY_STRICT_PORT)
+  --host <addr>        Bind address (default: 127.0.0.1; env GORAY_HOST)
+  --port-file <path>   Write chosen URL and PID; removed on shutdown (env GORAY_PORT_FILE)
+  --tags <list>        Go build tags (env GORAY_BUILD_TAGS)
+  --workspace          Index all modules in the active go.work
   --open               Open the local report in the default browser
   --no-watch           Disable fsnotify watching and background reindexing
   -h, --help           Show this help
@@ -58,6 +72,9 @@ Examples:
   goray serve /path/to/repo --open
   goray serve /path/to/repo --no-watch
   goray serve --port 0
+  goray serve --port 4321 --strict-port
+  goray serve --host 0.0.0.0 --port-file /tmp/goray-port
+  goray serve --tags integration --workspace
   goray serve --db :memory: --log-level error
 `)
 }
@@ -73,6 +90,8 @@ Flags:
   -o, --out <file>  Write output to a file instead of stdout
   --db <path>       SQLite cache path for cached HTML/Markdown summaries
                     (default: user cache directory; env GORAY_DB)
+  --tags <list>     Go build tags (comma- or space-separated; env GORAY_BUILD_TAGS)
+  --workspace       Index all modules in the active go.work
   --open            Open the HTML report in the default browser (HTML only)
   -h, --help        Show this help
 
@@ -103,6 +122,8 @@ Subcommands:
 
 Flags:
   --db <path>   Single-database override for info/path/rm (env GORAY_DB)
+  --tags <list> Build tags for working DB selection (env GORAY_BUILD_TAGS)
+  --workspace   Resolve paths in the active go.work
   --summaries   With "path" or "rm", target only the shared summary database
   --all         With "rm", remove both working and summary databases
   --dry-run     Print exact files and sizes without deleting (rm/prune)
@@ -137,17 +158,49 @@ database under <user-cache>/goray/summaries/. --db or GORAY_DB switches to a
 single database containing all tables.
 
 Flags:
-  --db <path>  Single SQLite database override (default: user cache directory;
-               env GORAY_DB; supports :memory:)
-  --json       Emit one machine-readable JSON object to stdout
-  -h, --help   Show this help
+  --db <path>    Single SQLite database override (default: user cache directory;
+                 env GORAY_DB; supports :memory:)
+  --tags <list>  Go build tags (comma- or space-separated; env GORAY_BUILD_TAGS)
+  --workspace    Index all modules in the active go.work
+  --json         Emit one machine-readable JSON object to stdout
+  -h, --help     Show this help
 
 Examples:
   goray index
   goray index /path/to/repo
   goray index --json .
+  goray index --tags integration .
+  goray index --workspace /path/to/workspace
   goray index . --db :memory:
   goray index --db /tmp/goray.db /path/to/repo
+`)
+}
+
+func printDiffHelp(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Usage:
+  goray diff [base-ref] [path] [flags]
+
+Index the working tree and a detached temporary worktree of base-ref, then
+report deterministic architectural deltas: new/resolved cross-module cycles,
+breaking exported API changes, new untested complexity hotspots, new dead code,
+and package/file/LOC/symbol/edge counters. base-ref defaults to HEAD.
+
+The user's working tree is never modified. The temporary worktree is removed
+even when indexing fails.
+
+Flags:
+  --format <md|json>  Output format (default: md)
+  --fail-on <gates>   Comma-separated gates that exit 1 when triggered:
+                      cycles, dead_code, breaking_api, untested_hotspots
+  --tags <list>       Go build tags (comma- or space-separated)
+  --workspace         Index all modules in the active go.work
+  -h, --help          Show this help
+
+Examples:
+  goray diff
+  goray diff main
+  goray diff origin/main . --format json
+  goray diff main --fail-on cycles,dead_code,breaking_api,untested_hotspots
 `)
 }
 
@@ -181,6 +234,8 @@ func runHelp(args []string, stdout io.Writer) error {
 		printDBHelp(stdout)
 	case "index":
 		printIndexHelp(stdout)
+	case "diff":
+		printDiffHelp(stdout)
 	case "version":
 		printVersionHelp(stdout)
 	case "help":

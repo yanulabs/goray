@@ -4,7 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
+
+	"github.com/yanulabs/goray/internal/index"
 )
 
 type usageError struct {
@@ -124,6 +128,39 @@ func wantsHelp(args []string, valueFlags map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// buildTags normalizes an explicit --tags value, falling back to
+// GORAY_BUILD_TAGS. Empty input yields no tags.
+func buildTags(flagValue string) []string {
+	if strings.TrimSpace(flagValue) == "" {
+		flagValue = os.Getenv("GORAY_BUILD_TAGS")
+	}
+	return index.NormalizeTags([]string{flagValue})
+}
+
+func envInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func singlePath(args []string, command string) (string, error) {

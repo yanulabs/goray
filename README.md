@@ -95,19 +95,28 @@ goray <command> [flags] [path]
 | `goray export <html|md|dot> [path]` | Export an HTML report, Markdown map, or Graphviz DOT graph |
 | `goray db <info|path|rm|prune> [path]` | Inspect, locate, remove, or prune SQLite databases |
 | `goray index [path]` | Build and sync the semantic index once |
+| `goray diff [base-ref] [path]` | Deterministic architectural delta vs a git ref, with CI gates |
 | `goray version` | Print version (`-v` / `--version` also accepted) |
 | `goray help [command]` | Show help for root or a specific command |
 
 ### `serve`
 
 ```sh
-goray serve [path] [--db <path>] [--log-level off|error|info] [--port <n>] [--open] [--no-watch]
+goray serve [path] [--db <path>] [--log-level off|error|info] \
+  [--port <n>] [--port-range <n>] [--strict-port] [--host <addr>] \
+  [--port-file <path>] [--tags <list>] [--workspace] [--open] [--no-watch]
 
 ```
 
 * `--db <path>` — single-database override (default: split working and shared summary databases under the user cache dir; env `GORAY_DB`; supports `:memory:`).
 * `--log-level <level>` — stderr verbosity: `off`, `error`, or `info` (default: `info`; env `GORAY_LOG_LEVEL`).
-* `--port <n>` — local report UI port (default: `4321`; `0` picks a free port). Busy ports auto-increment.
+* `--port <n>` — preferred report UI port (default: `4321`; env `GORAY_PORT`; `0` lets the OS pick). On `EADDRINUSE`, the next free port is tried automatically.
+* `--port-range <n>` — candidate window size after the preferred port (default: `100`; env `GORAY_PORT_RANGE`).
+* `--strict-port` — fail instead of moving when the preferred port is busy (env `GORAY_STRICT_PORT=true`).
+* `--host <addr>` — bind address (default: `127.0.0.1`; env `GORAY_HOST`). Non-loopback binds print a warning.
+* `--port-file <path>` — write the chosen URL and PID to a file and remove it on clean shutdown (env `GORAY_PORT_FILE`). Useful for following a moved port from the Vite dev proxy.
+* `--tags <list>` — Go build tags, comma- or space-separated (env `GORAY_BUILD_TAGS`).
+* `--workspace` — index every module in the active `go.work` as one semantic graph.
 * `--open` — open the local report URL in the default browser.
 * `--no-watch` — disable `fsnotify` watching and background reindexing.
 
@@ -119,19 +128,26 @@ goray serve [path] [--db <path>] [--log-level off|error|info] [--port <n>] [--op
   ➜  Local:   http://127.0.0.1:4321/
   ➜  MCP:     stdio
   ➜  Press Ctrl+C to stop
+  GORAY_REPORT_URL=http://127.0.0.1:4321/
 ```
+
+When the port moves, stderr also prints `Port 4321 is in use, trying another one...`. The
+machine-readable `GORAY_REPORT_URL=` line stays on stderr so stdout remains a clean MCP
+JSON-RPC channel. All candidate ports busy in non-strict mode is an error listing the tried
+range; non-`EADDRINUSE` bind failures propagate unchanged.
 
 The report reflects the current index snapshot and summary cache. The live page reads `GET /api/report` every five seconds and updates in place, preserving the active view, filters, selection, and graph zoom. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
 
 ### `export`
 
 ```sh
-goray export <html|md|dot> [path] [-o <file>] [--db <path>] [--open]
+goray export <html|md|dot> [path] [-o <file>] [--db <path>] [--tags <list>] [--workspace] [--open]
 
 ```
 
 * `-o, --out <file>` — write to a file instead of `stdout`.
 * `--db <path>` — SQLite cache path used to enrich `html`/`md` exports with cached summaries.
+* `--tags <list>` / `--workspace` — same build-tag and `go.work` semantics as `serve`/`index`.
 * `--open` — open the generated report in the default browser (`html` only). Without `-o`, writes to `$TMPDIR/goray-<repo-slug>-report.html` and prints the path to `stderr`.
 
 ```sh
@@ -187,7 +203,7 @@ databases while reporting them in the output.
 ### `index`
 
 ```sh
-goray index [path] [--db <path>] [--json]
+goray index [path] [--db <path>] [--tags <list>] [--workspace] [--json]
 ```
 
 Builds the semantic index exactly once and syncs `working_symbols` and
@@ -200,13 +216,51 @@ goray index /path/to/repo --json
 goray index --db :memory: .
 ```
 
-`--json` emits a single object with `root`, `module_path`, `db_path`,
-`summary_db_path`, `packages`, `files`, `symbols`, `edges`, `eligible`,
-`synced`, `coverage_percent`, `warnings`, and `duration_ms`.
+`--json` emits a single object with `root`, `module_path`, `module_paths`,
+`build_tags`, `workspace`, `build_mode`, `db_path`, `summary_db_path`,
+`packages`, `files`, `symbols`, `edges`, `eligible`, `synced`,
+`coverage_percent`, `warnings`, and `duration_ms`.
+
+Build tags accept comma- or space-separated values and `GORAY_BUILD_TAGS`.
+Normalized tag sets get a distinct working DB (order-independent), so
+`--tags integration` never overwrites the default snapshot; the shared summary
+DB stays content-addressed. Files gated behind `//go:build` tags participate in
+test reachability and dead-code analysis only when their tags are active.
+
+`--workspace` (or a workspace-root path containing `go.work` without `go.mod`)
+loads every `use` module into one semantic graph. `GOWORK=off` disables
+workspace detection; a path inside one module still resolves to that module
+unless `--workspace` is explicit.
 
 Production parse/type errors exit `1` without overwriting an existing healthy
 working snapshot. Errors confined to `*_test.go` files sync production state,
 print warnings to stderr, and exit `0`.
+
+### `diff`
+
+```sh
+goray diff [base-ref] [path] [--format md|json] [--fail-on <gates>] [--tags <list>] [--workspace]
+```
+
+Indexes the working tree against a temporary detached git worktree of
+`base-ref` (default `HEAD`) without touching the user's checkout, then reports:
+
+* new and resolved cross-module cycles;
+* removed/modified exported symbols (breaking) and added exported symbols;
+* new untested production functions with cyclomatic complexity >= 10, plus the
+  largest complexity/LOC deltas;
+* newly introduced and newly removed dead symbols;
+* package, file, LOC, symbol, cross-module edge, and untested-hotspot counters.
+
+`--fail-on` accepts `cycles`, `dead_code`, `breaking_api`, and
+`untested_hotspots` (comma-separated). Triggered gates exit `1`; success exits
+`0`. A missing git repository or unresolvable base ref exits `2`. Temporary
+worktrees are always removed, including on error.
+
+```sh
+goray diff main --fail-on cycles,breaking_api
+goray diff origin/main . --format json > diff.json
+```
 
 ## Storage and caching
 
@@ -266,6 +320,7 @@ all tables live in that one database and no shared summary file is created.
 | `get_codebase_map` | Concise module scorecard, cross-module edges and cycles, large files, top hotspots; `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
 | `get_module_overview` | Single module packages, dependencies, large files, exported API, `tracked_only` (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
+| `explain_dependency` | Exact imports, `file:line` symbol usages, blank/dot imports, enclosing callers, and counters behind a module/package edge |
 
 ### Symbols, calls, and impact
 
@@ -274,9 +329,9 @@ all tables live in that one database and no shared summary file is created.
 | `lookup_symbol` | Exact or fuzzy symbol lookup with cached summary metadata |
 | `get_api_surface` | Exported symbols with cached summary metadata |
 | `get_references` | Type-checked references with enclosing caller and `file:line` |
-| `get_call_graph` | BFS callers and callees |
-| `find_implementations` | `go/types.Implements` interface-to-type matrix |
-| `get_impact_analysis` | Transitive blast radius and affected test packages |
+| `get_call_graph` | BFS callers/callees with typed `direct` and in-module `interface_dispatch` edges |
+| `find_implementations` | `go/types.Implements` interface-to-type matrix, including test mocks |
+| `get_impact_analysis` | Kind-aware blast radius: implementations, test mocks, direct refs, composite literals, transitive callers, and test packages |
 | `get_dead_code` | Unreferenced functions/methods with closed-world, interface, generated, module, and grouped filters |
 | `get_hotspots` | Rank funcs/files/types by risk, complexity, LOC, or fan-in; static test reachability and module/generated/untracked filters |
 | `get_function_body` | Source body, LOC, and cyclomatic complexity |

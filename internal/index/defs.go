@@ -27,6 +27,9 @@ func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo) {
 			continue
 		}
 		meta := b.fileMetaFor(p, file)
+		if b.testPass && !meta.isTest {
+			continue
+		}
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
@@ -160,12 +163,61 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 	}
 	b.addSymbol(sym, pi)
 
+	if structType, ok := tn.Type().Underlying().(*types.Struct); ok {
+		b.indexFields(p, pi, tn, structType, meta)
+	}
+
 	if iface, ok := tn.Type().Underlying().(*types.Interface); ok && iface.NumMethods() > 0 {
 		b.ifaces = append(b.ifaces, ifaceType{id: id, iface: iface, sym: sym})
+		b.registerInterfaceMethods(id, iface)
 		return
 	}
 	if named, ok := tn.Type().(*types.Named); ok {
 		b.concrete = append(b.concrete, newConcreteType(id, named, sym))
+	}
+}
+
+// indexFields gives struct fields first-class symbols so references resolve
+// through go/types rather than name matching. The ID is pkg.Type.Field.
+func (b *builder) indexFields(p *packages.Package, pi *PkgInfo, tn *types.TypeName, structType *types.Struct, meta fileMeta) {
+	typeID := symbolID(tn)
+	for i := 0; i < structType.NumFields(); i++ {
+		field := structType.Field(i)
+		if field == nil || field.Name() == "" {
+			continue
+		}
+		pos := p.Fset.Position(field.Pos())
+		b.fieldVarOwner[field] = typeID
+		b.addSymbol(&Symbol{
+			ID:         typeID + "." + field.Name(),
+			Name:       field.Name(),
+			Kind:       "field",
+			PkgPath:    p.PkgPath,
+			PkgRel:     pi.RelPath,
+			ModuleArea: pi.ModuleArea,
+			RecvType:   tn.Name(),
+			Exported:   field.Exported(),
+			Signature:  types.TypeString(field.Type(), qualifier(p.PkgPath)),
+			File:       relFile(b.absRoot, pos.Filename),
+			Line:       pos.Line,
+			Generated:  meta.generated,
+			Untracked:  meta.untracked,
+			IsTest:     meta.isTest,
+		}, pi)
+	}
+}
+
+// registerInterfaceMethods maps interface method objects to their interface ID
+// so call sites can be expanded to concrete implementations by CHA.
+func (b *builder) registerInterfaceMethods(id string, iface *types.Interface) {
+	for i := 0; i < iface.NumMethods(); i++ {
+		method := iface.Method(i)
+		if method == nil {
+			continue
+		}
+		b.ifaceOwner[method] = id
+		key := method.Pkg().Path() + "." + method.Name()
+		b.ifaceMethod[key] = append(b.ifaceMethod[key], id)
 	}
 }
 

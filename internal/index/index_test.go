@@ -135,8 +135,20 @@ func TestQueries(t *testing.T) {
 	}
 
 	callers := idx.CallGraph(sym.ID, "callers", 2, 80)
-	if callers.Nodes != 2 || len(callers.Edges) != 1 {
+	if callers.Nodes != 3 || len(callers.Edges) != 2 {
 		t.Fatalf("call graph = %+v", callers)
+	}
+	var sawTestCaller bool
+	for _, edge := range callers.Edges {
+		if edge.From == samplePayments+".TestServiceCharge" {
+			sawTestCaller = true
+			if edge.Kind != "direct" {
+				t.Fatalf("test caller edge kind = %q", edge.Kind)
+			}
+		}
+	}
+	if !sawTestCaller {
+		t.Fatalf("test caller missing from call graph: %+v", callers)
 	}
 
 	dep := idx.DependencyGraph(samplePayments, "in", 1)

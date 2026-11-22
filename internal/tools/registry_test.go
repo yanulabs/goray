@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yanulabs/goray/internal/cache"
@@ -20,8 +23,8 @@ func (fakeIndexer) Rebuild() error                             { return nil }
 
 func TestRegistry(t *testing.T) {
 	list := New(fakeIndexer{}, render.NewRegistry(), nil)
-	if len(list) != 20 {
-		t.Fatalf("tools = %d, want 20", len(list))
+	if len(list) != 21 {
+		t.Fatalf("tools = %d, want 21", len(list))
 	}
 
 	seen := map[string]bool{}
@@ -47,6 +50,33 @@ func TestRegistry(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(text), &info); err != nil || info.Tools != len(list) {
 		t.Fatalf("project_info = %s (%v)", text, err)
+	}
+}
+
+func TestSkillDocCoversAllRegisteredTools(t *testing.T) {
+	path := filepath.Join("..", "..", ".opencode", "skills", "goray", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(data)
+	list := New(fakeIndexer{}, render.NewRegistry(), nil)
+	for _, tool := range list {
+		if !strings.Contains(doc, "`"+tool.Name+"`") {
+			t.Errorf("SKILL.md does not document registered tool %q", tool.Name)
+		}
+	}
+	// The documentation must name every critical parameter used by the
+	// dependency and hotspot tools; silent schema drift caused real failures.
+	for _, required := range []string{
+		"`root`", "`direction`", "`depth`", "`format`",
+		"`include_tests`", "`from`", "`to`",
+		"`include_interface_dispatch`", "`via_interface`",
+		"`test_only`", "`untested_only`", "`sort_by`",
+	} {
+		if !strings.Contains(doc, required) {
+			t.Errorf("SKILL.md is missing critical parameter %s", required)
+		}
 	}
 }
 

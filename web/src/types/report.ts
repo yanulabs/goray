@@ -99,6 +99,7 @@ export interface ReportModuleCard {
   in_modules: number;
   untracked_files: number;
   all_untracked?: boolean;
+  test_only?: boolean;
   sync_state: SyncState;
   summary?: ReportSummary;
 }
@@ -115,6 +116,7 @@ export interface ReportPackageCard {
   fan_out: number;
   generated_files?: number;
   untracked_files?: number;
+  test_only?: boolean;
   sync_state: SyncState;
   summary?: ReportSummary;
 }
@@ -145,6 +147,7 @@ export interface ReportGraphNode {
   fan_out: number;
   eligible: boolean;
   untracked: boolean;
+  test_only?: boolean;
   layer: number;
   order: number;
   sync_state: SyncState;

@@ -17,14 +17,16 @@ import (
 	"github.com/yanulabs/goray/internal/report"
 )
 
-var exportValueFlags = map[string]bool{"o": true, "out": true, "db": true}
+var exportValueFlags = map[string]bool{"o": true, "out": true, "db": true, "tags": true}
 
 type exportOptions struct {
-	format string
-	path   string
-	out    string
-	dbPath string
-	open   bool
+	format    string
+	path      string
+	out       string
+	dbPath    string
+	tags      string
+	workspace bool
+	open      bool
 }
 
 func parseExportArgs(args []string) (exportOptions, error) {
@@ -46,6 +48,8 @@ func parseExportArgs(args []string) (exportOptions, error) {
 	fs.StringVar(&opts.out, "o", "", "output file")
 	fs.StringVar(&opts.out, "out", "", "output file")
 	fs.StringVar(&opts.dbPath, "db", "", "SQLite cache path")
+	fs.StringVar(&opts.tags, "tags", "", "Go build tags (comma- or space-separated)")
+	fs.BoolVar(&opts.workspace, "workspace", false, "index all modules in the active go.work")
 	fs.BoolVar(&opts.open, "open", false, "open HTML report")
 	positionals, err := parseFlagSet(fs, args[1:])
 	if err != nil {
@@ -70,7 +74,7 @@ func runExport(args []string, stdout, stderr io.Writer, opener func(string) erro
 }
 
 func export(opts exportOptions, stdout, stderr io.Writer, opener func(string) error) error {
-	root, err := index.ResolveModuleRoot(opts.path)
+	root, err := index.ResolveProjectRoot(opts.path, opts.workspace)
 	if err != nil {
 		return err
 	}
@@ -101,14 +105,15 @@ func export(opts exportOptions, stdout, stderr io.Writer, opener func(string) er
 }
 
 func renderExport(root string, opts exportOptions) (string, error) {
-	idx, err := index.Build(root)
+	tags := buildTags(opts.tags)
+	idx, err := index.BuildWithOptions(root, index.BuildOptions{Tags: tags, Workspace: opts.workspace})
 	if err != nil {
 		return "", err
 	}
 	formats := render.NewRegistry()
 	switch opts.format {
 	case "html":
-		workingPath, summaryPath, err := cache.ResolvePaths(root, opts.dbPath)
+		workingPath, summaryPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, tags)
 		if err != nil {
 			return "", err
 		}
@@ -118,7 +123,7 @@ func renderExport(root string, opts exportOptions) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("markdown renderer is not registered")
 		}
-		summaries, err := markdownSummaries(root, idx, opts.dbPath)
+		summaries, err := markdownSummaries(root, idx, opts.dbPath, tags)
 		if err != nil {
 			return "", err
 		}
@@ -133,8 +138,8 @@ func renderExport(root string, opts exportOptions) (string, error) {
 	return "", usagef("unknown export format %q (use html, md, or dot)", opts.format)
 }
 
-func markdownSummaries(root string, idx *index.Index, dbFlag string) (string, error) {
-	workingPath, summaryPath, err := cache.ResolvePaths(root, dbFlag)
+func markdownSummaries(root string, idx *index.Index, dbFlag string, tags []string) (string, error) {
+	workingPath, summaryPath, err := cache.ResolvePathsWithTags(root, dbFlag, tags)
 	if err != nil {
 		return "", err
 	}

@@ -85,14 +85,30 @@ func (idx *Index) RelPath(pkgPath string) string {
 	if pi, ok := idx.Packages[pkgPath]; ok {
 		return pi.RelPath
 	}
-	if pkgPath == idx.ModulePath {
-		return "."
+	for _, mod := range idx.modulePaths() {
+		if pkgPath == mod {
+			return "."
+		}
+		if strings.HasPrefix(pkgPath, mod+"/") {
+			return strings.TrimPrefix(pkgPath, mod+"/")
+		}
 	}
-	return strings.TrimPrefix(pkgPath, idx.ModulePath+"/")
+	return pkgPath
+}
+
+func (idx *Index) modulePaths() []string {
+	if len(idx.ModulePaths) > 0 {
+		return idx.ModulePaths
+	}
+	if idx.ModulePath != "" {
+		return []string{idx.ModulePath}
+	}
+	return nil
 }
 
 // ResolvePackage maps a relative/full package path or a module name to a
-// package path. A module name resolves to its root package.
+// package path. A module name resolves to its root package. In workspace mode
+// the exact or relative package path is resolved against every module.
 func (idx *Index) ResolvePackage(arg string) (string, bool) {
 	arg = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(arg), "./"), "/")
 
@@ -106,8 +122,14 @@ func (idx *Index) ResolvePackage(arg string) (string, bool) {
 		return arg, ok
 	}
 
-	if candidate := idx.ModulePath + "/" + arg; idx.Packages[candidate] != nil {
-		return candidate, true
+	for _, mod := range idx.modulePaths() {
+		if strings.HasPrefix(arg, mod+"/") {
+			_, ok := idx.Packages[arg]
+			return arg, ok
+		}
+		if candidate := mod + "/" + arg; idx.Packages[candidate] != nil {
+			return candidate, true
+		}
 	}
 	if idx.Modules[arg] != nil {
 		return idx.moduleRoot(arg)
