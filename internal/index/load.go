@@ -1,0 +1,235 @@
+package index
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"golang.org/x/mod/modfile"
+	"golang.org/x/tools/go/packages"
+)
+
+// loadMode requests typed syntax only for the initial packages. NeedDeps must
+// stay out: it propagates NeedSyntax and NeedTypesInfo to every transitive
+// dependency, which parses and retains the entire dependency source graph.
+var loadMode = packages.NeedName | packages.NeedFiles |
+	packages.NeedImports | packages.NeedTypes |
+	packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedModule
+
+// loadPackages type-checks production packages and their test variants in one
+// loader pass. Separate loads duplicate export-data imports and type checking,
+// which doubles peak memory and startup time on repositories with broad test
+// coverage.
+func loadPackages(ctx context.Context, absRoot string, opts BuildOptions) ([]*packages.Package, []*packages.Package, error) {
+	config := &packages.Config{
+		Context: ctx,
+		Dir:     absRoot,
+		Tests:   true,
+		Mode:    loadMode | packages.NeedForTest,
+	}
+	if len(opts.Tags) > 0 {
+		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
+	}
+
+	patterns := []string{"./..."}
+	if opts.Workspace {
+		dirs, err := workspaceModules(absRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		patterns = dirs
+	}
+
+	loaded := newPackageSet()
+	for _, pattern := range patterns {
+		cfg := *config
+		if opts.Workspace {
+			cfg.Dir = pattern
+			pattern = "./..."
+		}
+		pkgs, err := packages.Load(&cfg, pattern)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load packages: %w", err)
+		}
+		loaded.add(pkgs)
+	}
+	production, tests := loaded.sorted()
+	return production, tests, nil
+}
+
+type packageSet struct {
+	production []*packages.Package
+	tests      []*packages.Package
+	seen       map[string]bool
+	testSeen   map[string]bool
+}
+
+func newPackageSet() *packageSet {
+	return &packageSet{
+		seen:     map[string]bool{},
+		testSeen: map[string]bool{},
+	}
+}
+
+func (s *packageSet) add(pkgs []*packages.Package) {
+	for _, p := range pkgs {
+		if p == nil || isTestBinary(p) {
+			continue
+		}
+		if p.ForTest == "" {
+			if s.seen[p.PkgPath] {
+				continue
+			}
+			s.seen[p.PkgPath] = true
+			s.production = append(s.production, p)
+			continue
+		}
+		if s.testSeen[p.ID] {
+			continue
+		}
+		s.testSeen[p.ID] = true
+		s.tests = append(s.tests, p)
+	}
+}
+
+func (s *packageSet) sorted() ([]*packages.Package, []*packages.Package) {
+	sort.Slice(s.production, func(i, j int) bool { return s.production[i].PkgPath < s.production[j].PkgPath })
+	sort.Slice(s.tests, func(i, j int) bool { return s.tests[i].ID < s.tests[j].ID })
+	return s.production, s.tests
+}
+
+func isTestBinary(p *packages.Package) bool {
+	return p != nil && p.Name == "main" && strings.HasSuffix(p.PkgPath, ".test")
+}
+
+// workspaceModules parses the active go.work and returns the absolute module
+// directories. Relative use paths are resolved against the workspace root.
+func workspaceModules(root string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(root, "go.work"))
+	if err != nil {
+		return nil, fmt.Errorf("read go.work: %w", err)
+	}
+	work, err := modfile.ParseWork(filepath.Join(root, "go.work"), data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("parse go.work: %w", err)
+	}
+	if len(work.Use) == 0 {
+		return nil, fmt.Errorf("go.work in %s has no use directives", root)
+	}
+	dirs := make([]string, 0, len(work.Use))
+	for _, use := range work.Use {
+		dir := use.Path
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(root, dir)
+		}
+		dirs = append(dirs, filepath.Clean(dir))
+	}
+	sort.Strings(dirs)
+	return dirs, nil
+}
+
+// LoadError reports package parse/type errors that must not replace a healthy snapshot.
+type LoadError struct {
+	Errors []string
+}
+
+func (e *LoadError) Error() string {
+	return "package load errors:\n" + strings.Join(e.Errors, "\n")
+}
+
+func packageLoadErrors(pkgs []*packages.Package) error {
+	var messages []string
+	for _, p := range pkgs {
+		for _, loadErr := range p.Errors {
+			messages = append(messages, p.PkgPath+": "+loadErr.Error())
+		}
+		if len(p.GoFiles) == 0 {
+			continue
+		}
+		if p.Types == nil || p.TypesInfo == nil || p.Fset == nil || len(p.Syntax) == 0 {
+			messages = append(messages, p.PkgPath+": incomplete syntax or type information")
+			continue
+		}
+		if p.IllTyped || !p.Types.Complete() {
+			messages = append(messages, p.PkgPath+": type checking incomplete")
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return &LoadError{Errors: messages}
+}
+
+func hasTestFiles(packagesByPath map[string]*PkgInfo) bool {
+	for _, pkg := range packagesByPath {
+		if pkg.TestFiles > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func collectTestLoadErrors(pkgs []*packages.Package) []string {
+	seen := map[string]struct{}{}
+	for _, p := range pkgs {
+		if p.ForTest == "" {
+			continue
+		}
+		for _, loadErr := range p.Errors {
+			seen[p.PkgPath+": "+loadErr.Error()] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for message := range seen {
+		out = append(out, message)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// findModulePaths returns every distinct module path in the loaded package
+// set. Workspace builds have more than one; single-module builds have one.
+func findModulePaths(pkgs []*packages.Package) []string {
+	seen := map[string]struct{}{}
+	for _, p := range pkgs {
+		if p.Module != nil && p.Module.Path != "" {
+			seen[p.Module.Path] = struct{}{}
+		}
+	}
+	if len(seen) == 0 && len(pkgs) > 0 {
+		if path := modulePathFromList(pkgs[0]); path != "" {
+			seen[path] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for path := range seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func modulePathFromList(p *packages.Package) string {
+	dir := ""
+	for _, file := range p.GoFiles {
+		dir = filepath.Dir(file)
+		break
+	}
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("go", "list", "-m")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	if fields := strings.Fields(string(out)); len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
+}

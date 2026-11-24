@@ -169,6 +169,9 @@ func TestDiffJSONAndGates(t *testing.T) {
 	if len(report.API.Modified) == 0 || report.API.Modified[0].Name != "Stable" {
 		t.Fatalf("modified API = %+v", report.API.Modified)
 	}
+	if report.API.Modified[0].Before == "" || report.API.Modified[0].After == "" || report.API.Modified[0].Before == report.API.Modified[0].After {
+		t.Fatalf("modified API signatures = %+v", report.API.Modified[0])
+	}
 	if len(report.Hotspots.New) == 0 || report.Hotspots.New[0].Name != "Complex" {
 		t.Fatalf("new hotspots = %+v", report.Hotspots.New)
 	}
