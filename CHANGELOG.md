@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Split oversized index-building, diff, report, and MCP tool files into responsibility-focused modules, and extracted complex handlers into smaller helpers with focused regression tests.
+
+### Fixed
+
+- `goray diff` now includes the new signature in modified breaking-API entries for both JSON and Markdown output.
+
 ## [0.1.4] - 2026-11-24
 
 ### Changed
