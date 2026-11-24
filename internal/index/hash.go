@@ -9,6 +9,8 @@ import (
 	"go/printer"
 	"go/token"
 	"go/types"
+	"hash"
+	"io"
 	"sort"
 	"strings"
 )
@@ -97,19 +99,42 @@ func nodeDirectives(file *ast.File, node ast.Node, docs ...*ast.CommentGroup) []
 	return directiveLines(groups)
 }
 
+type canonicalHashWriter struct {
+	h hash.Hash
+}
+
+func (w canonicalHashWriter) Write(p []byte) (int, error) {
+	return w.h.Write(p)
+}
+
+func writeCanonicalString(w io.Writer, text string) {
+	_, _ = io.WriteString(w, text)
+}
+
 func (b *builder) canonicalType(t types.Type) string {
 	var sb strings.Builder
 	b.writeCanonicalType(&sb, t, map[types.Type]int{})
 	return sb.String()
 }
 
-func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, active map[types.Type]int) {
+// canonicalSignatureHash hashes the exact historical signature input
+// (printed syntax, newline, canonical type) without materializing the canonical
+// type as a potentially large temporary string.
+func (b *builder) canonicalSignatureHash(printed string, t types.Type) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(printed))
+	_, _ = h.Write([]byte{'\n'})
+	b.writeCanonicalType(canonicalHashWriter{h: h}, t, map[types.Type]int{})
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (b *builder) writeCanonicalType(sb io.Writer, t types.Type, active map[types.Type]int) {
 	if t == nil {
-		sb.WriteString("<nil>")
+		writeCanonicalString(sb, "<nil>")
 		return
 	}
 	if depth, ok := active[t]; ok {
-		fmt.Fprintf(sb, "cycle(%d)", depth)
+		_, _ = fmt.Fprintf(sb, "cycle(%d)", depth)
 		return
 	}
 	depth := len(active)
@@ -118,24 +143,24 @@ func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, active m
 
 	switch typ := t.(type) {
 	case *types.Basic:
-		sb.WriteString(typ.Name())
+		writeCanonicalString(sb, typ.Name())
 	case *types.Named:
 		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
 	case *types.Alias:
 		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
 	case *types.Pointer:
-		sb.WriteString("*")
+		writeCanonicalString(sb, "*")
 		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Slice:
-		sb.WriteString("[]")
+		writeCanonicalString(sb, "[]")
 		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Array:
-		fmt.Fprintf(sb, "[%d]", typ.Len())
+		_, _ = fmt.Fprintf(sb, "[%d]", typ.Len())
 		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Map:
-		sb.WriteString("map[")
+		writeCanonicalString(sb, "map[")
 		b.writeCanonicalType(sb, typ.Key(), active)
-		sb.WriteString("]")
+		writeCanonicalString(sb, "]")
 		b.writeCanonicalType(sb, typ.Elem(), active)
 	case *types.Chan:
 		b.writeChanType(sb, typ, active)
@@ -144,7 +169,7 @@ func (b *builder) writeCanonicalType(sb *strings.Builder, t types.Type, active m
 	}
 }
 
-func (b *builder) writeCanonicalComposite(sb *strings.Builder, t types.Type, active map[types.Type]int) {
+func (b *builder) writeCanonicalComposite(sb io.Writer, t types.Type, active map[types.Type]int) {
 	switch typ := t.(type) {
 	case *types.Signature:
 		b.writeSignatureType(sb, typ, active, true)
@@ -163,92 +188,92 @@ func (b *builder) writeCanonicalComposite(sb *strings.Builder, t types.Type, act
 	}
 }
 
-func (b *builder) writeNamedType(sb *strings.Builder, obj *types.TypeName, args *types.TypeList, underlying types.Type, active map[types.Type]int) {
-	sb.WriteString(typeObjectName(obj))
+func (b *builder) writeNamedType(sb io.Writer, obj *types.TypeName, args *types.TypeList, underlying types.Type, active map[types.Type]int) {
+	writeCanonicalString(sb, typeObjectName(obj))
 	b.writeTypeArgs(sb, args, active)
 	if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) {
 		return
 	}
-	sb.WriteString("{")
+	writeCanonicalString(sb, "{")
 	b.writeCanonicalType(sb, underlying, active)
-	sb.WriteString("}")
+	writeCanonicalString(sb, "}")
 }
 
-func (b *builder) writeChanType(sb *strings.Builder, typ *types.Chan, active map[types.Type]int) {
+func (b *builder) writeChanType(sb io.Writer, typ *types.Chan, active map[types.Type]int) {
 	switch typ.Dir() {
 	case types.SendOnly:
-		sb.WriteString("chan<- ")
+		writeCanonicalString(sb, "chan<- ")
 	case types.RecvOnly:
-		sb.WriteString("<-chan ")
+		writeCanonicalString(sb, "<-chan ")
 	case types.SendRecv:
-		sb.WriteString("chan ")
+		writeCanonicalString(sb, "chan ")
 	default:
-		sb.WriteString("chan ")
+		writeCanonicalString(sb, "chan ")
 	}
 	b.writeCanonicalType(sb, typ.Elem(), active)
 }
 
-func (b *builder) writeSignatureType(sb *strings.Builder, typ *types.Signature, active map[types.Type]int, includeRecv bool) {
+func (b *builder) writeSignatureType(sb io.Writer, typ *types.Signature, active map[types.Type]int, includeRecv bool) {
 	if includeRecv && typ.Recv() != nil {
-		sb.WriteString("recv(")
+		writeCanonicalString(sb, "recv(")
 		b.writeCanonicalType(sb, typ.Recv().Type(), active)
-		sb.WriteString(") ")
+		writeCanonicalString(sb, ") ")
 	}
 	b.writeSignatureTypeParams(sb, typ.TypeParams(), active)
-	sb.WriteString("func(")
+	writeCanonicalString(sb, "func(")
 	b.writeParams(sb, typ.Params(), typ.Variadic(), active)
-	sb.WriteString(") (")
+	writeCanonicalString(sb, ") (")
 	b.writeTuple(sb, typ.Results(), active)
-	sb.WriteString(")")
+	writeCanonicalString(sb, ")")
 }
 
-func (b *builder) writeSignatureTypeParams(sb *strings.Builder, params *types.TypeParamList, active map[types.Type]int) {
+func (b *builder) writeSignatureTypeParams(sb io.Writer, params *types.TypeParamList, active map[types.Type]int) {
 	if params == nil || params.Len() == 0 {
 		return
 	}
-	sb.WriteString("[")
+	writeCanonicalString(sb, "[")
 	for i := 0; i < params.Len(); i++ {
 		if i > 0 {
-			sb.WriteString(", ")
+			writeCanonicalString(sb, ", ")
 		}
 		b.writeCanonicalType(sb, params.At(i), active)
 	}
-	sb.WriteString("]")
+	writeCanonicalString(sb, "]")
 }
 
-func (b *builder) writeStructType(sb *strings.Builder, typ *types.Struct, active map[types.Type]int) {
-	sb.WriteString("struct{")
+func (b *builder) writeStructType(sb io.Writer, typ *types.Struct, active map[types.Type]int) {
+	writeCanonicalString(sb, "struct{")
 	for i := 0; i < typ.NumFields(); i++ {
 		if i > 0 {
-			sb.WriteString("; ")
+			writeCanonicalString(sb, "; ")
 		}
 		b.writeStructField(sb, typ, i, active)
 	}
-	sb.WriteString("}")
+	writeCanonicalString(sb, "}")
 }
 
-func (b *builder) writeStructField(sb *strings.Builder, typ *types.Struct, i int, active map[types.Type]int) {
+func (b *builder) writeStructField(sb io.Writer, typ *types.Struct, i int, active map[types.Type]int) {
 	field := typ.Field(i)
 	if field.Embedded() {
-		sb.WriteString("embedded ")
+		writeCanonicalString(sb, "embedded ")
 	} else {
-		sb.WriteString(field.Name())
-		sb.WriteString(" ")
+		writeCanonicalString(sb, field.Name())
+		writeCanonicalString(sb, " ")
 	}
 	b.writeCanonicalType(sb, field.Type(), active)
 	if tag := typ.Tag(i); tag != "" {
-		fmt.Fprintf(sb, " %q", tag)
+		_, _ = fmt.Fprintf(sb, " %q", tag)
 	}
 }
 
-func (b *builder) writeInterfaceType(sb *strings.Builder, typ *types.Interface, active map[types.Type]int) {
-	sb.WriteString("interface{")
+func (b *builder) writeInterfaceType(sb io.Writer, typ *types.Interface, active map[types.Type]int) {
+	writeCanonicalString(sb, "interface{")
 	for i := 0; i < typ.NumMethods(); i++ {
 		if i > 0 {
-			sb.WriteString("; ")
+			writeCanonicalString(sb, "; ")
 		}
 		method := typ.Method(i)
-		sb.WriteString(method.Name())
+		writeCanonicalString(sb, method.Name())
 		if sig, ok := method.Type().(*types.Signature); ok {
 			b.writeInterfaceMethod(sb, sig, active)
 		} else {
@@ -257,16 +282,16 @@ func (b *builder) writeInterfaceType(sb *strings.Builder, typ *types.Interface, 
 	}
 	for i := 0; i < typ.NumEmbeddeds(); i++ {
 		if typ.NumMethods() > 0 || i > 0 {
-			sb.WriteString("; ")
+			writeCanonicalString(sb, "; ")
 		}
 		b.writeCanonicalType(sb, typ.EmbeddedType(i), active)
 	}
-	sb.WriteString("}")
+	writeCanonicalString(sb, "}")
 }
 
-func (b *builder) writeInterfaceMethod(sb *strings.Builder, sig *types.Signature, active map[types.Type]int) {
+func (b *builder) writeInterfaceMethod(sb io.Writer, sig *types.Signature, active map[types.Type]int) {
 	if depth, ok := active[sig]; ok {
-		fmt.Fprintf(sb, "cycle(%d)", depth)
+		_, _ = fmt.Fprintf(sb, "cycle(%d)", depth)
 		return
 	}
 	depth := len(active)
@@ -275,29 +300,29 @@ func (b *builder) writeInterfaceMethod(sb *strings.Builder, sig *types.Signature
 	b.writeSignatureType(sb, sig, active, false)
 }
 
-func (b *builder) writeTypeParamType(sb *strings.Builder, typ *types.TypeParam, active map[types.Type]int) {
-	sb.WriteString(typ.Obj().Name())
+func (b *builder) writeTypeParamType(sb io.Writer, typ *types.TypeParam, active map[types.Type]int) {
+	writeCanonicalString(sb, typ.Obj().Name())
 	if typ.Constraint() != nil {
-		sb.WriteString(" ")
+		writeCanonicalString(sb, " ")
 		b.writeCanonicalType(sb, typ.Constraint(), active)
 	}
 }
 
-func (b *builder) writeUnionType(sb *strings.Builder, typ *types.Union, active map[types.Type]int) {
+func (b *builder) writeUnionType(sb io.Writer, typ *types.Union, active map[types.Type]int) {
 	for i := 0; i < typ.Len(); i++ {
 		if i > 0 {
-			sb.WriteString("|")
+			writeCanonicalString(sb, "|")
 		}
 		term := typ.Term(i)
 		if term.Tilde() {
-			sb.WriteString("~")
+			writeCanonicalString(sb, "~")
 		}
 		b.writeCanonicalType(sb, term.Type(), active)
 	}
 }
 
-func (b *builder) writeFallbackType(sb *strings.Builder, t types.Type) {
-	sb.WriteString(types.TypeString(t, func(pkg *types.Package) string {
+func (b *builder) writeFallbackType(sb io.Writer, t types.Type) {
+	writeCanonicalString(sb, types.TypeString(t, func(pkg *types.Package) string {
 		if pkg == nil {
 			return ""
 		}
@@ -305,44 +330,44 @@ func (b *builder) writeFallbackType(sb *strings.Builder, t types.Type) {
 	}))
 }
 
-func (b *builder) writeTypeArgs(sb *strings.Builder, args *types.TypeList, active map[types.Type]int) {
+func (b *builder) writeTypeArgs(sb io.Writer, args *types.TypeList, active map[types.Type]int) {
 	if args == nil || args.Len() == 0 {
 		return
 	}
-	sb.WriteString("[")
+	writeCanonicalString(sb, "[")
 	for i := 0; i < args.Len(); i++ {
 		if i > 0 {
-			sb.WriteString(", ")
+			writeCanonicalString(sb, ", ")
 		}
 		b.writeCanonicalType(sb, args.At(i), active)
 	}
-	sb.WriteString("]")
+	writeCanonicalString(sb, "]")
 }
 
-func (b *builder) writeTuple(sb *strings.Builder, tuple *types.Tuple, active map[types.Type]int) {
+func (b *builder) writeTuple(sb io.Writer, tuple *types.Tuple, active map[types.Type]int) {
 	if tuple == nil {
 		return
 	}
 	for i := 0; i < tuple.Len(); i++ {
 		if i > 0 {
-			sb.WriteString(", ")
+			writeCanonicalString(sb, ", ")
 		}
 		b.writeCanonicalType(sb, tuple.At(i).Type(), active)
 	}
 }
 
-func (b *builder) writeParams(sb *strings.Builder, tuple *types.Tuple, variadic bool, active map[types.Type]int) {
+func (b *builder) writeParams(sb io.Writer, tuple *types.Tuple, variadic bool, active map[types.Type]int) {
 	if tuple == nil {
 		return
 	}
 	for i := 0; i < tuple.Len(); i++ {
 		if i > 0 {
-			sb.WriteString(", ")
+			writeCanonicalString(sb, ", ")
 		}
 		typ := tuple.At(i).Type()
 		if variadic && i == tuple.Len()-1 {
 			if slice, ok := typ.(*types.Slice); ok {
-				sb.WriteString("...")
+				writeCanonicalString(sb, "...")
 				b.writeCanonicalType(sb, slice.Elem(), active)
 				continue
 			}

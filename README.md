@@ -161,7 +161,7 @@ goray <command> [flags] [path]
 ```sh
 goray serve [path] [--db <path>] [--log-level off|error|info] \
   [--port <n>] [--port-range <n>] [--strict-port] [--host <addr>] \
-  [--port-file <path>] [--tags <list>] [--workspace] [--open] [--no-watch]
+  [--port-file <path>] [--tags <list>] [--workspace] [--retain-packages] [--open] [--no-watch]
 
 ```
 
@@ -174,6 +174,7 @@ goray serve [path] [--db <path>] [--log-level off|error|info] \
 * `--port-file <path>` — write the chosen URL and PID to a file and remove it on clean shutdown (env `GORAY_PORT_FILE`). Useful for following a moved port from the Vite dev proxy.
 * `--tags <list>` — Go build tags, comma- or space-separated (env `GORAY_BUILD_TAGS`).
 * `--workspace` — index every module in the active `go.work` as one semantic graph.
+* `--retain-packages` — keep type-checked ASTs for faster incremental rebuilds at the cost of substantially higher long-running memory use. By default, Goray releases these artifacts after each build and watched changes use a full rebuild.
 * `--open` — open the local report URL in the default browser.
 * `--no-watch` — disable `fsnotify` watching and background reindexing.
 

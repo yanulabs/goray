@@ -112,6 +112,16 @@ func TestServePortEnvAndFlagPrecedence(t *testing.T) {
 	if _, err := parseServeArgs([]string{"--port-range", "0"}); err == nil {
 		t.Fatal("zero port range should fail")
 	}
+	opts, err = parseServeArgs([]string{"--retain-packages"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.retainPackages {
+		t.Fatal("--retain-packages was not parsed")
+	}
+	if !wantsHelp([]string{"--retain-packages", "--help"}, serveValueFlags) {
+		t.Fatal("--help after boolean --retain-packages was not recognized")
+	}
 }
 
 func TestServePortFileAndMovedPortNotice(t *testing.T) {

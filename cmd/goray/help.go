@@ -63,6 +63,7 @@ Flags:
   --port-file <path>   Write chosen URL and PID; removed on shutdown (env GORAY_PORT_FILE)
   --tags <list>        Go build tags (env GORAY_BUILD_TAGS)
   --workspace          Index all modules in the active go.work
+  --retain-packages    Keep AST/type data for faster incremental rebuilds (more memory)
   --open               Open the local report in the default browser
   --no-watch           Disable fsnotify watching and background reindexing
   -h, --help           Show this help
