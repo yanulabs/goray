@@ -39,6 +39,132 @@ func TestNormalizeTags(t *testing.T) {
 	}
 }
 
+func TestLoadPackagesIncludesProductionAndTestVariants(t *testing.T) {
+	root := t.TempDir()
+	writeTagModule(t, root, "example.com/loadshared", map[string]string{
+		"value.go": "package loadshared\n\nfunc Value() int { return 1 }\n",
+		"value_test.go": `package loadshared
+
+import "testing"
+
+func TestValue(t *testing.T) { if Value() != 1 { t.Fatal("bad") } }
+`,
+		"external_test.go": `package loadshared_test
+
+import (
+	"testing"
+
+	"example.com/loadshared"
+)
+
+func TestExternal(t *testing.T) { if loadshared.Value() != 1 { t.Fatal("bad") } }
+`,
+	})
+
+	pkgs, tests, err := loadPackages(t.Context(), root, BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkgs) != 1 || pkgs[0].PkgPath != "example.com/loadshared" || pkgs[0].ForTest != "" {
+		t.Fatalf("production packages = %+v", pkgs)
+	}
+	if len(tests) != 2 {
+		t.Fatalf("test variants = %d, want internal and external variants", len(tests))
+	}
+	var internal, external bool
+	for _, pkg := range tests {
+		if isTestBinary(pkg) {
+			t.Fatal("test binary was retained as an index package")
+		}
+		switch pkg.PkgPath {
+		case "example.com/loadshared":
+			internal = true
+		case "example.com/loadshared_test":
+			external = true
+		}
+	}
+	if !internal || !external {
+		t.Fatalf("test variants = %+v", tests)
+	}
+}
+
+func TestSharedLoaderPreservesCrossPackageTestFieldRefs(t *testing.T) {
+	root := t.TempDir()
+	writeTagModule(t, root, "example.com/sharedfields", map[string]string{
+		"model/model.go": "package model\n\ntype Box struct { Number int }\n",
+		"use/use.go":     "package use\n",
+		"use/use_test.go": `package use
+
+import (
+	"testing"
+
+	"example.com/sharedfields/model"
+)
+
+func TestBox(t *testing.T) {
+	box := model.Box{Number: 1}
+	if box.Number != 1 { t.Fatal("bad") }
+}
+`,
+	})
+	idx, err := Build(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundFieldRef := false
+	for _, ref := range idx.XRefs["example.com/sharedfields/model.Box.Number"] {
+		if ref.Test {
+			foundFieldRef = true
+			break
+		}
+	}
+	if !foundFieldRef {
+		t.Fatal("cross-package test field reference was lost across package-loader type identities")
+	}
+}
+
+func TestBuildReleaseArtifactsUsesFullRebuild(t *testing.T) {
+	root := t.TempDir()
+	writeTagModule(t, root, "example.com/release", map[string]string{
+		"value.go": "package release\n\nfunc Value() int { return 1 }\n",
+		"value_test.go": `package release
+
+import "testing"
+
+func TestValue(t *testing.T) { if Value() != 1 { t.Fatal("bad") } }
+`,
+	})
+	opts := BuildOptions{ReleaseArtifacts: true}
+	prev, err := BuildWithOptions(root, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prev.pkgs != nil || prev.testPkgs != nil {
+		t.Fatal("released index retained type-checked package artifacts")
+	}
+	if prev.Symbols["example.com/release.Value"] == nil || !prev.TestCovered["example.com/release.Value"] {
+		t.Fatalf("released index is incomplete: symbols=%d coverage=%v", len(prev.Symbols), prev.TestCovered)
+	}
+
+	file := filepath.Join(root, "value.go")
+	if err := os.WriteFile(file, []byte("package release\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next, used, err := BuildIncremental(root, opts, prev, []string{file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used {
+		t.Fatal("index without retained artifacts unexpectedly used an incremental rebuild")
+	}
+	if next.pkgs != nil || next.testPkgs != nil {
+		t.Fatal("full fallback retained type-checked package artifacts")
+	}
+	if next.Symbols["example.com/release.Value"] == nil {
+		t.Fatal("full fallback dropped the changed package")
+	}
+}
+
 func TestBuildTagsAffectTestReachability(t *testing.T) {
 	root := t.TempDir()
 	writeTagModule(t, root, "example.com/tags", map[string]string{

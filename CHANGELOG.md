@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Production and test packages now share one typed package-loading pass, reducing duplicate type checking, startup allocations, and peak memory while preserving type identity across test references and interface dispatch.
+- Canonical signature hashing streams directly into SHA-256 instead of building large temporary strings, without changing summary hashes.
+- `goray serve` releases AST and `go/types` artifacts and returns unused build memory to the OS after indexing by default, cutting retained heap on large repositories while keeping queries on the compact derived index. Use `--retain-packages` to opt back into memory-heavy incremental rebuilds.
+
 ## [0.1.3] - 2026-11-22
 
 ### Fixed

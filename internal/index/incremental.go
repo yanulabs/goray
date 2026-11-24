@@ -154,21 +154,40 @@ func loadAffectedPackages(ctx context.Context, opts BuildOptions, prev *Index, a
 		incrementalLoadHook(append([]string{}, paths...))
 	}
 
-	config := &packages.Config{Context: ctx, Dir: prev.RootDir, Mode: loadMode}
+	config := &packages.Config{
+		Context: ctx,
+		Dir:     prev.RootDir,
+		Tests:   true,
+		Mode:    loadMode | packages.NeedForTest,
+	}
 	if len(opts.Tags) > 0 {
 		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
 	}
 	// One load for every affected package keeps go list and export-data work
-	// proportional to the dependency graph instead of the package count.
+	// proportional to the dependency graph instead of the package count. Test
+	// variants share the same loader and imported type information.
 	loaded, err := packages.Load(config, paths...)
 	if err != nil {
 		return nil, nil, false
 	}
 	byPath := make(map[string]*packages.Package, len(loaded))
+	testSeen := map[string]bool{}
+	testPkgs := make([]*packages.Package, 0, len(loaded))
 	for _, pkg := range loaded {
-		if pkg.PkgPath != "" {
-			byPath[pkg.PkgPath] = pkg
+		if isTestBinary(pkg) {
+			continue
 		}
+		if pkg.ForTest == "" {
+			if pkg.PkgPath != "" {
+				byPath[pkg.PkgPath] = pkg
+			}
+			continue
+		}
+		if testSeen[pkg.ID] {
+			continue
+		}
+		testSeen[pkg.ID] = true
+		testPkgs = append(testPkgs, pkg)
 	}
 	pkgs := make([]*packages.Package, 0, len(paths))
 	for _, pkgPath := range paths {
@@ -181,26 +200,6 @@ func loadAffectedPackages(ctx context.Context, opts BuildOptions, prev *Index, a
 			return nil, nil, false
 		}
 		pkgs = append(pkgs, found)
-	}
-
-	testConfig := *config
-	testConfig.Mode |= packages.NeedForTest
-	testConfig.Tests = true
-	testLoaded, err := packages.Load(&testConfig, paths...)
-	if err != nil {
-		return nil, nil, false
-	}
-	testSeen := map[string]*packages.Package{}
-	testPkgs := make([]*packages.Package, 0, len(testLoaded))
-	for _, pkg := range testLoaded {
-		if pkg.ForTest == "" || pkg.Name == "main" && strings.HasSuffix(pkg.PkgPath, ".test") {
-			continue
-		}
-		if testSeen[pkg.ID] != nil {
-			continue
-		}
-		testSeen[pkg.ID] = pkg
-		testPkgs = append(testPkgs, pkg)
 	}
 	return pkgs, testPkgs, true
 }

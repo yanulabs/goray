@@ -137,4 +137,12 @@ type Defined Named
 	if alias := b.canonicalType(scope.Lookup("MyAlias").Type()); alias == "" {
 		t.Fatal("alias canonical form is empty")
 	}
+
+	for _, typ := range []types.Type{use, sType, scope.Lookup("A").Type(), scope.Lookup("Comparable").Type()} {
+		const printed = "func(int) error"
+		want := hashText(printed + "\n" + b.canonicalType(typ))
+		if got := b.canonicalSignatureHash(printed, typ); got != want {
+			t.Fatalf("streamed signature hash changed: got %s want %s", got, want)
+		}
+	}
 }

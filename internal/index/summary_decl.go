@@ -38,8 +38,7 @@ func (b *builder) summaryFunc(
 	if d.Body != nil {
 		body = printNode(d.Body)
 	}
-	sigInput := printNode(d.Type) + "\n" + b.canonicalType(fn.Type())
-	sigHash := hashText(sigInput)
+	sigHash := b.canonicalSignatureHash(printNode(d.Type), fn.Type())
 	selfHash := hashParts(sigHash, hashText(body), hashText(normalizeDoc(doc)), hashText(strings.Join(directives, "\n")))
 
 	typeRefs := b.collectTypeRefs(p, d, canonical)
@@ -96,8 +95,7 @@ func (b *builder) summaryType(
 	}
 	doc := normalizeDoc(strings.Join(docs, "\n"))
 	directives := nodeDirectives(file, spec, gen.Doc, spec.Doc)
-	sigInput := printNode(spec.Type) + "\n" + b.canonicalType(tn.Type())
-	sigHash := hashText(sigInput)
+	sigHash := b.canonicalSignatureHash(printNode(spec.Type), tn.Type())
 	selfHash := hashParts(sigHash, hashText(doc), hashText(strings.Join(directives, "\n")))
 
 	shape := &summaryType{sym: nil, existingID: existingID}

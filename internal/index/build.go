@@ -25,6 +25,10 @@ type BuildOptions struct {
 	// Workspace enables multi-module go.work indexing. When false, a root
 	// directory that contains go.work but no go.mod is auto-detected.
 	Workspace bool
+	// ReleaseArtifacts drops type-checked package artifacts after the index is
+	// built. Long-running servers should enable this to avoid retaining every
+	// AST and go/types graph; subsequent watched changes use a full rebuild.
+	ReleaseArtifacts bool
 }
 
 // NormalizeTags splits comma- or space-separated tags, trims, deduplicates,
@@ -78,7 +82,7 @@ func BuildWithOptionsContext(ctx context.Context, rootDir string, opts BuildOpti
 		opts.Workspace = workspaceRootAt(absRoot)
 	}
 
-	pkgs, err := loadPackages(ctx, absRoot, opts)
+	pkgs, testPkgs, err := loadPackages(ctx, absRoot, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +90,6 @@ func BuildWithOptionsContext(ctx context.Context, rootDir string, opts BuildOpti
 		return nil, fmt.Errorf("no Go packages found in %s", absRoot)
 	}
 
-	testPkgs := loadTestPackages(ctx, absRoot, opts)
 	return buildFromPackages(ctx, absRoot, opts, pkgs, testPkgs, start)
 }
 
@@ -130,8 +133,13 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 		b.idx.TestLoadErrors = collectTestLoadErrors(testPkgs)
 	}
 
-	idx.pkgs = pkgs
-	idx.testPkgs = testPkgs
+	if opts.ReleaseArtifacts {
+		idx.pkgs = nil
+		idx.testPkgs = nil
+	} else {
+		idx.pkgs = pkgs
+		idx.testPkgs = testPkgs
+	}
 	idx.BuiltAt = time.Now()
 	idx.BuildDuration = time.Since(start)
 	return idx, nil
@@ -188,49 +196,11 @@ var loadMode = packages.NeedName | packages.NeedFiles |
 	packages.NeedImports | packages.NeedTypes |
 	packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedModule
 
-func loadPackages(ctx context.Context, absRoot string, opts BuildOptions) ([]*packages.Package, error) {
-	config := &packages.Config{Context: ctx, Dir: absRoot, Mode: loadMode}
-	if len(opts.Tags) > 0 {
-		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
-	}
-
-	patterns := []string{"./..."}
-	if opts.Workspace {
-		dirs, err := workspaceModules(absRoot)
-		if err != nil {
-			return nil, err
-		}
-		patterns = dirs
-	}
-
-	seen := map[string]bool{}
-	var all []*packages.Package
-	for _, pattern := range patterns {
-		cfg := *config
-		if opts.Workspace {
-			cfg.Dir = pattern
-			pattern = "./..."
-		}
-		loaded, err := packages.Load(&cfg, pattern)
-		if err != nil {
-			return nil, fmt.Errorf("load packages: %w", err)
-		}
-		for _, p := range loaded {
-			if seen[p.PkgPath] {
-				continue
-			}
-			seen[p.PkgPath] = true
-			all = append(all, p)
-		}
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].PkgPath < all[j].PkgPath })
-	return all, nil
-}
-
-// loadTestPackages type-checks test variants with the same build tags so test
-// mocks, test-only methods, and test call edges are visible to impact,
-// implementation, and coverage analysis.
-func loadTestPackages(ctx context.Context, absRoot string, opts BuildOptions) []*packages.Package {
+// loadPackages type-checks production packages and their test variants in one
+// loader pass. Separate loads duplicate export-data imports and type checking,
+// which doubles peak memory and startup time on repositories with broad test
+// coverage.
+func loadPackages(ctx context.Context, absRoot string, opts BuildOptions) ([]*packages.Package, []*packages.Package, error) {
 	config := &packages.Config{
 		Context: ctx,
 		Dir:     absRoot,
@@ -240,36 +210,55 @@ func loadTestPackages(ctx context.Context, absRoot string, opts BuildOptions) []
 	if len(opts.Tags) > 0 {
 		config.BuildFlags = []string{"-tags=" + strings.Join(opts.Tags, ",")}
 	}
-	dirs := []string{absRoot}
+
+	patterns := []string{"./..."}
 	if opts.Workspace {
-		modules, err := workspaceModules(absRoot)
+		dirs, err := workspaceModules(absRoot)
 		if err != nil {
-			return nil
+			return nil, nil, err
 		}
-		dirs = modules
+		patterns = dirs
 	}
+
 	seen := map[string]bool{}
-	var out []*packages.Package
-	for _, dir := range dirs {
+	testSeen := map[string]bool{}
+	var all, tests []*packages.Package
+	for _, pattern := range patterns {
 		cfg := *config
-		cfg.Dir = dir
-		pkgs, err := packages.Load(&cfg, "./...")
-		if err != nil {
-			continue
+		if opts.Workspace {
+			cfg.Dir = pattern
+			pattern = "./..."
 		}
-		for _, p := range pkgs {
-			if p.ForTest == "" || seen[p.ID] {
+		loaded, err := packages.Load(&cfg, pattern)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load packages: %w", err)
+		}
+		for _, p := range loaded {
+			if isTestBinary(p) {
 				continue
 			}
-			if p.Name == "main" && strings.HasSuffix(p.PkgPath, ".test") {
+			if p.ForTest == "" {
+				if seen[p.PkgPath] {
+					continue
+				}
+				seen[p.PkgPath] = true
+				all = append(all, p)
 				continue
 			}
-			seen[p.ID] = true
-			out = append(out, p)
+			if testSeen[p.ID] {
+				continue
+			}
+			testSeen[p.ID] = true
+			tests = append(tests, p)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+	sort.Slice(all, func(i, j int) bool { return all[i].PkgPath < all[j].PkgPath })
+	sort.Slice(tests, func(i, j int) bool { return tests[i].ID < tests[j].ID })
+	return all, tests, nil
+}
+
+func isTestBinary(p *packages.Package) bool {
+	return p != nil && p.Name == "main" && strings.HasSuffix(p.PkgPath, ".test")
 }
 
 // workspaceModules parses the active go.work and returns the absolute module

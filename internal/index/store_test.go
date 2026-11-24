@@ -64,6 +64,41 @@ func TestStoreAutoRebuildCoalescing(t *testing.T) {
 	}
 }
 
+func TestStoreReleaseArtifactsFallsBackToFullRebuild(t *testing.T) {
+	dir := t.TempDir()
+	writeTagModule(t, dir, "example.com/storerelease", map[string]string{
+		"value.go": "package storerelease\n\nfunc Value() int { return 1 }\n",
+	})
+	store := NewStoreWithOptions(dir, nil, BuildOptions{ReleaseArtifacts: true})
+	store.Start()
+	before, err := store.Wait(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.pkgs != nil || before.testPkgs != nil {
+		t.Fatal("store retained released package artifacts")
+	}
+
+	file := filepath.Join(dir, "value.go")
+	if err := os.WriteFile(file, []byte("package storerelease\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store.MarkDirty(file)
+	if err := store.rebuild(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Wait(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.pkgs != nil || after.testPkgs != nil {
+		t.Fatal("store retained artifacts after rebuilding")
+	}
+	if status := store.Status(); status.LastBuildMode != "full" {
+		t.Fatalf("last_build_mode = %q, want full", status.LastBuildMode)
+	}
+}
+
 func TestStoreRebuildContextCanceled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/cancel\n\ngo 1.23\n"), 0o644); err != nil {

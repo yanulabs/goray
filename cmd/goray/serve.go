@@ -27,18 +27,19 @@ var serveValueFlags = map[string]bool{
 }
 
 type serveOptions struct {
-	path       string
-	dbPath     string
-	logLevel   string
-	tags       string
-	host       string
-	portFile   string
-	workspace  bool
-	port       int
-	portRange  int
-	strictPort bool
-	noWatch    bool
-	open       bool
+	path           string
+	dbPath         string
+	logLevel       string
+	tags           string
+	host           string
+	portFile       string
+	workspace      bool
+	port           int
+	portRange      int
+	strictPort     bool
+	noWatch        bool
+	retainPackages bool
+	open           bool
 }
 
 func parseServeArgs(args []string) (serveOptions, error) {
@@ -55,6 +56,7 @@ func parseServeArgs(args []string) (serveOptions, error) {
 	fs.StringVar(&opts.tags, "tags", "", "Go build tags (comma- or space-separated)")
 	fs.BoolVar(&opts.workspace, "workspace", false, "index all modules in the active go.work")
 	fs.BoolVar(&opts.noWatch, "no-watch", false, "disable watching")
+	fs.BoolVar(&opts.retainPackages, "retain-packages", false, "retain type-checked packages for faster incremental rebuilds (uses more memory)")
 	fs.BoolVar(&opts.open, "open", false, "open local report")
 	positionals, err := parseFlagSet(fs, args)
 	if err != nil {
@@ -152,7 +154,11 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 
 	logger.Info("summary cache ready", "worktree_db", summaries.Path(), "summary_db", summaries.SummaryPath())
 
-	store := index.NewStoreWithOptions(root, logger, index.BuildOptions{Tags: tags, Workspace: opts.workspace})
+	store := index.NewStoreWithOptions(root, logger, index.BuildOptions{
+		Tags:             tags,
+		Workspace:        opts.workspace,
+		ReleaseArtifacts: !opts.retainPackages,
+	})
 	store.SetBuildHook(func(idx *index.Index) error {
 		return summaries.Sync(context.Background(), idx)
 	})

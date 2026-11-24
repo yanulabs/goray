@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -260,6 +261,12 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	}
 	if err == nil && hook != nil {
 		err = hook(idx)
+	}
+	if s.opts.ReleaseArtifacts {
+		// Dropping the package references only makes them collectable. Return
+		// the unused build heap to the OS now so an idle server does not keep the
+		// large AST/type working set resident until unrelated allocations happen.
+		debug.FreeOSMemory()
 	}
 	duration := time.Since(start)
 
