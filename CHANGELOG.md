@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-24
+
 ### Changed
 
 - Production and test packages now share one typed package-loading pass, reducing duplicate type checking, startup allocations, and peak memory while preserving type identity across test references and interface dispatch.
@@ -84,7 +86,8 @@ Initial public release.
 - Large report graphs no longer crash ELK after post-compaction.
 - Nil method packages no longer panic interface-dispatch registration.
 
-[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/yanulabs/goray/releases/tag/v0.1.4
 [0.1.3]: https://github.com/yanulabs/goray/releases/tag/v0.1.3
 [0.1.2]: https://github.com/yanulabs/goray/releases/tag/v0.1.2
 [0.1.1]: https://github.com/yanulabs/goray/releases/tag/v0.1.1

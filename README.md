@@ -22,7 +22,7 @@ Static semantic indexer, MCP stdio server, and offline architecture reporter for
 go install github.com/yanulabs/goray/cmd/goray@latest
 
 # Pin a version
-go install github.com/yanulabs/goray/cmd/goray@v0.1.3
+go install github.com/yanulabs/goray/cmd/goray@v0.1.4
 
 goray version
 ```
