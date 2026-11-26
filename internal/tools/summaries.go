@@ -103,13 +103,9 @@ func (t *toolset) getSummaryContext() mcp.Tool {
 			"symbol_ids": map[string]any{"type": "array", "maxItems": 25, "items": map[string]any{"type": "string"}, "description": "Batch symbol or canonical mod:/pkg:/file: IDs in any accepted identifier form (max 25)"},
 			"max_chars":  propInt("Batch output budget in characters (default 40000)"),
 		}),
-		Run: func(ctx context.Context, args map[string]any) (string, bool) {
+		Run: t.indexedCtx(func(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 			if t.summaries == nil {
 				return "summary cache is unavailable", true
-			}
-			idx, err := t.src.Wait(ctx)
-			if err != nil {
-				return err.Error(), true
 			}
 			id := symbolArg(args)
 			ids, err := stringSliceAliasArg(args, "symbol_ids", "ids")
@@ -162,7 +158,7 @@ func (t *toolset) getSummaryContext() mcp.Tool {
 				TruncatedIDs:  truncated,
 			}
 			return render.JSON(out), false
-		},
+		}),
 	}
 }
 
@@ -366,7 +362,7 @@ func (t *toolset) getSummaryCoverage() mcp.Tool {
 			if t.summaries == nil {
 				return "summary cache is unavailable", true
 			}
-			coverage, err := t.summaries.Coverage(ctx, strArg(args, "module", ""))
+			coverage, err := t.summaries.Coverage(ctx, strings.TrimPrefix(moduleArg(args), "mod:"))
 			if err != nil {
 				return err.Error(), true
 			}

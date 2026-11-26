@@ -149,7 +149,7 @@ func TestAPISurfaceKindFilteringAndRanking(t *testing.T) {
 	for _, sym := range symbols {
 		manual.Symbols[sym.ID] = sym
 	}
-	items, omitted := (&toolset{}).collectAPISurface(context.Background(), manual, pkg, false, "")
+	items, omitted := collectAPISurface(manual, pkg, false, "")
 	got = got[:0]
 	for _, item := range items {
 		got = append(got, item.Name+":"+item.ID)
@@ -159,11 +159,11 @@ func TestAPISurfaceKindFilteringAndRanking(t *testing.T) {
 		t.Fatalf("ranked items = %v omitted=%d, want %v omitted=1", got, omitted, want)
 	}
 
-	functions, omitted := (&toolset{}).collectAPISurface(context.Background(), manual, pkg, false, "func")
+	functions, omitted := collectAPISurface(manual, pkg, false, "func")
 	if len(functions) != 3 || omitted != 0 {
 		t.Fatalf("func filter = %+v omitted=%d", functions, omitted)
 	}
-	types, omitted := (&toolset{}).collectAPISurface(context.Background(), manual, pkg, false, "type")
+	types, omitted := collectAPISurface(manual, pkg, false, "type")
 	if len(types) != 2 || omitted != 0 {
 		t.Fatalf("type filter = %+v omitted=%d", types, omitted)
 	}

@@ -29,7 +29,7 @@ func (t *toolset) codebaseMap() mcp.Tool {
 				idx = idx.TrackedView()
 			}
 			if strArg(args, "detail", "compact") == "compact" {
-				return t.compactCodebaseMap(idx, args)
+				return t.compactCodebaseMap(ctx, idx, args)
 			}
 			if detail := strArg(args, "detail", "compact"); detail != "full" {
 				return "invalid detail: " + detail, true
@@ -112,7 +112,7 @@ func (t *toolset) moduleOverview() mcp.Tool {
 			detail := strArg(args, "detail", "compact")
 			switch detail {
 			case "compact":
-				return t.compactModuleOverview(idx, summary, args)
+				return t.compactModuleOverview(ctx, idx, summary, args)
 			case "full":
 			default:
 				return "invalid detail: " + detail, true

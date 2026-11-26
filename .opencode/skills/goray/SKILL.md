@@ -54,8 +54,8 @@ Every registered MCP tool and its critical parameters:
 | Tool | Parameters |
 |---|---|
 | `project_info` | none. Readiness, counts, load errors, build mode, DB paths, available tool count. |
-| `get_codebase_map` | `format` (`markdown` default, plus registered formats), `detail` (`compact` default, `full`), `summary_only` (default `false`), `top_modules` (default `15`; `0` = all), `sort_by` (`prod_loc` default, `fan_in`, `fan_out`), `tracked_only` (bool). Compact scorecard reports generated file/symbol/LOC rollups plus `truncated`, `total_count`, and a fetch hint. |
-| `get_module_overview` | `module` (required: module name such as `payments` or `internal/index`, or `mod:` ID), `format`, `detail` (`compact` default, `full`), `include_generated` (default `false`), `tracked_only`. Compact returns package rollups, dependency edges, large files, and top hotspots with `generated_omitted`. |
+| `get_codebase_map` | `format` (`markdown` default, plus registered formats), `detail` (`compact` default, `full`), `summary_only` (default `false`), `top_modules` (default `15`; `0` = all), `sort_by` (`prod_loc` default, `fan_in`, `fan_out`), `tracked_only` (bool). Compact scorecard reports generated file/symbol/LOC rollups, accurate `untracked_files`, cached module summaries (`summary`, `sync_state`, `deps_changed`), plus `truncated`, `total_count`, and a fetch hint. |
+| `get_module_overview` | `module` (required: module name such as `payments` or `internal/index`, or `mod:` ID), `format`, `detail` (`compact` default, `full`), `include_generated` (default `false`), `tracked_only`. Compact returns package rollups, dependency edges, large files, top hotspots with `generated_omitted`, and the cached module summary when present. |
 | `get_dependency_graph` | `package` (optional package path or module name; omit to rank fan-in/fan-out), `direction` (`out` default, `in`, `both`), `depth` (default `2`), `format` (default `json`). |
 | `explain_dependency` | `from` (required module name or package path), `to` (required), `include_tests` (default `false`), `limit` (max usage sites). Returns exact `file:line` imports and symbol usages, blank/dot imports flagged, counters, and reverse-edge hint. |
 | `lookup_symbol` | `symbol_id` (required: canonical ID, full Go identifier, repository-relative shorthand, `Type.Field`, exact name, or substring), `kind` (`func`, `method`, `interface`, `struct`, `type`, `var`, `const`, `field`), `limit` (default `25`). Returns `id` and `canonical_id`; includes `summary` or an `enclosing_summary` when the symbol itself is not eligible. |
@@ -70,9 +70,9 @@ Every registered MCP tool and its critical parameters:
 | `list_stale_summaries` | `kind`, `module`, `package`, `limit`, plus stale filters. Excludes `synced`, `not_eligible`, and dead symbols by default. |
 | `get_summary_context` | `symbol_id` (single) or `symbol_ids` (required array, max 25), `max_chars` (default `40000`). PREPARES RAW CONTEXT FOR WRITING/UPDATING SUMMARIES, not for reading cached summaries. Returns contexts, hashes, schema, `not_eligible` parent package/module IDs, and `truncated_ids`. |
 | `upsert_summaries` | `items` (required array of `symbol_id`, `summary`, `expected_self_hash`, `expected_dep_hash`), `model_id`. Use hashes returned by `get_summary_context`. |
-| `get_summary_coverage` | `module` (optional). Coverage totals and grouped counts. |
-| `run_tests` | `packages` (default `./...`), `run` (optional `-run` regex). Runs `go test -race -count=1`. |
-| `run_lint` | `packages` (default `./...`). Runs `golangci-lint run`, falling back to `go vet`. |
+| `get_summary_coverage` | `module` (optional; accepts `mod:<name>`). Coverage totals and grouped counts. |
+| `run_tests` | `packages` (default `./...`; string with whitespace-separated patterns or an array), `run` (optional `-run` regex). Runs `go test -race -count=1`, forwards server build tags, and rejects values starting with `-`. |
+| `run_lint` | `packages` (default `./...`; string or array). Runs `golangci-lint run`, falling back to `go vet`; forwards server build tags and rejects values starting with `-`. |
 | `reindex` | none. Explicit clean full rebuild. Use after branch switches; normal file edits use automatic incremental rebuilds. |
 
 ## Navigation & audit

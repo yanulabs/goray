@@ -24,9 +24,11 @@ type apiSurfaceItem struct {
 	Summary     json.RawMessage `json:"summary,omitempty"`
 	SyncState   string          `json:"sync_state,omitempty"`
 	DepsChanged bool            `json:"deps_changed,omitempty"`
+
+	sym *index.Symbol
 }
 
-func (t *toolset) collectAPISurface(ctx context.Context, idx *index.Index, pkg string, includeGenerated bool, kindFilter string) ([]apiSurfaceItem, int) {
+func collectAPISurface(idx *index.Index, pkg string, includeGenerated bool, kindFilter string) ([]apiSurfaceItem, int) {
 	items := make([]apiSurfaceItem, 0)
 	generatedOmittedSymbols := 0
 	for _, sym := range idx.Symbols {
@@ -44,11 +46,10 @@ func (t *toolset) collectAPISurface(ctx context.Context, idx *index.Index, pkg s
 		if sym.RecvType != "" {
 			name = "(" + sym.RecvType + ")." + sym.Name
 		}
-		summary, state, depsChanged := t.enrich(ctx, sym)
 		items = append(items, apiSurfaceItem{
 			ID: sym.ID, Name: name, Kind: sym.Kind, Signature: sym.Signature, CanonicalID: sym.CanonicalID(),
 			LOC: fmt.Sprintf("%s:%d", sym.File, sym.Line), XRefs: len(idx.XRefs[sym.ID]),
-			Generated: sym.Generated, Summary: summary, SyncState: string(state), DepsChanged: depsChanged,
+			Generated: sym.Generated, sym: sym,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -62,6 +63,17 @@ func (t *toolset) collectAPISurface(ctx context.Context, idx *index.Index, pkg s
 		return items[i].ID < items[j].ID
 	})
 	return items, generatedOmittedSymbols
+}
+
+// enrichAPISurface attaches cached summaries after pagination so a bounded
+// page never issues SQLite lookups for symbols it will not return.
+func (t *toolset) enrichAPISurface(ctx context.Context, items []apiSurfaceItem) {
+	for i := range items {
+		summary, state, depsChanged := t.enrich(ctx, items[i].sym)
+		items[i].Summary = summary
+		items[i].SyncState = string(state)
+		items[i].DepsChanged = depsChanged
+	}
 }
 
 type apiSurfacePage struct {
@@ -172,12 +184,13 @@ func (t *toolset) apiSurface() mcp.Tool {
 				return "invalid kind: " + kindFilter, true
 			}
 
-			items, generatedOmittedSymbols := t.collectAPISurface(ctx, idx, pkg, includeGenerated, kindFilter)
+			items, generatedOmittedSymbols := collectAPISurface(idx, pkg, includeGenerated, kindFilter)
 			page := paginateAPISurface(
 				items,
 				nonNegativeIntArg(args, "offset", 0),
 				pageSizeArg(args, "limit", 100),
 			)
+			t.enrichAPISurface(ctx, page.Items)
 			out := buildAPISurfaceResponse(apiSurfaceResponse{
 				Package: pkg, Info: info, KindFilter: kindFilter, IncludeGenerated: includeGenerated,
 				Total: len(items), GeneratedOmitted: generatedOmittedSymbols, Page: page,

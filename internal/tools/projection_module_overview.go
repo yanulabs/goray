@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -81,9 +82,17 @@ func moduleOverviewHint(out compactModuleOverview, mod *index.ModSummary) string
 	return strings.Join(hints, "; ")
 }
 
-func (t *toolset) compactModuleOverview(idx *index.Index, mod *index.ModSummary, args map[string]any) (string, bool) {
+func (t *toolset) compactModuleOverview(ctx context.Context, idx *index.Index, mod *index.ModSummary, args map[string]any) (string, bool) {
 	includeGenerated := boolArg(args, "include_generated", false)
 	out := compactModuleResponse(idx, mod, includeGenerated, t.src.Status().IndexState)
+	if t.summaries != nil {
+		cached, state, depsChanged, err := t.summaries.Enrich(ctx, "mod:"+mod.Name)
+		if err == nil && len(cached) > 0 {
+			out.Summary = cached
+			out.SyncState = string(state)
+			out.DepsChanged = depsChanged
+		}
+	}
 	finalizeCompactModuleOverview(&out, mod)
 
 	format := strArg(args, "format", "markdown")
@@ -152,6 +161,9 @@ func compactModuleMarkdown(out compactModuleOverview) string {
 			fmt.Fprintf(&b, "| %d | `%s` | `%s` | %d | %d | %d |\n",
 				hotspot.RiskScore, hotspot.Name, hotspot.File, hotspot.LOC, hotspot.Complexity, hotspot.FanIn)
 		}
+	}
+	if len(out.Summary) > 0 {
+		fmt.Fprintf(&b, "\n## Cached Summary\n\n- Sync state: `%s`\n\n```json\n%s\n```\n", out.SyncState, out.Summary)
 	}
 	writePayloadFooter(&b, out.Truncated, out.TotalCount, out.Hint)
 	return b.String()

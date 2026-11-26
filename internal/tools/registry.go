@@ -149,6 +149,17 @@ func propString(desc string) map[string]any {
 	return map[string]any{"type": "string", "description": desc}
 }
 
+// propStringOrArray documents a parameter that accepts either one string or a
+// JSON array of strings. MCP clients validate against this shape before the
+// handler normalizes both forms.
+func propStringOrArray(desc string) map[string]any {
+	return map[string]any{
+		"type":        []string{"string", "array"},
+		"items":       map[string]any{"type": "string"},
+		"description": desc,
+	}
+}
+
 func propInt(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
