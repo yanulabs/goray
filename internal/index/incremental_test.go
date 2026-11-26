@@ -128,7 +128,7 @@ func TestIncrementalEquivalence(t *testing.T) {
 	incrementalLoadHook = func(paths []string) { loaded = append([]string{}, paths...) }
 	defer func() { incrementalLoadHook = nil }()
 
-	incremental, usedIncremental, err := BuildIncremental(root, BuildOptions{}, prev, []string{leafFile})
+	incremental, usedIncremental, _, err := BuildIncremental(root, BuildOptions{}, prev, []string{leafFile})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestIncrementalFallsBackForModuleAndPackageChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/inc\n\ngo 1.23\n\n// touched\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, used, err := BuildIncremental(root, BuildOptions{}, prev, []string{filepath.Join(root, "go.mod")}); err != nil || used {
+	if _, used, _, err := BuildIncremental(root, BuildOptions{}, prev, []string{filepath.Join(root, "go.mod")}); err != nil || used {
 		t.Fatalf("go.mod change: used=%v err=%v", used, err)
 	}
 
@@ -176,7 +176,7 @@ func TestIncrementalFallsBackForModuleAndPackageChanges(t *testing.T) {
 	if err := os.WriteFile(newFile, []byte("package newpkg\n\nfunc New() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, used, err := BuildIncremental(root, BuildOptions{}, fresh, []string{newFile}); err != nil || used {
+	if _, used, _, err := BuildIncremental(root, BuildOptions{}, fresh, []string{newFile}); err != nil || used {
 		t.Fatalf("new package: used=%v err=%v", used, err)
 	}
 	_ = leafFile

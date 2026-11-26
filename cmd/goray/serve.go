@@ -173,7 +173,13 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 	}()
 
 	if !opts.noWatch {
-		watcher, err := watch.New(root, logger, func(paths []string) { store.MarkDirty(paths...) })
+		watchRoots := []string{root}
+		if modules, err := index.WorkspaceModuleDirs(root); err == nil {
+			watchRoots = append(watchRoots, modules...)
+		} else if opts.workspace {
+			logger.Warn("resolve workspace modules for watching", "err", err)
+		}
+		watcher, err := watch.NewWithRoots(watchRoots, logger, func(paths []string) { store.MarkDirty(paths...) })
 		if err != nil {
 			logger.Warn("file watcher unavailable", "err", err)
 		} else {

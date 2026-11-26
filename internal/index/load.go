@@ -122,6 +122,17 @@ func isTestBinary(p *packages.Package) bool {
 	return p != nil && p.Name == "main" && strings.HasSuffix(p.PkgPath, ".test")
 }
 
+// WorkspaceModuleDirs parses the go.work at root and returns its module
+// directories. It is used by the watcher to follow modules outside the
+// workspace root.
+func WorkspaceModuleDirs(root string) ([]string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	return workspaceModules(absRoot)
+}
+
 // workspaceModules parses the active go.work and returns the absolute module
 // directories. Relative use paths are resolved against the workspace root.
 func workspaceModules(root string) ([]string, error) {

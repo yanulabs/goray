@@ -154,7 +154,7 @@ func Build() model.Box { return model.Box{Number: 2} }
 		t.Fatal(err)
 	}
 
-	next, used, err := BuildIncremental(root, BuildOptions{}, prev, []string{useFile})
+	next, used, _, err := BuildIncremental(root, BuildOptions{}, prev, []string{useFile})
 	if err != nil {
 		t.Fatal(err)
 	}
