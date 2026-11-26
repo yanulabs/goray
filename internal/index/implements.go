@@ -96,14 +96,15 @@ func safeImplements(t types.Type, iface *types.Interface) (ok bool) {
 
 // markInterfaceMethod records the concrete method that satisfies an interface
 // method and returns the exact method symbol IDs keyed by required method name.
-// Interface methods may be declared in another package, so lookup by name only
-// (pkg == nil). Promoted methods on embedded structs resolve to the declaring
-// embedded type, which is what call graphs and impact analysis must follow.
+// Lookup must pass the interface method's declaring package: go/types ignores it
+// for exported names but requires it to resolve unexported names. Promoted
+// methods on embedded structs resolve to the declaring embedded type, which is
+// what call graphs and impact analysis must follow.
 func markInterfaceMethod(methods *types.MethodSet, iface *types.Interface, idx *Index) map[string]string {
 	resolved := make(map[string]string, iface.NumMethods())
 	for i := 0; i < iface.NumMethods(); i++ {
 		want := iface.Method(i)
-		if sel := methods.Lookup(nil, want.Name()); sel != nil {
+		if sel := methods.Lookup(want.Pkg(), want.Name()); sel != nil {
 			if fn, ok := sel.Obj().(*types.Func); ok {
 				id := symbolID(fn)
 				idx.IfaceMethods[id] = true
