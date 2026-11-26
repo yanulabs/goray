@@ -11,6 +11,7 @@ import (
 func (t *toolset) hotspots() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_hotspots",
+		Annotations: readOnlyAnnotations(),
 		Description: "Rank functions, files, or types by risk, complexity, LOC, or fan-in with module/generated/untracked filters and static test reachability.",
 		InputSchema: object(map[string]any{
 			"target":            propEnum("Ranking target: func, file, or type (default: func)", "func", "file", "type"),

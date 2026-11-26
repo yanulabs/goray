@@ -161,6 +161,7 @@ func addAPISurfaceHints(out map[string]any, pkg string, includeGenerated bool, p
 func (t *toolset) apiSurface() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_api_surface",
+		Annotations: readOnlyAnnotations(),
 		Description: "Paginated exported symbols of a package or module root, grouped by kind. Generated symbols are excluded by default and reported as generated_omitted.",
 		InputSchema: object(map[string]any{
 			"package":           propString("Relative package path (e.g. modules/payments) or full import path"),

@@ -370,13 +370,15 @@ all tables live in that one database and no shared summary file is created.
 
 ## MCP tools
 
+Every tool advertises MCP `annotations`: read-only queries set `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` so clients can auto-approve them. `upsert_summaries` and `reindex` are idempotent writers; `run_tests` and `run_lint` execute local commands.
+
 ### Architecture and dependencies
 
 | Tool | Purpose |
 | --- | --- |
 | `project_info` | Index state, module path, working and summary DB paths, symbol counts, load errors |
-| `get_codebase_map` | Compact module scorecard with generated symbol/LOC rollups, cross-module edge counts, cycles, large files, top hotspots, pagination metadata; `detail`, `summary_only`, `top_modules`, `sort_by`, `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
-| `get_module_overview` | Compact package rollups, dependency edges, large files, and top hotspots with `include_generated`; `detail=full` for the legacy projection (`md`/`json`) |
+| `get_codebase_map` | Compact module scorecard with generated and untracked rollups, cached module summaries, cross-module edge counts, cycles, large files, top hotspots, pagination metadata; `detail`, `summary_only`, `top_modules`, `sort_by`, `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
+| `get_module_overview` | Compact package rollups, dependency edges, large files, top hotspots, and the cached module summary with `include_generated`; `detail=full` for the legacy projection (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
 | `explain_dependency` | Exact imports, `file:line` symbol usages, blank/dot imports, enclosing callers, and counters behind a module/package edge |
 
@@ -386,13 +388,13 @@ all tables live in that one database and no shared summary file is created.
 | --- | --- |
 | `lookup_symbol` | Canonical ID/full Go path/repo-relative/fuzzy symbol lookup with cached or enclosing summary metadata |
 | `get_api_surface` | Paginated exported symbols with generated-symbol collapsing, kind filter, and cached summary metadata |
-| `get_references` | Type-checked references with enclosing caller and `file:line` |
+| `get_references` | Paginated type-checked references with enclosing caller and `file:line`; `offset`, `include_tests`, `module`, and `package` filters plus `next_offset` |
 | `get_call_graph` | BFS callers/callees with typed `direct` and in-module `interface_dispatch` edges |
 | `find_implementations` | `go/types.Implements` interface-to-type matrix, including test mocks |
 | `get_impact_analysis` | Kind-aware blast radius: implementations, test mocks, direct refs, composite literals, transitive callers, and test packages |
 | `get_dead_code` | Unreferenced functions/methods with closed-world, interface, generated, module, and grouped filters |
 | `get_hotspots` | Rank funcs/files/types by risk, complexity, LOC, or fan-in; static test reachability and module/generated/untracked filters |
-| `get_function_body` | Source body, LOC, and cyclomatic complexity |
+| `get_function_body` | Source body, LOC, and cyclomatic complexity for funcs, methods, and type declarations; batched `symbol_ids` (max 10) and optional doc comments |
 
 ### Summary cache
 
@@ -407,7 +409,7 @@ all tables live in that one database and no shared summary file is created.
 
 | Tool | Purpose |
 | --- | --- |
-| `run_tests` | Run `go test -race -count=1` |
+| `run_tests` | Run `go test -race -count=1` on string or array package patterns, forwarding server build tags |
 | `run_lint` | Run `golangci-lint run`, falling back to `go vet` |
 | `reindex` | Force a full index rebuild and working-state sync |
 

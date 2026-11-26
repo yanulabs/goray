@@ -13,6 +13,7 @@ import (
 func (t *toolset) lookupSymbol() mcp.Tool {
 	return mcp.Tool{
 		Name:        "lookup_symbol",
+		Annotations: readOnlyAnnotations(),
 		Description: "Find symbols by canonical ID, full Go identifier, repository-relative shorthand, exact name, or fuzzy substring. Returns IDs for downstream tools and inline cached summaries when available.",
 		InputSchema: object(map[string]any{
 			"symbol_id": propString("Symbol ID, full Go identifier, repository-relative shorthand, name, or substring"),

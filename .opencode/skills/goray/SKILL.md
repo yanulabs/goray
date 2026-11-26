@@ -49,7 +49,8 @@ Anti-patterns:
 
 ## Tool catalog
 
-Every registered MCP tool and its critical parameters:
+Every registered MCP tool and its critical parameters. All tools emit MCP `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint: false`); query tools set `readOnlyHint: true` so clients can auto-approve them, while `upsert_summaries`, `run_tests`, `run_lint`, and `reindex` are not read-only.
+
 
 | Tool | Parameters |
 |---|---|
@@ -60,13 +61,13 @@ Every registered MCP tool and its critical parameters:
 | `explain_dependency` | `from` (required module name or package path), `to` (required), `include_tests` (default `false`), `limit` (max usage sites). Returns exact `file:line` imports and symbol usages, blank/dot imports flagged, counters, and reverse-edge hint. |
 | `lookup_symbol` | `symbol_id` (required: canonical ID, full Go identifier, repository-relative shorthand, `Type.Field`, exact name, or substring), `kind` (`func`, `method`, `interface`, `struct`, `type`, `var`, `const`, `field`), `limit` (default `25`). Returns `id` and `canonical_id`; includes `summary` or an `enclosing_summary` when the symbol itself is not eligible. |
 | `get_api_surface` | `package` (required: relative package path or full import path), `include_generated` (default `false`), `limit` (default `100`; `0` = unlimited), `offset` (default `0`), `kind` (`interface`, `type`, `func`, `const`, `var`). Reports `generated_omitted`, `total_count`, `truncated`, and `next_offset`. |
-| `get_references` | `symbol_id` (required), `limit` (default `100`). Type-checked references with `from_func_id` and `file:line`; struct fields resolve as `Type.Field`. |
+| `get_references` | `symbol_id` (required), `limit` (default `100`), `offset` (default `0`), `include_tests` (default `true`), `module`, `package`. Type-checked references with `from_func_id` and `file:line`; struct fields resolve as `Type.Field`. Returns `total`, `offset`, `returned`, `truncated`, and `next_offset` when another page exists. |
 | `get_call_graph` | `symbol_id` (required), `direction` (`callers`, `callees`, `both` default), `depth` (default `2`), `limit` (default `80`), `include_interface_dispatch` (default `true`). Dispatch edges carry `edge_kind: "interface_dispatch"` and `via_interface`. |
 | `find_implementations` | `symbol_id` (required interface or concrete type). Compiler-exact `go/types.Implements`, including test mocks. |
 | `get_impact_analysis` | `symbol_id` or `package`, `depth` (default `3`). Kind-aware blast radius: `implementations`, `test_mocks`, `direct_references`, `transitive_callers`, `affected_packages`, `test_packages_to_run`, `composite_literals`, `unkeyed_literals`. |
 | `get_dead_code` | `package_prefix`, `include_exported` (default `false`), `include_generated` (default `false`), `module`, `exclude_modules`, `group_by` (`none` default, `module`, `package`), `limit` (default `100`). Test symbols are never reported. |
 | `get_hotspots` | `target` (`func` default, `file`, `type`), `sort_by` (`risk` default, `complexity`, `loc`, `fan_in`), `untested_only`, `module`, `exclude_modules`, `min_complexity`, `min_loc`, `tracked_only`, `include_generated`, `limit` (max `100`). |
-| `get_function_body` | `symbol_id` (required). Exact source with line numbers, LOC, cyclomatic complexity. |
+| `get_function_body` | `symbol_id` (single) or `symbol_ids` (batch array, max 10), `include_doc` (default `false`), `max_chars` (batch budget, default `40000`). Exact source with line numbers, LOC, and cyclomatic complexity for functions, methods, and type/struct/interface declarations. Batch output returns `bodies` and `truncated_ids`; single `symbol_id` output stays plain text. |
 | `list_stale_summaries` | `kind`, `module`, `package`, `limit`, plus stale filters. Excludes `synced`, `not_eligible`, and dead symbols by default. |
 | `get_summary_context` | `symbol_id` (single) or `symbol_ids` (required array, max 25), `max_chars` (default `40000`). PREPARES RAW CONTEXT FOR WRITING/UPDATING SUMMARIES, not for reading cached summaries. Returns contexts, hashes, schema, `not_eligible` parent package/module IDs, and `truncated_ids`. |
 | `upsert_summaries` | `items` (required array of `symbol_id`, `summary`, `expected_self_hash`, `expected_dep_hash`), `model_id`. Use hashes returned by `get_summary_context`. |

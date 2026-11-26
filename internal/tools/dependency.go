@@ -9,6 +9,7 @@ import (
 func (t *toolset) explainDependency() mcp.Tool {
 	return mcp.Tool{
 		Name:        "explain_dependency",
+		Annotations: readOnlyAnnotations(),
 		Description: "Exact files, imports, and referenced symbols behind a module or package dependency edge, including blank and dot imports.",
 		InputSchema: object(map[string]any{
 			"from":          propString("Source module name or package path"),

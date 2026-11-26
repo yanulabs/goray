@@ -51,6 +51,7 @@ func (t *toolset) enrich(ctx context.Context, sym *index.Symbol) (json.RawMessag
 func (t *toolset) listStaleSummaries() mcp.Tool {
 	return mcp.Tool{
 		Name:        "list_stale_summaries",
+		Annotations: readOnlyAnnotations(),
 		Description: "List eligible symbols that need summaries, ordered bottom-up and excluding synced/not-eligible symbols.",
 		InputSchema: object(map[string]any{
 			"kind":         propEnum("Optional symbol kind", "func", "method", "type", "file", "package", "module"),
@@ -97,6 +98,7 @@ func (t *toolset) listStaleSummaries() mcp.Tool {
 func (t *toolset) getSummaryContext() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_summary_context",
+		Annotations: readOnlyAnnotations(),
 		Description: "Prepares raw source context for WRITING or updating summaries (schema, hashes, staleness, dependencies; max 25, budgeted). Not a reader for cached summaries: use lookup_symbol or the parent package/module summary for reading.",
 		InputSchema: object(map[string]any{
 			"symbol_id":  propString("Canonical symbol ID (including mod:/pkg:/file: summary targets), full Go identifier, or repository-relative shorthand (single-symbol mode)"),
@@ -296,6 +298,7 @@ func summaryErrorPayload(query string, err error) string {
 func (t *toolset) upsertSummaries() mcp.Tool {
 	return mcp.Tool{
 		Name:        "upsert_summaries",
+		Annotations: mutatingAnnotations(),
 		Description: "Validate and store client-generated structured summaries with optimistic hash checks.",
 		Exclusive:   true,
 		InputSchema: object(map[string]any{
@@ -354,6 +357,7 @@ func (t *toolset) upsertSummaries() mcp.Tool {
 func (t *toolset) getSummaryCoverage() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_summary_coverage",
+		Annotations: readOnlyAnnotations(),
 		Description: "Summary coverage counts grouped by kind and module.",
 		InputSchema: object(map[string]any{
 			"module": propString("Optional module name"),

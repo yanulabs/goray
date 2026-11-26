@@ -66,8 +66,10 @@ func (b *builder) addTestFileSummaries(
 				pos := fset.Position(d.Pos())
 				end := fset.Position(d.End())
 				doc := ""
+				docStart := 0
 				if d.Doc != nil {
 					doc = d.Doc.Text()
+					docStart = fset.Position(d.Doc.Pos()).Line
 				}
 				directives := nodeDirectives(file, d, d.Doc)
 				body := ""
@@ -89,7 +91,7 @@ func (b *builder) addTestFileSummaries(
 					Exported:   ast.IsExported(d.Name.Name) && (recv == "" || ast.IsExported(recv)),
 					SigHash:    sigHash, SelfHash: selfHash,
 					IsTest: true, IsGenerated: fileRec.sym.IsGenerated,
-					Doc: doc, Signature: sig, Directives: directives,
+					Doc: doc, Signature: sig, Directives: directives, DocStartLine: docStart,
 				}
 				decls[canonical] = &summaryDecl{
 					sym: sym, recvType: recv, typeRefs: map[string]struct{}{},
@@ -105,11 +107,16 @@ func (b *builder) addTestFileSummaries(
 						continue
 					}
 					docs := make([]string, 0, 2)
+					docStart := 0
 					if d.Doc != nil {
 						docs = append(docs, d.Doc.Text())
+						docStart = fset.Position(d.Doc.Pos()).Line
 					}
 					if ts.Doc != nil {
 						docs = append(docs, ts.Doc.Text())
+						if line := fset.Position(ts.Doc.Pos()).Line; docStart == 0 || line < docStart {
+							docStart = line
+						}
 					}
 					doc := normalizeDoc(strings.Join(docs, "\n"))
 					directives := nodeDirectives(file, ts, d.Doc, ts.Doc)
@@ -125,7 +132,7 @@ func (b *builder) addTestFileSummaries(
 						Exported: ast.IsExported(ts.Name.Name),
 						SigHash:  sigHash, SelfHash: selfHash,
 						IsTest: true, IsGenerated: fileRec.sym.IsGenerated,
-						Doc: doc, Signature: sig, Directives: directives,
+						Doc: doc, Signature: sig, Directives: directives, DocStartLine: docStart,
 					}
 					decls[canonical] = &summaryDecl{
 						sym: sym, isType: true, typeRefs: map[string]struct{}{},

@@ -20,6 +20,7 @@ const maxCommandOutput = 64 * 1024
 func (t *toolset) runTests() mcp.Tool {
 	return mcp.Tool{
 		Name:        "run_tests",
+		Annotations: execAnnotations(),
 		Description: "Run 'go test -race -count=1' on one or more package patterns with bounded output. Forward the server's configured build tags.",
 		Exclusive:   true,
 		InputSchema: object(map[string]any{
@@ -39,6 +40,7 @@ func (t *toolset) runTests() mcp.Tool {
 func (t *toolset) runLint() mcp.Tool {
 	return mcp.Tool{
 		Name:        "run_lint",
+		Annotations: execAnnotations(),
 		Description: "Run 'golangci-lint run' (fallback: 'go vet') on one or more package patterns. Forward the server's configured build tags.",
 		Exclusive:   true,
 		InputSchema: object(map[string]any{
@@ -121,6 +123,7 @@ func commandPackages(args map[string]any) ([]string, error) {
 func (t *toolset) reindex() mcp.Tool {
 	return mcp.Tool{
 		Name:        "reindex",
+		Annotations: mutatingAnnotations(),
 		Description: "Rebuild the go/packages + go/types semantic index from disk.",
 		Exclusive:   true,
 		InputSchema: object(nil),
