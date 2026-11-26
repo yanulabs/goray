@@ -20,6 +20,10 @@ Commands:
   version                      Print version and exit
   help [command]               Show help for goray or a command
 
+Flags:
+  -h, --help                   Show this help
+  -V, --version                Print version and build information
+
 Environment:
   GORAY_DB            SQLite cache path (supports :memory:)
   GORAY_LOG_LEVEL     serve log level: off, error, or info (default: info)
@@ -207,14 +211,22 @@ Examples:
 
 func printVersionHelp(w io.Writer) {
 	_, _ = fmt.Fprint(w, `Usage:
-  goray version
+  goray version [--short|--json]
 
-Print the build version and exit. Top-level -v and --version are also accepted.
+Print the version, commit, build time, Go version, and platform. Use --short for
+the version alone or --json for machine-readable metadata. Top-level -v, -V,
+and --version are also accepted.
+
+Flags:
+  --short   Print only the version
+  --json    Print version metadata as one JSON object
+  -h, --help Show this help
 
 Examples:
   goray version
-  goray -v
-  goray --version
+  goray version --short
+  goray version --json
+  goray -V
 `)
 }
 

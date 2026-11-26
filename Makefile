@@ -29,7 +29,9 @@ export MCP_CWD
 ifndef VERSION
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 endif
-LDFLAGS ?= -s -w -X main.version=$(VERSION)
+COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS ?= -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(BUILD_DATE)
 
 CGO_ENABLED ?= 0
 GORELEASER ?= goreleaser
