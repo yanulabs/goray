@@ -2,57 +2,49 @@ package index
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
 
+// addTestFileSummaries indexes test files from syntax already parsed by the
+// package loader. Reading and re-parsing *_test.go from disk duplicated work
+// and ignored active build tags.
 func (b *builder) addTestFileSummaries(
 	p *packages.Package,
 	pkgRec *summaryPackage,
+	testFiles []testSyntaxFile,
 	data *SummaryData,
 	files map[string]*summaryFile,
 	decls map[string]*summaryDecl,
 	forced map[string]bool,
 ) {
 	pkg := b.idx.Packages[p.PkgPath]
-	if pkg == nil || pkg.Dir == "" {
+	if pkg == nil || len(testFiles) == 0 {
 		return
 	}
-	entries, err := os.ReadDir(pkg.Dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+	for _, testFile := range testFiles {
+		file, fset := testFile.file, testFile.fset
+		if file == nil || fset == nil {
 			continue
 		}
-		path := filepath.Join(pkg.Dir, entry.Name())
-		src, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
-		if err != nil {
-			continue
-		}
-		filePath := relFile(b.absRoot, path)
+		absPath := fset.Position(file.Pos()).Filename
+		filePath := relFile(b.absRoot, absPath)
 		fileID := "file:" + filePath
 		if files[fileID] != nil {
 			continue
 		}
-		loc := countLines(src)
+		facts, err := b.factsFor(absPath)
+		if err != nil {
+			continue
+		}
+		loc := facts.loc
 		dirs := directiveLines(file.Comments)
 		fileSym := &SummarySymbol{
 			ID: fileID, ParentID: pkgRec.sym.ID, Kind: "file",
 			ModuleName: pkgRec.sym.ModuleName, PkgPath: p.PkgPath,
 			FilePath: filePath, StartLine: 1, EndLine: loc, LOC: loc,
-			IsTest: true, IsGenerated: isGenerated(filepath.Base(path), src),
+			IsTest: true, IsGenerated: facts.generated,
 			SelfHash:   hashText(strings.Join(dirs, "\n")),
 			Directives: dirs,
 		}
@@ -74,8 +66,10 @@ func (b *builder) addTestFileSummaries(
 				pos := fset.Position(d.Pos())
 				end := fset.Position(d.End())
 				doc := ""
+				docStart := 0
 				if d.Doc != nil {
 					doc = d.Doc.Text()
+					docStart = fset.Position(d.Doc.Pos()).Line
 				}
 				directives := nodeDirectives(file, d, d.Doc)
 				body := ""
@@ -97,7 +91,7 @@ func (b *builder) addTestFileSummaries(
 					Exported:   ast.IsExported(d.Name.Name) && (recv == "" || ast.IsExported(recv)),
 					SigHash:    sigHash, SelfHash: selfHash,
 					IsTest: true, IsGenerated: fileRec.sym.IsGenerated,
-					Doc: doc, Signature: sig, Directives: directives,
+					Doc: doc, Signature: sig, Directives: directives, DocStartLine: docStart,
 				}
 				decls[canonical] = &summaryDecl{
 					sym: sym, recvType: recv, typeRefs: map[string]struct{}{},
@@ -113,11 +107,16 @@ func (b *builder) addTestFileSummaries(
 						continue
 					}
 					docs := make([]string, 0, 2)
+					docStart := 0
 					if d.Doc != nil {
 						docs = append(docs, d.Doc.Text())
+						docStart = fset.Position(d.Doc.Pos()).Line
 					}
 					if ts.Doc != nil {
 						docs = append(docs, ts.Doc.Text())
+						if line := fset.Position(ts.Doc.Pos()).Line; docStart == 0 || line < docStart {
+							docStart = line
+						}
 					}
 					doc := normalizeDoc(strings.Join(docs, "\n"))
 					directives := nodeDirectives(file, ts, d.Doc, ts.Doc)
@@ -133,7 +132,7 @@ func (b *builder) addTestFileSummaries(
 						Exported: ast.IsExported(ts.Name.Name),
 						SigHash:  sigHash, SelfHash: selfHash,
 						IsTest: true, IsGenerated: fileRec.sym.IsGenerated,
-						Doc: doc, Signature: sig, Directives: directives,
+						Doc: doc, Signature: sig, Directives: directives, DocStartLine: docStart,
 					}
 					decls[canonical] = &summaryDecl{
 						sym: sym, isType: true, typeRefs: map[string]struct{}{},

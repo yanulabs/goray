@@ -29,6 +29,7 @@ func TestServe(t *testing.T) {
 		Name:        "echo",
 		Description: "Echo text",
 		InputSchema: map[string]any{"type": "object"},
+		Annotations: &ToolAnnotations{ReadOnlyHint: true, DestructiveHint: false, IdempotentHint: true, OpenWorldHint: false},
 		Run: func(_ context.Context, args map[string]any) (string, bool) {
 			return "echo:" + args["text"].(string), false
 		},
@@ -57,6 +58,18 @@ func TestServe(t *testing.T) {
 	tools := list["tools"].([]any)
 	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "echo" {
 		t.Fatalf("tools = %v", tools)
+	}
+	annotations, ok := tools[0].(map[string]any)["annotations"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools[0] annotations missing: %v", tools[0])
+	}
+	for _, key := range []string{"readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"} {
+		if _, ok := annotations[key]; !ok {
+			t.Fatalf("annotations missing %s: %v", key, annotations)
+		}
+	}
+	if annotations["readOnlyHint"] != true || annotations["openWorldHint"] != false {
+		t.Fatalf("annotations = %v", annotations)
 	}
 
 	call := resultOf(t, responses["3"])

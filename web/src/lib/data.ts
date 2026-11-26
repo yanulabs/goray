@@ -63,12 +63,29 @@ export function readEmbeddedReport(): ReportSource | null {
   }
 }
 
-export async function fetchLiveReport(signal?: AbortSignal): Promise<Report> {
+export interface LiveReportResult {
+  report: Report;
+  etag: string | null;
+}
+
+export interface LiveReportOptions {
+  etag?: string | null;
+  signal?: AbortSignal;
+}
+
+export async function fetchLiveReport(options: LiveReportOptions = {}): Promise<LiveReportResult | null> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (options.etag) {
+    headers["If-None-Match"] = options.etag;
+  }
   const response = await fetch("/api/report", {
     cache: "no-store",
-    headers: { Accept: "application/json" },
-    signal,
+    headers,
+    signal: options.signal,
   });
+  if (response.status === 304) {
+    return null;
+  }
   if (!response.ok) {
     throw new Error(`report endpoint returned HTTP ${response.status}`);
   }
@@ -76,5 +93,5 @@ export async function fetchLiveReport(signal?: AbortSignal): Promise<Report> {
   if (!report) {
     throw new Error("report endpoint returned an invalid payload");
   }
-  return report;
+  return { report, etag: response.headers.get("ETag") };
 }

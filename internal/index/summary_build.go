@@ -2,6 +2,7 @@ package index
 
 import (
 	"go/ast"
+	"go/token"
 	"sort"
 	"strings"
 
@@ -28,11 +29,11 @@ func (s *summaryBuild) add(sym *SummarySymbol) {
 	s.data.ByID[sym.ID] = sym
 }
 
-func (b *builder) buildSummary(pkgs []*packages.Package) {
+func (b *builder) buildSummary(pkgs, testPkgs []*packages.Package) {
 	s := newSummaryBuild(b)
 	s.addModules()
 	s.addPackages()
-	s.collectPackages(pkgs)
+	s.collectPackages(pkgs, groupTestSyntax(testPkgs))
 	s.groupMethods()
 	s.classifyDeclarations()
 	s.computeHashes()
@@ -42,6 +43,36 @@ func (b *builder) buildSummary(pkgs []*packages.Package) {
 	s.buildEdges()
 	sort.Slice(s.data.Symbols, func(i, j int) bool { return s.data.Symbols[i].ID < s.data.Symbols[j].ID })
 	b.idx.Summary = s.data
+}
+
+// testSyntaxFile is one already-parsed *_test.go file from a test package
+// variant. Reusing these ASTs avoids a second disk read/parse and naturally
+// honors the build tags the loader applied.
+type testSyntaxFile struct {
+	file *ast.File
+	fset *token.FileSet
+}
+
+func groupTestSyntax(testPkgs []*packages.Package) map[string][]testSyntaxFile {
+	grouped := map[string][]testSyntaxFile{}
+	seen := map[string]bool{}
+	for _, p := range testPkgs {
+		if p == nil || p.ForTest == "" || p.Fset == nil {
+			continue
+		}
+		for _, file := range p.Syntax {
+			if file == nil {
+				continue
+			}
+			path := p.Fset.Position(file.Pos()).Filename
+			if !strings.HasSuffix(path, "_test.go") || seen[path] {
+				continue
+			}
+			seen[path] = true
+			grouped[p.ForTest] = append(grouped[p.ForTest], testSyntaxFile{file: file, fset: p.Fset})
+		}
+	}
+	return grouped
 }
 
 func (s *summaryBuild) addModules() {
@@ -73,18 +104,18 @@ func (s *summaryBuild) addPackages() {
 	}
 }
 
-func (s *summaryBuild) collectPackages(pkgs []*packages.Package) {
+func (s *summaryBuild) collectPackages(pkgs []*packages.Package, testFiles map[string][]testSyntaxFile) {
 	for existingID, sym := range s.b.idx.Symbols {
 		if canonical := sym.CanonicalID(); canonical != "" {
 			s.byExisting[existingID] = canonical
 		}
 	}
 	for _, p := range pkgs {
-		s.collectPackage(p)
+		s.collectPackage(p, testFiles[p.PkgPath])
 	}
 }
 
-func (s *summaryBuild) collectPackage(p *packages.Package) {
+func (s *summaryBuild) collectPackage(p *packages.Package, testFiles []testSyntaxFile) {
 	pkgRec := s.packagesByPath[p.PkgPath]
 	if pkgRec == nil || p.TypesInfo == nil || p.Fset == nil {
 		return
@@ -92,7 +123,7 @@ func (s *summaryBuild) collectPackage(p *packages.Package) {
 	for _, file := range p.Syntax {
 		s.collectFile(p, file, pkgRec)
 	}
-	s.b.addTestFileSummaries(p, pkgRec, s.data, s.files, s.decls, s.forced)
+	s.b.addTestFileSummaries(p, pkgRec, testFiles, s.data, s.files, s.decls, s.forced)
 }
 
 func (s *summaryBuild) collectFile(p *packages.Package, file *ast.File, pkgRec *summaryPackage) {

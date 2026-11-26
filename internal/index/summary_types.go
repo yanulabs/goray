@@ -43,6 +43,9 @@ type SummarySymbol struct {
 	Doc        string
 	Signature  string
 	Directives []string
+	// DocStartLine is the first line of the attached doc comment, or zero when
+	// the declaration has no doc. get_function_body uses it to include docs.
+	DocStartLine int
 }
 
 // SummaryEdge is one dependency edge in the summary graph.

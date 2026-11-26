@@ -1,6 +1,8 @@
 package index
 
 import (
+	"fmt"
+	"go/token"
 	"go/types"
 	"strings"
 	"testing"
@@ -143,6 +145,77 @@ type Defined Named
 		want := hashText(printed + "\n" + b.canonicalType(typ))
 		if got := b.canonicalSignatureHash(printed, typ); got != want {
 			t.Fatalf("streamed signature hash changed: got %s want %s", got, want)
+		}
+	}
+}
+
+const diamondModule = "example.com/diamond"
+
+// buildDiamondDAG creates an acyclic type graph where every layer references
+// every type in the previous layer. The expansion of the root therefore has
+// width^levels paths, which is exponential for the legacy recursive writer.
+func buildDiamondDAG(levels, width int) *types.Named {
+	pkg := types.NewPackage(diamondModule, "diamond")
+	layers := make([][]*types.Named, levels)
+	for level := 0; level < levels; level++ {
+		for i := 0; i < width; i++ {
+			name := fmt.Sprintf("L%dN%d", level, i)
+			obj := types.NewTypeName(token.NoPos, pkg, name, nil)
+			layers[level] = append(layers[level], types.NewNamed(obj, types.Typ[types.Int], nil))
+		}
+	}
+	for level := 1; level < levels; level++ {
+		for i := 0; i < width; i++ {
+			fields := make([]*types.Var, 0, width)
+			for j := 0; j < width; j++ {
+				fields = append(fields, types.NewField(token.NoPos, pkg,
+					fmt.Sprintf("F%d", j), types.NewPointer(layers[level-1][j]), false))
+			}
+			layers[level][i].SetUnderlying(types.NewStruct(fields, nil))
+		}
+	}
+	return layers[levels-1][0]
+}
+
+func TestCanonicalTypeDiamondDAGIsLinear(t *testing.T) {
+	const levels, width = 12, 2
+	root := buildDiamondDAG(levels, width)
+	b := &builder{modPath: diamondModule}
+	form := b.canonicalType(root)
+	reachable := levels*width - (width - 1)
+	if len(b.canonicalTypes) != reachable {
+		t.Fatalf("memoized types = %d, want %d", len(b.canonicalTypes), reachable)
+	}
+	if len(form) > 2048 {
+		t.Fatalf("root canonical form grew with the DAG: %d bytes", len(form))
+	}
+	if b.canonicalCycles != 0 {
+		t.Fatalf("acyclic diamond reported %d cycles", b.canonicalCycles)
+	}
+
+	again := (&builder{modPath: diamondModule}).canonicalType(root)
+	if again != form {
+		t.Fatalf("canonical form is not deterministic:\n%s\n%s", form, again)
+	}
+
+	leaf := root.Underlying().(*types.Struct).Field(0).Type().(*types.Pointer).Elem().(*types.Named)
+	leafObj := leaf.Obj()
+	leaf.SetUnderlying(types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, leafObj.Pkg(), "Changed", types.Typ[types.String], false),
+	}, nil))
+	changed := (&builder{modPath: diamondModule}).canonicalType(root)
+	if changed == form {
+		t.Fatal("nested definition change did not change the root canonical form")
+	}
+}
+
+func BenchmarkCanonicalTypeDiamondDAG12(b *testing.B) {
+	root := buildDiamondDAG(12, 2)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		builder := &builder{modPath: diamondModule}
+		if form := builder.canonicalType(root); form == "" {
+			b.Fatal("empty canonical form")
 		}
 	}
 }

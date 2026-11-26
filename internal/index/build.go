@@ -84,7 +84,7 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	b.applyDispatchEdges()
 	b.finish()
 	b.computeTestCoverage()
-	b.buildSummary(pkgs)
+	b.buildSummary(pkgs, testPkgs)
 	if hasTestFiles(b.idx.Packages) {
 		b.idx.TestLoadErrors = collectTestLoadErrors(testPkgs)
 	}

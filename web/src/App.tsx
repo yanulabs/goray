@@ -1,5 +1,5 @@
 import { AlertTriangle, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CommandPalette } from "./components/CommandPalette";
 import { ExplorerView } from "./components/ExplorerView";
@@ -72,6 +72,15 @@ function writeStoredToggle(key: string, value: boolean | null): void {
   }
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
 const EMPTY_COUNTS: ReportCounts = {
   modules: 0,
   packages: 0,
@@ -125,6 +134,10 @@ export default function App() {
     readStoredToggle(HIDE_TEST_ONLY_KEY),
   );
   const [unhiddenNodes, setUnhiddenNodes] = useState<Set<string>>(() => new Set());
+
+  const etagRef = useRef<string | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const pollInFlightRef = useRef(false);
 
   const report = source?.report ?? null;
   const index = useMemo(() => (report ? buildEntityIndex(report) : null), [report]);
@@ -326,16 +339,17 @@ export default function App() {
     }
     const controller = new AbortController();
     let cancelled = false;
-    fetchLiveReport(controller.signal)
-      .then((next) => {
-        if (cancelled) {
+    fetchLiveReport({ signal: controller.signal })
+      .then((result) => {
+        if (cancelled || result === null) {
           return;
         }
-        setSource({ report: next, live: true });
+        etagRef.current = result.etag;
+        setSource({ report: result.report, live: true });
         setLiveStatus("live");
       })
-      .catch(() => {
-        if (!cancelled) {
+      .catch((error) => {
+        if (!cancelled && !isAbortError(error)) {
           setLiveStatus("stale");
         }
       });
@@ -350,27 +364,45 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    const timer = window.setInterval(() => {
-      if (document.hidden) {
+    const poll = () => {
+      if (document.hidden || pollInFlightRef.current) {
         return;
       }
-      fetchLiveReport()
-        .then((next) => {
-          if (cancelled) {
+      const controller = new AbortController();
+      pollInFlightRef.current = true;
+      pollAbortRef.current = controller;
+      fetchLiveReport({ etag: etagRef.current, signal: controller.signal })
+        .then((result) => {
+          // 304 Not Modified: the report is unchanged, so skip every state
+          // update and avoid recomputing derived graph views.
+          if (cancelled || result === null) {
             return;
           }
-          setSource((previous) => (previous ? { ...previous, report: next } : { report: next, live: true }));
+          etagRef.current = result.etag;
+          setSource((previous) =>
+            previous ? { ...previous, report: result.report } : { report: result.report, live: true },
+          );
           setLiveStatus("live");
         })
-        .catch(() => {
-          if (!cancelled) {
+        .catch((error) => {
+          if (!cancelled && !isAbortError(error)) {
             setLiveStatus("stale");
           }
+        })
+        .finally(() => {
+          if (pollAbortRef.current === controller) {
+            pollAbortRef.current = null;
+            pollInFlightRef.current = false;
+          }
         });
-    }, 5000);
+    };
+    const timer = window.setInterval(poll, 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+      pollInFlightRef.current = false;
     };
   }, [source === null, source?.live]);
 

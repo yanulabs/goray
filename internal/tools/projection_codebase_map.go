@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -52,10 +53,14 @@ func compactEdges(idx *index.Index) []compactEdge {
 
 func compactCodebaseResponse(idx *index.Index, detail string, summaryOnly bool, sortBy string, shown []compactModule, totalModules, omittedModules int, state index.State) compactCodebase {
 	generatedFiles, generatedSymbols, generatedLOC := generatedTotals(idx)
+	untrackedFiles := 0
+	for _, pkg := range idx.Packages {
+		untrackedFiles += pkg.UntrackedFiles
+	}
 	return compactCodebase{
 		ModulePath: idx.ModulePath, Packages: len(idx.Packages), ModuleCount: len(idx.Modules),
 		Symbols: len(idx.Symbols), GeneratedFiles: generatedFiles, GeneratedSymbols: generatedSymbols,
-		GeneratedLOC: generatedLOC, Detail: detail, SummaryOnly: summaryOnly, SortBy: sortBy,
+		GeneratedLOC: generatedLOC, UntrackedFiles: untrackedFiles, Detail: detail, SummaryOnly: summaryOnly, SortBy: sortBy,
 		Modules: shown, TotalModules: totalModules, OmittedModules: omittedModules, OmittedCount: omittedModules,
 		TotalCount: totalModules, ReturnedCount: len(shown), IndexState: state,
 	}
@@ -85,7 +90,7 @@ func finalizeCompactCodebase(out *compactCodebase, summaryOnly bool, topModules,
 	out.Hint = codebaseHint(summaryOnly, topModules, omittedModules, len(out.LargeFiles), out.TotalLargeFiles, len(out.TopHotspots), out.TotalHotspots)
 }
 
-func (t *toolset) compactCodebaseMap(idx *index.Index, args map[string]any) (string, bool) {
+func (t *toolset) compactCodebaseMap(ctx context.Context, idx *index.Index, args map[string]any) (string, bool) {
 	detail := strArg(args, "detail", "compact")
 	if detail != "compact" && detail != "full" {
 		return "invalid detail: " + detail, true
@@ -102,6 +107,7 @@ func (t *toolset) compactCodebaseMap(idx *index.Index, args map[string]any) (str
 	totalModules := len(allModules)
 	shown, omittedModules := paginateCompactModules(allModules, topModules)
 	out := compactCodebaseResponse(idx, detail, summaryOnly, sortBy, shown, totalModules, omittedModules, t.src.Status().IndexState)
+	t.enrichCompactModules(ctx, out.Modules)
 	populateCompactCodebaseDetails(&out, idx)
 	finalizeCompactCodebase(&out, summaryOnly, topModules, omittedModules)
 
@@ -117,6 +123,24 @@ func (t *toolset) compactCodebaseMap(idx *index.Index, args map[string]any) (str
 			return "unsupported format: " + format, true
 		}
 		return full, false
+	}
+}
+
+// enrichCompactModules attaches cached module summaries to the modules that
+// are actually rendered. Pagination runs first so a compact response never
+// pays for summaries of modules it omits.
+func (t *toolset) enrichCompactModules(ctx context.Context, modules []compactModule) {
+	if t.summaries == nil {
+		return
+	}
+	for i := range modules {
+		cached, state, depsChanged, err := t.summaries.Enrich(ctx, "mod:"+modules[i].Name)
+		if err != nil || len(cached) == 0 {
+			continue
+		}
+		modules[i].Summary = cached
+		modules[i].SyncState = string(state)
+		modules[i].DepsChanged = depsChanged
 	}
 }
 
@@ -157,6 +181,7 @@ func compactCodebaseMarkdown(out compactCodebase) string {
 			label, mod.Packages, mod.Files, mod.GeneratedFiles, mod.GeneratedSymbols, mod.GeneratedLOC,
 			mod.UntrackedFiles, mod.ProdLOC, mod.FanIn, mod.FanOut)
 	}
+	writeCompactModuleSummaries(&b, out.Modules)
 	if out.SummaryOnly {
 		writePayloadFooter(&b, out.Truncated, out.TotalCount, out.Hint)
 		return b.String()
@@ -192,4 +217,18 @@ func compactCodebaseMarkdown(out compactCodebase) string {
 	}
 	writePayloadFooter(&b, out.Truncated, out.TotalCount, out.Hint)
 	return b.String()
+}
+
+func writeCompactModuleSummaries(b *strings.Builder, modules []compactModule) {
+	wroteHeader := false
+	for _, mod := range modules {
+		if len(mod.Summary) == 0 {
+			continue
+		}
+		if !wroteHeader {
+			b.WriteString("\n## Cached Module Summaries\n")
+			wroteHeader = true
+		}
+		fmt.Fprintf(b, "\n### `%s` (%s)\n\n```json\n%s\n```\n", mod.Name, mod.SyncState, mod.Summary)
+	}
 }

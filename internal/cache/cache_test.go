@@ -1162,3 +1162,105 @@ func TestDefaultPathNestedModule(t *testing.T) {
 		t.Fatalf("nested module cache name = %q", filepath.Base(subPath))
 	}
 }
+
+func TestLookupAllMatchesLookupAndUsesOneQuery(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{"a/a.go": `package a
+
+type T struct{ A int }
+
+func Caller() int {
+	var t T
+	if t.A == 1 { return 1 }
+	if t.A == 2 { return 2 }
+	if t.A == 3 { return 3 }
+	if t.A == 4 { return 4 }
+	if t.A == 5 { return 5 }
+	if t.A == 6 { return 6 }
+	if t.A == 7 { return 7 }
+	if t.A == 8 { return 8 }
+	if t.A == 9 { return 9 }
+	if t.A == 10 { return 10 }
+	if t.A == 11 { return 11 }
+	return 0
+}
+
+func Leaf() int {
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 1 } } } } } } } } } }
+	return 0
+}
+`}
+	c := openTestCache(t)
+	idx := buildSync(t, c, dir, files)
+	ctx := context.Background()
+	for _, id := range []string{"sym:" + testModule + "/a.Caller", "sym:" + testModule + "/a.Leaf"} {
+		if result := upsertSummary(t, c, idx, id, testFuncSummary("summary for "+id)); result.Status != "updated" {
+			t.Fatalf("%s: %+v", id, result)
+		}
+	}
+
+	// Change T's shape and Leaf's body: T and Leaf become hard-stale while
+	// Caller's unchanged self hash makes it soft-stale through its type ref.
+	buildSync(t, c, dir, map[string]string{"a/a.go": `package a
+
+type T struct{ A int; B int }
+
+func Caller() int {
+	var t T
+	if t.A == 1 { return 1 }
+	if t.A == 2 { return 2 }
+	if t.A == 3 { return 3 }
+	if t.A == 4 { return 4 }
+	if t.A == 5 { return 5 }
+	if t.A == 6 { return 6 }
+	if t.A == 7 { return 7 }
+	if t.A == 8 { return 8 }
+	if t.A == 9 { return 9 }
+	if t.A == 10 { return 10 }
+	if t.A == 11 { return 11 }
+	return 0
+}
+
+func Leaf() int {
+	if true { if true { if true { if true { if true { if true { if true { if true { if true { if true { return 2 } } } } } } } } } }
+	return 0
+}
+`})
+
+	before := c.QueryCount()
+	all, err := c.LookupAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta := c.QueryCount() - before; delta != 1 {
+		t.Fatalf("LookupAll queries = %d, want 1", delta)
+	}
+	states := map[SyncState]int{}
+	for _, sym := range idx.Summary.Symbols {
+		want, err := c.Lookup(ctx, sym.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := all[sym.ID]
+		if !ok {
+			t.Fatalf("%s missing from LookupAll", sym.ID)
+		}
+		if got.State != want.State || got.DepsChanged != want.DepsChanged || got.ModelID != want.ModelID || string(got.Summary) != string(want.Summary) {
+			t.Fatalf("%s: LookupAll = %+v, Lookup = %+v", sym.ID, got, want)
+		}
+		states[got.State]++
+	}
+	if states[StateSoftStale] == 0 || states[StateHardStale] == 0 || states[StateMissing] == 0 {
+		t.Fatalf("fixture states = %v", states)
+	}
+
+	before = c.QueryCount()
+	for _, sym := range idx.Summary.Symbols {
+		if _, err := c.Lookup(ctx, sym.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if delta := c.QueryCount() - before; delta <= uint64(len(idx.Summary.Symbols)) {
+		t.Fatalf("per-symbol queries = %d, want > %d", delta, len(idx.Summary.Symbols))
+	}
+}

@@ -42,6 +42,7 @@ func newDeadEntry(sym *index.Symbol) deadEntry {
 func (t *toolset) deadCode() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_dead_code",
+		Annotations: readOnlyAnnotations(),
 		Description: "Zero-reference functions/methods with closed-world and interface-satisfaction filtering. Supports generated/exported/module filters and grouped summaries.",
 		InputSchema: object(map[string]any{
 			"package_prefix":    propString("Optional relative package prefix"),

@@ -32,6 +32,9 @@ type builder struct {
 	facts           map[string]fileFacts
 	testFiles       map[string]map[string]struct{}
 	testFilesLoaded bool
+	canonicalTypes  map[types.Type]*canonicalTypeState
+	canonicalStack  []types.Type
+	canonicalCycles int
 }
 
 func newBuilder(idx *Index, absRoot string) *builder {

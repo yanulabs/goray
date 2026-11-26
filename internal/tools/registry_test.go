@@ -27,6 +27,20 @@ func TestRegistry(t *testing.T) {
 		t.Fatalf("tools = %d, want 21", len(list))
 	}
 
+	// 17 of the 21 registered tools are strictly read-only queries. reindex,
+	// upsert_summaries, run_tests, and run_lint mutate state or execute local
+	// commands. The issue prose says 18 read-only; the registry's actual split
+	// is 17/4 because reindex writes derived cache state.
+	readOnly := map[string]bool{
+		"project_info": true, "get_codebase_map": true, "get_module_overview": true,
+		"get_dependency_graph": true, "explain_dependency": true, "lookup_symbol": true,
+		"get_api_surface": true, "get_references": true, "get_call_graph": true,
+		"find_implementations": true, "get_impact_analysis": true, "get_dead_code": true,
+		"get_hotspots": true, "get_function_body": true, "list_stale_summaries": true,
+		"get_summary_context": true, "get_summary_coverage": true,
+	}
+	exec := map[string]bool{"run_tests": true, "run_lint": true}
+
 	seen := map[string]bool{}
 	for _, tool := range list {
 		if tool.Name == "" || tool.Description == "" || tool.Run == nil {
@@ -39,6 +53,25 @@ func TestRegistry(t *testing.T) {
 		if tool.InputSchema["type"] != "object" {
 			t.Fatalf("%s has invalid schema: %v", tool.Name, tool.InputSchema)
 		}
+		annotations := tool.Annotations
+		if annotations == nil {
+			t.Fatalf("%s has no annotations", tool.Name)
+		}
+		if annotations.OpenWorldHint {
+			t.Fatalf("%s opened the world", tool.Name)
+		}
+		if annotations.DestructiveHint {
+			t.Fatalf("%s unexpectedly claims destructive behavior", tool.Name)
+		}
+		if annotations.ReadOnlyHint != readOnly[tool.Name] {
+			t.Fatalf("%s readOnlyHint = %v", tool.Name, annotations.ReadOnlyHint)
+		}
+		if annotations.IdempotentHint == exec[tool.Name] {
+			t.Fatalf("%s idempotentHint = %v", tool.Name, annotations.IdempotentHint)
+		}
+	}
+	if len(readOnly)+len(exec)+2 != len(list) {
+		t.Fatalf("annotation coverage = %d read-only, %d exec", len(readOnly), len(exec))
 	}
 
 	text, failed := list[0].Run(context.Background(), nil)
@@ -75,6 +108,7 @@ func TestSkillDocCoversAllRegisteredTools(t *testing.T) {
 		"`test_only`", "`untested_only`", "`sort_by`",
 		"`symbol_id`", "`detail`", "`summary_only`", "`top_modules`",
 		"`include_generated`", "`offset`", "`generated_omitted`",
+		"`returned`", "`next_offset`", "`symbol_ids`", "`include_doc`",
 	} {
 		if !strings.Contains(doc, required) {
 			t.Errorf("SKILL.md is missing critical parameter %s", required)

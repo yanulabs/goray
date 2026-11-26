@@ -11,6 +11,7 @@ import (
 func (t *toolset) impactAnalysis() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_impact_analysis",
+		Annotations: readOnlyAnnotations(),
 		Description: "Blast-radius analysis for a symbol or package: impacted callers, files, modules, and test packages. Prefers symbol_id; set package for package-scoped impact.",
 		InputSchema: object(map[string]any{
 			"symbol_id": propString("Target symbol ID, full Go identifier, or repository-relative shorthand"),

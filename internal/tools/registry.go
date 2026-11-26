@@ -112,6 +112,7 @@ func (t *toolset) indexedCtx(run func(context.Context, *index.Index, map[string]
 func (t *toolset) projectInfo() mcp.Tool {
 	return mcp.Tool{
 		Name:        "project_info",
+		Annotations: readOnlyAnnotations(),
 		Description: "Index readiness, module path, package/symbol/xref counts, load errors, and available tools.",
 		InputSchema: object(nil),
 		Run: func(context.Context, map[string]any) (string, bool) {
@@ -145,8 +146,38 @@ func object(props map[string]any, required ...string) map[string]any {
 	return out
 }
 
+// readOnlyAnnotations marks a compiler-exact query that never mutates local
+// state or reaches the network.
+func readOnlyAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: false, IdempotentHint: true, OpenWorldHint: false}
+}
+
+// mutatingAnnotations marks a tool that writes derived state (summaries or the
+// index) but does not destroy user data.
+func mutatingAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: true, OpenWorldHint: false}
+}
+
+// execAnnotations marks a tool that runs local build/test commands. Re-running
+// it is not idempotent in the MCP sense because it observes and executes
+// repository state.
+func execAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: false, OpenWorldHint: false}
+}
+
 func propString(desc string) map[string]any {
 	return map[string]any{"type": "string", "description": desc}
+}
+
+// propStringOrArray documents a parameter that accepts either one string or a
+// JSON array of strings. MCP clients validate against this shape before the
+// handler normalizes both forms.
+func propStringOrArray(desc string) map[string]any {
+	return map[string]any{
+		"type":        []string{"string", "array"},
+		"items":       map[string]any{"type": "string"},
+		"description": desc,
+	}
 }
 
 func propInt(desc string) map[string]any {
