@@ -7,13 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
+### Added
+
+- `inspect_type` for compiler-exact struct fields, tags, embeddings, promoted members, method sets, constructors, type parameters, and implementations. Metadata is computed during indexing and works with `ReleaseArtifacts`.
+- `find_call_path` for deterministic shortest call chains across direct, interface-dispatch, and function-value edges, with reverse-path hints and bounded depth/path search.
+- `get_diagnostics` for structured list/parse/type diagnostics. Failed production builds keep serving the last healthy snapshot.
+- `get_architecture_diff` for architecture diffs over MCP. It reuses the live working-tree snapshot, indexes only the base ref, and returns JSON identical to `goray diff --format json`.
+- MCP `annotations` for every tool (read-only, destructive, idempotent, and open-world hints). The server exposes 25 tools.
+- `get_references` pagination and test/module/package filters; `get_function_body` accepts `symbol_ids` batches and `include_doc`.
+- Function-value call edges (`func_value`), package-level initializer call and composite-literal edges, and deterministic distinct IDs for multiple `init` functions.
+- `get_dead_code` `ignore_test_refs` option to report production functions referenced only by tests.
+- ETag/304 support for `/api/report`, with stable timestamps and abort-aware, deduplicated polling.
+
 ### Changed
 
-- Split oversized index-building, diff, report, and MCP tool files into responsibility-focused modules, and extracted complex handlers into smaller helpers with focused regression tests.
+- Workspace mode loads all `go.work` modules in one `go/packages` pass, preserving a single `go/types` universe. Watchers follow `go.work`, `go.work.sum`, and modules outside the workspace root.
+- Single-module and workspace indexes use distinct cache identities. Custom `GOWORK` filenames, Windows cache paths, and Windows port fallback are handled correctly.
+- Diff comparison and worktree handling moved to `internal/diff`, shared by the CLI and MCP.
+- Compact `get_codebase_map` and `get_module_overview` include cached module summaries and accurate untracked totals; `get_summary_coverage` accepts `mod:` IDs.
+- `run_tests` and `run_lint` accept multiple packages, reject flag-like patterns, and forward server build tags.
+- Canonical type hashing memoizes shared type DAGs, report assembly uses one bulk summary query, test summaries reuse parsed test ASTs, and unchanged live-report polls return `304`. Summary prompt version is now `v2`.
+- Split oversized index, diff, report, and MCP tool files into responsibility-focused modules.
 
 ### Fixed
 
-- `goray diff` now includes the new signature in modified breaking-API entries for both JSON and Markdown output.
+- `goray serve` no longer deadlocks when the watcher is active and the client sends `shutdown` or closes stdin.
+- MCP `notifications/cancelled` cancels the matching in-flight tool and suppresses its reply. Semaphore waits honor cancellation, marshal failures return `-32603`, and subprocess output is bounded during execution.
+- Field references resolve for generic instantiations, cross-module workspaces, and incremental rebuilds. Interface dispatch and impact follow promoted methods to their declaring types and exclude unrelated methods.
+- Failed incremental rebuilds retain pending changes, pathless `MarkDirty` forces a full rebuild, affected-package counts are exact, and test-only reverse importers are reloaded.
+- Module cycle enumeration reports all elementary cycles. Non-function impact walks transitive callers, not-found errors return nearest matches, file/type hotspots exclude tests, tracked views recompute metrics and edges, and test metrics honor build tags.
+- `breaking_api` ignores `internal/` and `cmd/`, includes exported fields, and compares full interface signatures. `untested_hotspots` only fails on regressions, new hotspots, or lost coverage. `goray diff` accepts a single path positional, symlinked roots, and releases build artifacts.
+- Fixed Windows `WSAEADDRINUSE` port fallback and RFC 8089 SQLite URIs, workspace/single-module database collisions, custom `GOWORK` handling, and Antigravity `MCP_CWD` config generation. `make db-info` invokes `db info`.
+- `get_summary_context` returns the structured cold-start payload, `get_summary_coverage` normalizes `mod:`, `get_api_surface` paginates before enrichment, and duplicate summary lookups are removed.
+- Modified breaking-API entries include both the previous and new signatures in JSON and Markdown output.
 
 ## [0.1.4] - 2026-11-24
 
@@ -94,7 +122,8 @@ Initial public release.
 - Large report graphs no longer crash ELK after post-compaction.
 - Nil method packages no longer panic interface-dispatch registration.
 
-[Unreleased]: https://github.com/yanulabs/goray/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/yanulabs/goray/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/yanulabs/goray/releases/tag/v0.2.0
 [0.1.4]: https://github.com/yanulabs/goray/releases/tag/v0.1.4
 [0.1.3]: https://github.com/yanulabs/goray/releases/tag/v0.1.3
 [0.1.2]: https://github.com/yanulabs/goray/releases/tag/v0.1.2
