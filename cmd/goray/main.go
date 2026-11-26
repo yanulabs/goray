@@ -6,21 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime/debug"
 	"strings"
 )
-
-var version = "dev"
-
-func buildVersion() string {
-	if version != "" && version != "dev" {
-		return version
-	}
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return version
-}
 
 func main() {
 	os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr, openBrowser))
@@ -50,18 +37,22 @@ func execute(args []string, stdout, stderr io.Writer, opener func(string) error)
 	case "-h", "--help", "-help":
 		printRootHelp(stdout)
 		return nil
-	case "-v", "--version":
-		printVersion(stdout)
+	case "-v", "-V", "--version":
+		if len(args) > 1 {
+			return usagef("%s takes no arguments", args[0])
+		}
+		printVersion(stdout, versionOptions{})
 		return nil
 	case "version":
 		if wantsHelp(args[1:], nil) {
 			printVersionHelp(stdout)
 			return nil
 		}
-		if len(args) > 1 {
-			return usagef("version takes no arguments")
+		opts, err := parseVersionArgs(args[1:])
+		if err != nil {
+			return err
 		}
-		printVersion(stdout)
+		printVersion(stdout, opts)
 		return nil
 	case "help":
 		return runHelp(args[1:], stdout)
@@ -101,10 +92,6 @@ func execute(args []string, stdout, stderr io.Writer, opener func(string) error)
 		}
 		return usagef("unknown command %q", args[0])
 	}
-}
-
-func printVersion(w io.Writer) {
-	_, _ = fmt.Fprintf(w, "goray %s\n", buildVersion())
 }
 
 func envOr(key, fallback string) string {

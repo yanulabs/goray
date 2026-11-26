@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `goray version` now prints commit, build time, Go version, and platform metadata. It supports `--short` and `--json`; top-level `-V` is accepted alongside `-v` and `--version`.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added
