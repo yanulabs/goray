@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
@@ -199,6 +200,42 @@ func TestConcurrentServeContextUsesDistinctPorts(t *testing.T) {
 	}
 	if first.url == "" || second.url == "" || first.url == second.url {
 		t.Fatalf("URLs = %q / %q", first.url, second.url)
+	}
+}
+
+// TestServeContextWatcherShutdown is a regression test for the permanent
+// shutdown deadlock: serveContext must cancel its context when Serve returns on
+// its own, before the deferred WaitForAuto runs. With the old defer order this
+// test times out because AutoRebuild only exits when ctx is canceled.
+func TestServeContextWatcherShutdown(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "mcp shutdown", input: `{"jsonrpc":"2.0","id":1,"method":"shutdown"}` + "\n"},
+		{name: "stdin eof", input: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _, _ := newTestModule(t)
+			var stdout, stderr bytes.Buffer
+			opts := serveOptions{
+				path: root, dbPath: ":memory:", logLevel: "off",
+				port: 0, noWatch: false,
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- serveContext(context.Background(), opts, strings.NewReader(tc.input), &stdout, &stderr, nil)
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("serveContext = %v\nstderr:\n%s", err, stderr.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("serveContext did not exit after %s; stderr:\n%s", tc.name, stderr.String())
+			}
+		})
 	}
 }
 
