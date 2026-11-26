@@ -18,7 +18,7 @@ func (t *toolset) functionBody() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_function_body",
 		Annotations: readOnlyAnnotations(),
-		Description: "Exact source, cyclomatic complexity, and LOC for functions, methods, and type/struct/interface declarations. Accepts canonical IDs, full Go identifiers, and repository-relative shorthands; use symbol_ids to fetch up to 10 bodies in one call and include_doc to keep leading doc comments.",
+		Description: "Exact source, cyclomatic complexity, and LOC for functions, methods, and type/struct/interface declarations. Accepts canonical IDs, full Go identifiers, and repository-relative shorthands; use symbol_ids to fetch up to 10 bodies in one call and include_doc to keep leading doc comments. Batch mode returns partial results and reports unresolved IDs in errors.",
 		InputSchema: object(map[string]any{
 			"symbol_id":   propString("Function, method, or type declaration ID (single-symbol mode)"),
 			"symbol_ids":  map[string]any{"type": "array", "maxItems": 10, "items": map[string]any{"type": "string"}, "description": "Batch symbol IDs (max 10, character-budgeted)"},
@@ -97,18 +97,64 @@ type functionBodyEntry struct {
 	Source      string          `json:"source"`
 }
 
+// functionBodyFailure reports one batch item that could not be returned while
+// the rest of the batch still succeeds.
+type functionBodyFailure struct {
+	SymbolID        string   `json:"symbol_id,omitempty"`
+	Error           string   `json:"error"`
+	Input           string   `json:"input,omitempty"`
+	Package         string   `json:"package,omitempty"`
+	Candidates      []string `json:"candidates,omitempty"`
+	ExpectedFormats []string `json:"expected_formats,omitempty"`
+	NearestMatches  []string `json:"nearest_matches,omitempty"`
+	Hint            string   `json:"hint,omitempty"`
+	Message         string   `json:"message,omitempty"`
+}
+
+func functionBodyFailureFor(id string, err error) functionBodyFailure {
+	failure := functionBodyFailure{SymbolID: id, Error: "source_error", Message: err.Error()}
+	var ambiguous *index.AmbiguousSymbolError
+	if errors.As(err, &ambiguous) {
+		failure.Error = "ambiguous_symbol"
+		failure.Input = ambiguous.Query
+		failure.Candidates = ambiguous.IDs
+		failure.Hint = "retry with one of the canonical candidate IDs"
+		return failure
+	}
+	var notFound *index.SymbolNotFoundError
+	if errors.As(err, &notFound) {
+		failure.Error = "symbol_not_found"
+		failure.Input = notFound.Query
+		failure.ExpectedFormats = index.SymbolIDFormats()
+		failure.NearestMatches = notFound.Suggestions
+		failure.Hint = "call lookup_symbol with the same input to discover valid IDs"
+		return failure
+	}
+	var packageTarget *index.PackageTargetError
+	if errors.As(err, &packageTarget) {
+		failure.Error = "package_target"
+		failure.Input = packageTarget.Query
+		failure.Package = packageTarget.Package
+		failure.Hint = "use get_api_surface, get_dependency_graph, or get_impact_analysis for package-scoped queries"
+	}
+	return failure
+}
+
 func (t *toolset) batchFunctionBodies(ctx context.Context, idx *index.Index, ids []string, includeDoc bool, maxChars int) (string, bool) {
 	bodies := make([]functionBodyEntry, 0, len(ids))
+	failures := make([]functionBodyFailure, 0)
 	truncated := make([]string, 0)
 	used := 0
 	for i, id := range ids {
 		sym, err := idx.SingleSymbol(id)
 		if err != nil {
-			return functionBodyError(id, err), true
+			failures = append(failures, functionBodyFailureFor(id, err))
+			continue
 		}
 		lines, start, end, err := t.functionBodyLines(idx, sym, includeDoc)
 		if err != nil {
-			return functionBodyError(id, err), true
+			failures = append(failures, functionBodyFailureFor(id, err))
+			continue
 		}
 		var source strings.Builder
 		for line := start; line < end; line++ {
@@ -136,15 +182,20 @@ func (t *toolset) batchFunctionBodies(ctx context.Context, idx *index.Index, ids
 		used += len(raw)
 	}
 	out := struct {
-		Bodies       []functionBodyEntry `json:"bodies"`
-		TruncatedIDs []string            `json:"truncated_ids"`
-		MaxChars     int                 `json:"max_chars"`
-		IndexState   index.State         `json:"index_state"`
+		Bodies       []functionBodyEntry   `json:"bodies"`
+		Errors       []functionBodyFailure `json:"errors,omitempty"`
+		TruncatedIDs []string              `json:"truncated_ids"`
+		MaxChars     int                   `json:"max_chars"`
+		IndexState   index.State           `json:"index_state"`
 	}{
-		Bodies: bodies, TruncatedIDs: truncated, MaxChars: maxChars,
+		Bodies: bodies, Errors: failures, TruncatedIDs: truncated, MaxChars: maxChars,
 		IndexState: t.src.Status().IndexState,
 	}
-	return render.JSON(out), false
+	text := render.JSON(out)
+	if len(bodies) == 0 && len(failures) > 0 {
+		return text, true
+	}
+	return text, false
 }
 
 func (t *toolset) functionBodyLines(idx *index.Index, sym *index.Symbol, includeDoc bool) ([]string, int, int, error) {

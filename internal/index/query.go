@@ -234,6 +234,15 @@ func (idx *Index) SingleSymbol(query string) (*Symbol, error) {
 	if sym, ok := idx.CanonicalSymbols[query]; ok {
 		return sym, nil
 	}
+	// Canonical IDs only exist for symbols whose summaries are eligible
+	// (funcs, methods, and types). For vars, consts, and fields the sym: form
+	// still matches the underlying symbol ID, which is what expected_formats
+	// promises.
+	if bare, ok := strings.CutPrefix(query, "sym:"); ok {
+		if sym, ok := idx.Symbols[bare]; ok {
+			return sym, nil
+		}
+	}
 
 	matches := idx.exactNameMatches(query, "")
 	if len(matches) == 0 {

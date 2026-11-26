@@ -78,7 +78,7 @@ func TestHotspotsTool(t *testing.T) {
 	}
 
 	_, items = hotspotItems(t, map[string]any{"include_generated": true})
-	if len(items) != 3 || items[0]["name"] != "G" {
+	if len(items) != 3 || items[0]["name"] != "A" || items[1]["name"] != "G" {
 		t.Fatalf("include_generated = %v", items)
 	}
 

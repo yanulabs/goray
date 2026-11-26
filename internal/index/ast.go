@@ -136,8 +136,9 @@ func qualifier(curPkg string) types.Qualifier {
 // and field signatures are type-checked separately; structs deliberately omit
 // their field count so adding or removing exported fields is reported once, by
 // the field symbols, rather than as a struct modification. Interface
-// descriptors include full method signatures and embedded type constraints so
-// breaking_api detects signature changes instead of only method-name changes.
+// descriptors include method names, full method signatures, and embedded type
+// constraints so breaking_api detects signature changes instead of only
+// method-name changes.
 func typeDesc(tn *types.TypeName) string {
 	q := qualifier(tn.Pkg().Path())
 	switch u := tn.Type().Underlying().(type) {
@@ -148,7 +149,9 @@ func typeDesc(tn *types.TypeName) string {
 			parts = append(parts, types.TypeString(u.EmbeddedType(i), q))
 		}
 		for i := 0; i < u.NumMethods(); i++ {
-			parts = append(parts, types.TypeString(u.Method(i).Type(), q))
+			method := u.Method(i)
+			sig := strings.TrimPrefix(types.TypeString(method.Type(), q), "func")
+			parts = append(parts, method.Name()+sig)
 		}
 		sort.Strings(parts)
 		return "interface { " + strings.Join(parts, "; ") + " }"

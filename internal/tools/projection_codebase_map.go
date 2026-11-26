@@ -212,7 +212,7 @@ func compactCodebaseMarkdown(out compactCodebase) string {
 		b.WriteString("\n## Top Hotspots (max 10)\n\n| Risk | Name | Module | File | LOC | Complexity | Fan-in |\n|---:|---|---|---|---:|---:|---:|\n")
 		for _, hotspot := range out.TopHotspots {
 			fmt.Fprintf(&b, "| %d | `%s` | `%s` | `%s` | %d | %d | %d |\n",
-				hotspot.RiskScore, hotspot.Name, hotspot.Module, hotspot.File, hotspot.LOC, hotspot.Complexity, hotspot.FanIn)
+				hotspot.RiskScore, hotspotDisplayName(hotspot), hotspot.Module, hotspot.File, hotspot.LOC, hotspot.Complexity, hotspot.FanIn)
 		}
 	}
 	writePayloadFooter(&b, out.Truncated, out.TotalCount, out.Hint)
