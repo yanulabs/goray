@@ -52,7 +52,7 @@ func BuildWithOptionsContext(ctx context.Context, rootDir string, opts BuildOpti
 // artifacts. Incremental rebuilds merge preloaded unaffected packages with
 // freshly loaded affected packages and reuse this exact path.
 func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, pkgs, testPkgs []*packages.Package, start time.Time) (*Index, error) {
-	if loadErr := packageLoadErrors(pkgs); loadErr != nil {
+	if loadErr := packageLoadErrors(absRoot, pkgs); loadErr != nil {
 		return nil, loadErr
 	}
 	modulePaths := findModulePaths(pkgs)
@@ -85,6 +85,7 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	b.finish()
 	b.computeTestCoverage()
 	b.buildSummary(pkgs, testPkgs)
+	b.idx.Diagnostics = collectTestDiagnostics(absRoot, testPkgs)
 	if hasTestFiles(b.idx.Packages) {
 		b.idx.TestLoadErrors = collectTestLoadErrors(testPkgs)
 	}

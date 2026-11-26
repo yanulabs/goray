@@ -42,7 +42,7 @@ Anti-patterns:
 3. Check `index_state`:
    - `ready`: use the snapshot.
    - `dirty` / `rebuilding`: retry; responses may use the last good snapshot.
-   - `error`: inspect `load_error_details`; production errors keep the last healthy snapshot. Test-only errors appear in `test_load_error_details`.
+   - `error`: call `get_diagnostics` for structured `package`/`file`/`line`/`col`/`kind`/`message` records, or inspect the legacy `load_error_details`; production errors keep the last healthy snapshot. Test-only errors appear in `test_load_error_details` and are flagged `is_test`.
    - `initializing`: wait, then retry.
 
 `project_info` also reports `last_build_mode` (`full` or `incremental`), `affected_packages`, `build_tags`, `workspace`, and `module_paths`.
@@ -72,6 +72,8 @@ Every registered MCP tool and its critical parameters. All tools emit MCP `annot
 | `get_summary_context` | `symbol_id` (single) or `symbol_ids` (required array, max 25), `max_chars` (default `40000`). PREPARES RAW CONTEXT FOR WRITING/UPDATING SUMMARIES, not for reading cached summaries. Returns contexts, hashes, schema, `not_eligible` parent package/module IDs, and `truncated_ids`. |
 | `upsert_summaries` | `items` (required array of `symbol_id`, `summary`, `expected_self_hash`, `expected_dep_hash`), `model_id`. Use hashes returned by `get_summary_context`. |
 | `get_summary_coverage` | `module` (optional; accepts `mod:<name>`). Coverage totals and grouped counts. |
+| `get_diagnostics` | `package` (optional package path, relative package path, or module name), `include_tests` (default `true`). Returns structured `diagnostics` (`package`, `file`, `line`, `col`, `kind` = `list`/`parse`/`type`, `message`, `is_test`), `counts_by_kind`, `index_state`, and `last_healthy_snapshot`. Production compile errors keep the last healthy index snapshot available; test-only errors are captured on successful builds. |
+| `get_architecture_diff` | `base_ref` (default `HEAD`), `fail_on` (string or array; `cycles`, `dead_code`, `breaking_api`, `untested_hotspots`). Reuses the live in-memory working-tree snapshot and indexes only the base ref in a temporary git worktree. Output matches `goray diff --format json`; a triggered gate is a successful query with `failed_gates` populated, not a tool error. |
 | `run_tests` | `packages` (default `./...`; string with whitespace-separated patterns or an array), `run` (optional `-run` regex). Runs `go test -race -count=1`, forwards server build tags, and rejects values starting with `-`. |
 | `run_lint` | `packages` (default `./...`; string or array). Runs `golangci-lint run`, falling back to `go vet`; forwards server build tags and rejects values starting with `-`. |
 | `reindex` | none. Explicit clean full rebuild. Use after branch switches; normal file edits use automatic incremental rebuilds. |
@@ -83,6 +85,7 @@ Every registered MCP tool and its critical parameters. All tools emit MCP `annot
 - Understand calls: `get_references`, `get_call_graph`, `get_function_body`.
 - Interfaces: `find_implementations`; call graphs include in-module interface dispatch by default.
 - Change risk: `get_impact_analysis` (blast radius and affected test packages).
+- Change audit: `get_diagnostics` (structured compile errors, test-only flagged), `get_architecture_diff` (new cycles, breaking API, dead code, and hotspot regressions against a git ref).
 - Complexity & test gaps: `get_hotspots`.
 - Unused code: `get_dead_code`.
 - API surface: `get_api_surface`.
@@ -170,7 +173,8 @@ Generated files and `_test.go` symbols are never summary-eligible.
 - Prefer automatic incremental reindexing. Call `reindex` after a branch switch or when an explicit synchronous full rebuild is required.
 - Verify with `run_tests` / `run_lint` instead of shell commands when available.
 - Build tags and workspaces: `goray serve|index|export|db|diff` accept `--tags` / `GORAY_BUILD_TAGS` and `--workspace` for the active `go.work`.
-- CI architecture gate: `goray diff [base-ref] [path] --fail-on cycles,dead_code,breaking_api,untested_hotspots`.
+- CI architecture gate: `goray diff [base-ref] [path] --fail-on cycles,dead_code,breaking_api,untested_hotspots`. `get_architecture_diff` runs the same comparison over MCP against the live snapshot, with identical JSON field names.
+- Self-audit before concluding a task: call `get_diagnostics` (production and test compile errors) and `get_architecture_diff` with the relevant `fail_on` gates; treat `failed_gates` as actionable regressions rather than a failed tool call.
 - Manage the split SQLite cache outside MCP (working-tree DBs live under `worktrees/`, content-addressed summaries are shared across `git worktree` checkouts under `summaries/`):
   ```sh
   goray index /path/to/project

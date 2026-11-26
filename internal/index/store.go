@@ -73,14 +73,15 @@ type Store struct {
 	log  *slog.Logger
 	opts BuildOptions
 
-	mu         sync.RWMutex
-	idx        *Index
-	err        error
-	loadErrors []string
-	indexing   bool
-	state      State
-	changeSeq  uint64
-	stateCh    chan struct{}
+	mu          sync.RWMutex
+	idx         *Index
+	err         error
+	loadErrors  []string
+	diagnostics []Diagnostic
+	indexing    bool
+	state       State
+	changeSeq   uint64
+	stateCh     chan struct{}
 
 	ready     chan struct{}
 	readyOnce sync.Once
@@ -311,6 +312,7 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	if err != nil {
 		s.err = err
 		s.loadErrors = loadErrorMessages(err)
+		s.diagnostics = diagnosticsFromError(err)
 		// A failed build must not lose files that were already dirty. Otherwise
 		// a transient error in one package permanently drops valid edits from
 		// other packages once the broken package is fixed.
@@ -323,6 +325,7 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 		s.idx = idx
 		s.err = nil
 		s.loadErrors = nil
+		s.diagnostics = nil
 		s.lastMode = mode
 		s.lastAffected = affected
 		if s.changeSeq != startSeq {
@@ -403,6 +406,22 @@ func loadErrorMessages(err error) []string {
 		return append([]string{}, loadErr.Errors...)
 	}
 	return []string{err.Error()}
+}
+
+// Diagnostics returns structured load errors without discarding the last
+// healthy snapshot. After a failed rebuild the production diagnostics describe
+// the current tree; after a successful build only test-only diagnostics remain
+// (they are captured on the Index).
+func (s *Store) Diagnostics() []Diagnostic {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.diagnostics) > 0 {
+		return append([]Diagnostic{}, s.diagnostics...)
+	}
+	if s.idx != nil {
+		return append([]Diagnostic{}, s.idx.Diagnostics...)
+	}
+	return nil
 }
 
 func (s *Store) setStateLocked(state State) {

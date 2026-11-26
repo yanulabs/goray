@@ -85,7 +85,7 @@ func BuildIncrementalContext(ctx context.Context, rootDir string, opts BuildOpti
 	if !ok {
 		return full()
 	}
-	if loadErr := packageLoadErrors(pkgs); loadErr != nil {
+	if loadErr := packageLoadErrors(absRoot, pkgs); loadErr != nil {
 		// Snapshot safety: surface the error and keep the previous healthy
 		// snapshot at the Store level.
 		return nil, true, len(pkgs), loadErr

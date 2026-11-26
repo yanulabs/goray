@@ -162,6 +162,10 @@ type Index struct {
 	BuildDuration  time.Duration
 	LoadErrors     []string
 	TestLoadErrors []string
+	// Diagnostics holds structured load errors captured on a successful build,
+	// which in practice are test-only errors. Production errors live on the
+	// Store alongside the last healthy snapshot.
+	Diagnostics []Diagnostic
 
 	Packages         map[string]*PkgInfo
 	RevImports       map[string][]string

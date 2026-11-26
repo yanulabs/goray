@@ -18,19 +18,19 @@ type fakeIndexer struct{}
 
 func (fakeIndexer) Wait(context.Context) (*index.Index, error) { return nil, errors.New("not ready") }
 func (fakeIndexer) Status() index.Status                       { return index.Status{RootDir: "."} }
+func (fakeIndexer) Diagnostics() []index.Diagnostic            { return nil }
 func (fakeIndexer) Root() string                               { return "." }
 func (fakeIndexer) RebuildContext(context.Context) error       { return nil }
 
 func TestRegistry(t *testing.T) {
 	list := New(fakeIndexer{}, render.NewRegistry(), nil)
-	if len(list) != 21 {
-		t.Fatalf("tools = %d, want 21", len(list))
+	if len(list) != 23 {
+		t.Fatalf("tools = %d, want 23", len(list))
 	}
 
-	// 17 of the 21 registered tools are strictly read-only queries. reindex,
+	// 19 of the 23 registered tools are strictly read-only queries. reindex,
 	// upsert_summaries, run_tests, and run_lint mutate state or execute local
-	// commands. The issue prose says 18 read-only; the registry's actual split
-	// is 17/4 because reindex writes derived cache state.
+	// commands.
 	readOnly := map[string]bool{
 		"project_info": true, "get_codebase_map": true, "get_module_overview": true,
 		"get_dependency_graph": true, "explain_dependency": true, "lookup_symbol": true,
@@ -38,6 +38,7 @@ func TestRegistry(t *testing.T) {
 		"find_implementations": true, "get_impact_analysis": true, "get_dead_code": true,
 		"get_hotspots": true, "get_function_body": true, "list_stale_summaries": true,
 		"get_summary_context": true, "get_summary_coverage": true,
+		"get_diagnostics": true, "get_architecture_diff": true,
 	}
 	exec := map[string]bool{"run_tests": true, "run_lint": true}
 

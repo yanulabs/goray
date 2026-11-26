@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yanulabs/goray/internal/diff"
 )
 
 // apiDiffRepo creates a repository with externally importable API packages and
@@ -51,13 +53,13 @@ func ExportedCommand(x int) int { return x }
 	return root
 }
 
-func findAPIChange(items []diffAPIChange, id string) (diffAPIChange, bool) {
+func findAPIChange(items []diff.APIChange, id string) (diff.APIChange, bool) {
 	for _, item := range items {
 		if item.ID == id {
 			return item, true
 		}
 	}
-	return diffAPIChange{}, false
+	return diff.APIChange{}, false
 }
 
 func TestDiffBreakingAPITracksFieldsAndInterfaceSignatures(t *testing.T) {
@@ -94,7 +96,7 @@ func ExportedCommand(x int64) int64 { return x }
 	if err := runDiff([]string{"HEAD", root, "--format", "json"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runDiff: %v\nstderr=%s", err, stderr.String())
 	}
-	var report diffReport
+	var report diff.Report
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
 	}
@@ -164,7 +166,7 @@ func ExportedCommand(x int64) int64 { return x }
 	if err := runDiff([]string{"HEAD", root, "--format", "json"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runDiff: %v\nstderr=%s", err, stderr.String())
 	}
-	var report diffReport
+	var report diff.Report
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
 	}
@@ -225,7 +227,7 @@ func TestDiffHotspotGateOnlyFailsOnRegressionsOrLostCoverage(t *testing.T) {
 	if err := runDiff([]string{"HEAD", root, "--format", "json"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runDiff: %v\nstderr=%s", err, stderr.String())
 	}
-	var report diffReport
+	var report diff.Report
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
 	}
@@ -252,7 +254,7 @@ func TestDiffHotspotGatePassesImprovements(t *testing.T) {
 	if err := runDiff([]string{"HEAD", root, "--format", "json"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runDiff: %v\nstderr=%s", err, stderr.String())
 	}
-	var report diffReport
+	var report diff.Report
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
 	}

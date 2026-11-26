@@ -112,6 +112,8 @@ func TestEveryRegisteredToolRuns(t *testing.T) {
 			"expected_dep_hash":  "",
 		}}}},
 		{"get_summary_coverage", nil},
+		{"get_diagnostics", nil},
+		{"get_architecture_diff", nil},
 		{"run_tests", map[string]any{"packages": "./..."}},
 		{"run_lint", map[string]any{"packages": "./..."}},
 		{"reindex", nil},
