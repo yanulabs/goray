@@ -232,6 +232,9 @@ func TestTolerantSymbolResolution(t *testing.T) {
 		"modules/payments.Service.Charge",
 		"Service.Charge",
 		"sym:example.com/sample/modules/payments.Service.Charge",
+		"(*Service).Charge",
+		"modules/payments.(*Service).Charge",
+		"example.com/sample/modules/payments.(*Service).Charge",
 	} {
 		got, err := idx.SingleSymbol(query)
 		if err != nil || got.ID != charge.ID {

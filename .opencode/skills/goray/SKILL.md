@@ -1,6 +1,6 @@
 ---
 name: goray
-description: Deterministic Go semantic code intelligence via go/packages and go/types. Use for all Go codebase navigation, architecture overview, symbol lookup, references, callers, interface implementations, call graphs, change impact, untested complexity hotspots, dead code, test/lint execution, and structured summary caching. Strictly takes precedence over semantic/vector search (cocoindex-code / ccc) and grep for any known Go symbol or Go structure when the goray MCP server is connected.
+description: Deterministic Go semantic code intelligence via go/packages and go/types. Use for all Go codebase navigation, architecture overview, symbol lookup, references, callers, interface implementations, call graphs, shortest call paths, change impact, untested complexity hotspots, dead code, test/lint execution, and structured summary caching. Strictly takes precedence over semantic/vector search (cocoindex-code / ccc) and grep for any known Go symbol or Go structure when the goray MCP server is connected.
 ---
 
 # goray
@@ -63,6 +63,7 @@ Every registered MCP tool and its critical parameters. All tools emit MCP `annot
 | `get_api_surface` | `package` (required: relative package path or full import path), `include_generated` (default `false`), `limit` (default `100`; `0` = unlimited), `offset` (default `0`), `kind` (`interface`, `type`, `func`, `const`, `var`). Reports `generated_omitted`, `total_count`, `truncated`, and `next_offset`. |
 | `get_references` | `symbol_id` (required), `limit` (default `100`), `offset` (default `0`), `include_tests` (default `true`), `module`, `package`. Type-checked references with `from_func_id` and `file:line`; struct fields resolve as `Type.Field`. Returns `total`, `offset`, `returned`, `truncated`, and `next_offset` when another page exists. |
 | `get_call_graph` | `symbol_id` (required), `direction` (`callers`, `callees`, `both` default), `depth` (default `2`), `limit` (default `80`), `include_interface_dispatch` (default `true`). Dispatch edges carry `edge_kind: "interface_dispatch"` and `via_interface`; callbacks and function values carry `edge_kind: "func_value"`. |
+| `find_call_path` | `from` (required source function/method), `to` (required target function/method), `max_depth` (default `8`, max `20`), `max_paths` (default `3`, max `10`), `include_interface_dispatch` (default `true`). Returns deterministic shortest `paths` with per-hop `from`/`to`, `edge_kind` (`direct`, `interface_dispatch`, `func_value`), `via_interface`, and `file:line` nodes; unreachable pairs return `found: false` plus `reverse_path_exists`/`reverse_path_hint`. A self-target is `found: true` with one zero-hop path. |
 | `find_implementations` | `symbol_id` (required interface or concrete type). Compiler-exact `go/types.Implements`, including test mocks. |
 | `get_impact_analysis` | `symbol_id` or `package`, `depth` (default `3`). Kind-aware blast radius: `implementations`, `test_mocks`, `direct_references`, `transitive_callers`, `affected_packages`, `test_packages_to_run`, `composite_literals`, `unkeyed_literals`. |
 | `get_dead_code` | `package_prefix`, `include_exported` (default `false`), `include_generated` (default `false`), `ignore_test_refs` (default `false`; set `true` to report production functions referenced only by `*_test.go`), `module`, `exclude_modules`, `group_by` (`none` default, `module`, `package`), `limit` (default `100`). Test symbols are never reported. |
@@ -80,7 +81,8 @@ Every registered MCP tool and its critical parameters. All tools emit MCP `annot
 
 - Architecture: `get_codebase_map`, `get_module_overview`, `get_dependency_graph`, `explain_dependency`.
 - Find code: `lookup_symbol` (returns `id` and `canonical_id`).
-- Understand calls: `get_references`, `get_call_graph`, `get_function_body`.
+- Understand calls: `get_references`, `get_call_graph`, `find_call_path`, `get_function_body`.
+- Trace an entrypoint to a deep operation: `find_call_path` (`from` -> `to`, bounded by `max_depth`) instead of expanding `get_call_graph` layer by layer.
 - Interfaces: `find_implementations`; call graphs include in-module interface dispatch by default.
 - Change risk: `get_impact_analysis` (blast radius and affected test packages).
 - Complexity & test gaps: `get_hotspots`.

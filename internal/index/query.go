@@ -113,13 +113,11 @@ func symbolMatchesShorthand(sym *Symbol, query string) bool {
 			return true
 		}
 	}
-	if leaf := symbolLeaf(sym); leaf != "" {
-		if query == leaf {
-			return true
-		}
-		if sym.RecvType != "" && query == sym.RecvType+"."+sym.Name {
-			return true
-		}
+	if leaf := symbolLeaf(sym); leaf != "" && query == leaf {
+		return true
+	}
+	if sym.RecvType != "" && methodShorthandMatches(sym, query) {
+		return true
 	}
 	if strings.HasSuffix(sym.ID, query) && len(sym.ID) > len(query) {
 		switch sym.ID[len(sym.ID)-len(query)-1] {
@@ -135,6 +133,26 @@ func symbolLeaf(sym *Symbol) string {
 		return sym.RecvType + "." + sym.Name
 	}
 	return sym.Name
+}
+
+// methodShorthandMatches accepts method identifiers with an optional pointer
+// receiver marker and an optional package prefix. This covers the common forms
+// `Type.Method`, `(*Type).Method`, `dir.Type.Method`, and
+// `dir.(*Type).Method` without requiring the canonical `sym:` prefix.
+func methodShorthandMatches(sym *Symbol, query string) bool {
+	for _, receiver := range []string{sym.RecvType, "(*" + sym.RecvType + ")"} {
+		leaf := receiver + "." + sym.Name
+		if query == leaf {
+			return true
+		}
+		if sym.PkgRel != "" && query == sym.PkgRel+"."+leaf {
+			return true
+		}
+		if sym.PkgPath != "" && query == sym.PkgPath+"."+leaf {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalMatchesWithoutPointer(sym *Symbol, query string) bool {
