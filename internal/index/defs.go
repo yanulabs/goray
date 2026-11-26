@@ -213,8 +213,9 @@ func (b *builder) indexFields(p *packages.Package, pi *PkgInfo, tn *types.TypeNa
 			continue
 		}
 		pos := p.Fset.Position(field.Pos())
-		if _, owned := b.fieldVarOwner[field]; !owned {
-			b.fieldVarOwner[field] = typeID
+		origin := field.Origin()
+		if _, owned := b.fieldVarOwner[origin]; !owned {
+			b.fieldVarOwner[origin] = typeID
 		}
 		b.addSymbol(&Symbol{
 			ID:         typeID + "." + field.Name(),

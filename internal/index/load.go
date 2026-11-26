@@ -41,24 +41,40 @@ func loadPackages(ctx context.Context, absRoot string, opts BuildOptions) ([]*pa
 		if err != nil {
 			return nil, nil, err
 		}
-		patterns = dirs
+		patterns = workspacePatterns(absRoot, dirs)
 	}
 
+	// One loader call from the workspace root keeps a single go/types universe
+	// across modules. Loading each module in its own call produces disjoint
+	// type objects from export data and breaks field ownership, interface
+	// satisfaction, and method-set lookups that cross module boundaries.
 	loaded := newPackageSet()
-	for _, pattern := range patterns {
-		cfg := *config
-		if opts.Workspace {
-			cfg.Dir = pattern
-			pattern = "./..."
-		}
-		pkgs, err := packages.Load(&cfg, pattern)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load packages: %w", err)
-		}
-		loaded.add(pkgs)
+	pkgs, err := packages.Load(config, patterns...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load packages: %w", err)
 	}
+	loaded.add(pkgs)
 	production, tests := loaded.sorted()
 	return production, tests, nil
+}
+
+// workspacePatterns converts absolute module directories into single-load
+// patterns relative to the workspace root, including modules outside it.
+func workspacePatterns(root string, dirs []string) []string {
+	patterns := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil {
+			patterns = append(patterns, filepath.ToSlash(dir)+"/...")
+			continue
+		}
+		if rel == "." {
+			patterns = append(patterns, "./...")
+			continue
+		}
+		patterns = append(patterns, "./"+filepath.ToSlash(rel)+"/...")
+	}
+	return patterns
 }
 
 type packageSet struct {

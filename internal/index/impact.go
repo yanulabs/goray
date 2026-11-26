@@ -139,18 +139,36 @@ func (idx *Index) collectInterfaceImpact(sym *Symbol, acc *impactAccumulator) (i
 			implementations = append(implementations, entry)
 		}
 		acc.addSymbol(impl)
-		// Calls through the interface reach concrete methods.
-		for _, method := range idx.Symbols {
-			if method.PkgPath != impl.PkgPath || method.RecvType != impl.Name || method.Kind != "method" {
-				continue
-			}
-			roots = append(roots, method.ID)
-			for _, caller := range idx.Callers[method.ID] {
+		// Calls through the interface reach exactly the concrete methods that
+		// satisfy it. Promoted methods resolve to their declaring embedded type,
+		// and unrelated methods on the implementing type stay out of the blast
+		// radius.
+		methodIDs := sortedKeys(match.MethodIDs)
+		if len(methodIDs) == 0 {
+			methodIDs = idx.methodsOfType(impl)
+		}
+		for _, methodID := range methodIDs {
+			roots = append(roots, methodID)
+			for _, caller := range idx.Callers[methodID] {
 				acc.addCaller(caller, idx)
 			}
 		}
 	}
 	return implementations, mocks, roots
+}
+
+// methodsOfType is the pre-method-map fallback used by manually constructed
+// indexes. Generated indexes always carry ImplMatch.MethodIDs.
+func (idx *Index) methodsOfType(impl *Symbol) []string {
+	ids := make([]string, 0)
+	for _, method := range idx.Symbols {
+		if method.PkgPath != impl.PkgPath || method.RecvType != impl.Name || method.Kind != "method" {
+			continue
+		}
+		ids = append(ids, method.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (idx *Index) collectCompositeImpact(sym *Symbol, acc *impactAccumulator) (literals, unkeyed []CompositeSite) {

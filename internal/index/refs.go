@@ -94,13 +94,14 @@ func (b *builder) collectFieldOwners(p *packages.Package, file *ast.File) {
 		switch x := node.(type) {
 		case *ast.SelectorExpr:
 			if sel := p.TypesInfo.Selections[x]; sel != nil {
-				if field, ok := sel.Obj().(*types.Var); ok {
-					if owner := b.fieldVarOwner[field]; owner != "" {
+				if field, ok := sel.Obj().(*types.Var); ok && field.IsField() {
+					if owner := b.fieldOwnerFor(sel.Recv(), field); owner != "" {
 						b.fieldOwners[x.Sel] = owner
 					}
 				}
 			}
 		case *ast.CompositeLit:
+			litType := p.TypesInfo.TypeOf(x)
 			for _, elt := range x.Elts {
 				kv, ok := elt.(*ast.KeyValueExpr)
 				if !ok {
@@ -110,8 +111,8 @@ func (b *builder) collectFieldOwners(p *packages.Package, file *ast.File) {
 				if !ok {
 					continue
 				}
-				if field, ok := p.TypesInfo.Uses[key].(*types.Var); ok {
-					if owner := b.fieldVarOwner[field]; owner != "" {
+				if field, ok := p.TypesInfo.Uses[key].(*types.Var); ok && field.IsField() {
+					if owner := b.fieldOwnerFor(litType, field); owner != "" {
 						b.fieldOwners[key] = owner
 					}
 				}
@@ -119,6 +120,64 @@ func (b *builder) collectFieldOwners(p *packages.Package, file *ast.File) {
 		}
 		return true
 	})
+}
+
+// fieldOwnerFor resolves the declaring struct ID for a field object. Pointer
+// identity works within one type-checking universe, but generic instantiations
+// and packages loaded in separate passes (workspaces and incremental merges)
+// expose distinct *types.Var objects for the same field. Origin normalization
+// covers generics; the structural lookup covers export-data boundaries.
+func (b *builder) fieldOwnerFor(recv types.Type, field *types.Var) string {
+	if field == nil {
+		return ""
+	}
+	if owner := b.fieldVarOwner[field.Origin()]; owner != "" {
+		return owner
+	}
+	if recv == nil {
+		return ""
+	}
+	return declaringFieldTypeID(recv, field.Name(), field.Pkg())
+}
+
+// declaringFieldTypeID walks the embedded-field index path returned by
+// types.LookupFieldOrMethod to find the struct type that declares name.
+func declaringFieldTypeID(recv types.Type, name string, pkg *types.Package) string {
+	obj, index, _ := types.LookupFieldOrMethod(recv, true, pkg, name)
+	if obj == nil || len(index) == 0 {
+		return ""
+	}
+	cur := recv
+	if ptr, ok := cur.(*types.Pointer); ok {
+		cur = ptr.Elem()
+	}
+	for _, i := range index[:len(index)-1] {
+		st := structUnderlying(cur)
+		if st == nil || i < 0 || i >= st.NumFields() {
+			return ""
+		}
+		cur = st.Field(i).Type()
+		if ptr, ok := cur.(*types.Pointer); ok {
+			cur = ptr.Elem()
+		}
+	}
+	return namedTypeID(cur)
+}
+
+func structUnderlying(t types.Type) *types.Struct {
+	switch typ := t.(type) {
+	case *types.Named:
+		if st, ok := typ.Underlying().(*types.Struct); ok {
+			return st
+		}
+	case *types.Alias:
+		if st, ok := typ.Underlying().(*types.Struct); ok {
+			return st
+		}
+	case *types.Struct:
+		return typ
+	}
+	return nil
 }
 
 func namedTypeID(t types.Type) string {
@@ -282,7 +341,12 @@ type dispatchCall struct {
 func (b *builder) applyDispatchEdges() {
 	for _, call := range b.pendingDispatch {
 		for _, match := range b.idx.IfaceImpls[call.iface] {
-			methodID := match.TypeID + "." + call.method
+			methodID := match.MethodIDs[call.method]
+			if methodID == "" {
+				// Compatibility for indexes built before exact method maps
+				// existed: fall back to the concrete receiver's method ID.
+				methodID = match.TypeID + "." + call.method
+			}
 			if b.idx.Symbols[methodID] == nil {
 				continue
 			}
