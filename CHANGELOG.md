@@ -7,9 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
 ### Added
 
 - `goray version` now prints commit, build time, Go version, and platform metadata. It supports `--short` and `--json`; top-level `-V` is accepted alongside `-v` and `--version`.
+- Function and method hotspots expose `recv_type`, and compact module overview and codebase map tables qualify method names with their receiver (for example, `Cache.Sync`), so results can be passed directly to symbol tools.
+
+### Changed
+
+- `get_function_body` batch mode returns partial results: unresolved IDs are reported in an `errors` slice with resolver context while all resolved bodies are still returned. The tool only fails when nothing resolves.
+- `risk_score` scales fan-in logarithmically instead of linearly, so trivial high-fan-in wrappers no longer crowd out genuinely complex functions in `get_hotspots` and module overviews.
+- Interface descriptors include method names alongside their signatures (`reconcileAttempts() int` instead of `func() int`), making similar signatures distinguishable in `inspect_type` and breaking-API checks.
+
+### Fixed
+
+- Unexported interface methods now resolve to their concrete implementations by passing the declaring package to `MethodSet.Lookup`. This removes dead-code false positives and restores interface-dispatch call edges for those methods.
+- Symbol tools accept the advertised `sym:` prefix for package-level vars, consts, and struct fields through `SingleSymbol`; those IDs previously failed despite being listed in `expected_formats`.
+
+### Documentation
+
+- Corrected the `goray` skill anti-patterns to use the real `symbol_id` parameter name.
 
 ## [0.2.0] - 2026-11-26
 
@@ -126,7 +144,8 @@ Initial public release.
 - Large report graphs no longer crash ELK after post-compaction.
 - Nil method packages no longer panic interface-dispatch registration.
 
-[Unreleased]: https://github.com/yanulabs/goray/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/yanulabs/goray/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/yanulabs/goray/releases/tag/v0.3.0
 [0.2.0]: https://github.com/yanulabs/goray/releases/tag/v0.2.0
 [0.1.4]: https://github.com/yanulabs/goray/releases/tag/v0.1.4
 [0.1.3]: https://github.com/yanulabs/goray/releases/tag/v0.1.3
