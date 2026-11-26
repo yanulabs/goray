@@ -178,6 +178,10 @@ type Index struct {
 	Modules          map[string]*ModSummary
 	LargeFiles       []FileMetric
 	Summary          *SummaryData
+	// TypeDetails is compact declaration metadata for structs, interfaces,
+	// named types, and aliases. It is computed from go/types during the build
+	// so inspect_type works after ReleaseArtifacts drops package artifacts.
+	TypeDetails map[string]TypeDetail
 
 	// TestCovered holds production functions reachable from any *_test.go
 	// function through the indexed call graph. It is computed at build time.
