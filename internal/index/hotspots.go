@@ -1,6 +1,9 @@
 package index
 
-import "sort"
+import (
+	"math/bits"
+	"sort"
+)
 
 // HotspotOptions controls hotspot ranking and filtering.
 type HotspotOptions struct {
@@ -48,6 +51,7 @@ type Hotspot struct {
 	ID              string `json:"id"`
 	CanonicalID     string `json:"canonical_id,omitempty"`
 	Name            string `json:"name"`
+	RecvType        string `json:"recv_type,omitempty"`
 	Kind            string `json:"kind"`
 	File            string `json:"file"`
 	Line            int    `json:"line"`
@@ -85,6 +89,15 @@ func (idx *Index) Hotspots(opts HotspotOptions) ([]Hotspot, int) {
 	return items, total
 }
 
+// riskScore weights complexity linearly and fan-in logarithmically so trivial
+// high-fan-in wrappers do not crowd out genuinely complex functions.
+func riskScore(complexity, fanIn int) int {
+	if complexity < 1 {
+		complexity = 1
+	}
+	return complexity * (1 + bits.Len(uint(fanIn)))
+}
+
 func (idx *Index) funcHotspots(opts HotspotOptions) []Hotspot {
 	items := make([]Hotspot, 0)
 	for _, sym := range idx.Symbols {
@@ -100,10 +113,10 @@ func (idx *Index) funcHotspots(opts HotspotOptions) []Hotspot {
 		}
 		fanIn := len(idx.Callers[sym.ID])
 		items = append(items, Hotspot{
-			ID: sym.ID, CanonicalID: sym.CanonicalID(), Name: sym.Name, Kind: sym.Kind,
+			ID: sym.ID, CanonicalID: sym.CanonicalID(), Name: sym.Name, RecvType: sym.RecvType, Kind: sym.Kind,
 			File: sym.File, Line: sym.Line, Module: sym.ModuleArea,
 			LOC: sym.LOC, Complexity: sym.Cyclomatic, FanIn: fanIn,
-			RiskScore: sym.Cyclomatic*2 + fanIn, TestCovered: &covered,
+			RiskScore: riskScore(sym.Cyclomatic, fanIn), TestCovered: &covered,
 			Generated: sym.Generated, Untracked: sym.Untracked,
 		})
 	}

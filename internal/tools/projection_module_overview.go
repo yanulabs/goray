@@ -33,6 +33,16 @@ func compactPackageRollups(idx *index.Index, module string) []compactPackage {
 	return out
 }
 
+// hotspotDisplayName qualifies method hotspots with their receiver type so
+// markdown callers can pass the result straight to get_function_body or
+// get_call_graph without guessing the receiver.
+func hotspotDisplayName(hotspot index.Hotspot) string {
+	if hotspot.RecvType == "" {
+		return hotspot.Name
+	}
+	return hotspot.RecvType + "." + hotspot.Name
+}
+
 func compactModuleEdges(mod *index.ModSummary) dependencyEdges {
 	out := make([]moduleEdgeCount, 0, len(mod.OutModules))
 	for _, name := range sortedModuleKeys(mod.OutModules) {
@@ -159,7 +169,7 @@ func compactModuleMarkdown(out compactModuleOverview) string {
 		b.WriteString("\n## Top Hotspots\n\n| Risk | Name | File | LOC | Complexity | Fan-in |\n|---:|---|---|---:|---:|---:|\n")
 		for _, hotspot := range out.TopHotspots {
 			fmt.Fprintf(&b, "| %d | `%s` | `%s` | %d | %d | %d |\n",
-				hotspot.RiskScore, hotspot.Name, hotspot.File, hotspot.LOC, hotspot.Complexity, hotspot.FanIn)
+				hotspot.RiskScore, hotspotDisplayName(hotspot), hotspot.File, hotspot.LOC, hotspot.Complexity, hotspot.FanIn)
 		}
 	}
 	if len(out.Summary) > 0 {
