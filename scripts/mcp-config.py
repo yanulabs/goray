@@ -116,8 +116,10 @@ def json_entry(fmt: str, command: str, args: list[str], cwd: str = "") -> dict:
         return {"type": "stdio", "command": command, "args": args}
     if fmt == "antigravity":
         # Antigravity spawns stdio servers with cwd "/" and does not send MCP
-        # roots. Its supported workaround is an explicit workspace argument.
-        if args == ["serve"]:
+        # roots. Prefer an explicit cwd; only fall back to the positional
+        # ${workspaceFolder} argument when no cwd was requested, because a
+        # literal ${workspaceFolder} would override cwd.
+        if not cwd and args == ["serve"]:
             args = ["serve", "${workspaceFolder}"]
         entry = {"command": command, "args": args, "disabled": False}
         if cwd:

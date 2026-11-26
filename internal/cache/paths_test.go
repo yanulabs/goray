@@ -165,6 +165,86 @@ func TestResolvePathsWorkspace(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAndModuleCachePathsAreDistinct(t *testing.T) {
+	isolateCacheHome(t)
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	writeCacheModule(t, root, map[string]string{})
+	child := filepath.Join(root, "child")
+	writeNamedModule(t, child, "example.com/cachetest/child")
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("go 1.23\n\nuse (\n\t.\n\t./child\n)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	singleWork, singleSummary, err := ResolvePathsWithOptions(root, "", PathOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceWork, workspaceSummary, err := ResolvePathsWithOptions(root, "", PathOptions{Workspace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if singleWork == workspaceWork {
+		t.Fatalf("single-module and workspace indexes share working DB %q", singleWork)
+	}
+	if singleSummary == workspaceSummary {
+		t.Fatalf("single-module and workspace indexes share summary DB %q", singleSummary)
+	}
+	if identity, err := projectIdentity(root, false); err != nil || identity != "example.com/cachetest" {
+		t.Fatalf("module identity = %q (%v)", identity, err)
+	}
+	if identity, err := projectIdentity(root, true); err != nil || identity != "workspace:example.com/cachetest,example.com/cachetest/child" {
+		t.Fatalf("workspace identity = %q (%v)", identity, err)
+	}
+}
+
+func TestCustomGOWORKFile(t *testing.T) {
+	isolateCacheHome(t)
+	t.Setenv("GOWORK", "")
+	base := t.TempDir()
+	alpha := filepath.Join(base, "alpha")
+	beta := filepath.Join(base, "beta")
+	writeNamedModule(t, alpha, "example.com/alpha")
+	writeNamedModule(t, beta, "example.com/beta")
+
+	workDir := filepath.Join(base, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	custom := filepath.Join(workDir, "custom.work")
+	body := "go 1.23\n\nuse (\n\t" + filepath.ToSlash(alpha) + "\n\t" + filepath.ToSlash(beta) + "\n)\n"
+	if err := os.WriteFile(custom, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOWORK", custom)
+
+	identity, err := projectIdentity(workDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity != "workspace:example.com/alpha,example.com/beta" {
+		t.Fatalf("identity = %q", identity)
+	}
+	work, summary, err := ResolvePathsWithOptions(workDir, "", PathOptions{Workspace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work == "" || summary == "" {
+		t.Fatalf("workspace paths = %q, %q", work, summary)
+	}
+}
+
+func writeNamedModule(t *testing.T, dir, module string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "module " + module + "\n\ngo 1.23\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReadModulePath(t *testing.T) {
 	cases := map[string]string{
 		"module example.com/plain\n":               "example.com/plain",

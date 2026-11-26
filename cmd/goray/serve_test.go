@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -87,6 +88,27 @@ func TestListenConfiguredFallbackStrictAndErrors(t *testing.T) {
 	if _, err := listenConfigured(listenConfig{port: 0, portRange: 10, host: "invalid host name"}); err == nil ||
 		isAddrInUse(err) {
 		t.Fatalf("invalid host error = %v", err)
+	}
+}
+
+func TestIsAddrInUseRecognizesWindowsWinsock(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "posix eaddrinuse", err: syscall.EADDRINUSE, want: true},
+		{name: "winsock wsaeaddrinuse", err: syscall.Errno(10048), want: true},
+		{name: "wrapped winsock", err: fmt.Errorf("listen: %w", syscall.Errno(10048)), want: true},
+		{name: "other winsock error", err: syscall.Errno(10049), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAddrInUse(tc.err); got != tc.want {
+				t.Fatalf("isAddrInUse(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

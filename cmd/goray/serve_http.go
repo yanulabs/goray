@@ -25,6 +25,11 @@ const (
 	defaultServePort = 4321
 	defaultPortRange = 100
 	defaultServeHost = "127.0.0.1"
+
+	// Winsock reports WSAEADDRINUSE (10048) instead of the synthetic POSIX
+	// EADDRINUSE value used by syscall on Windows. syscall.Errno values are
+	// comparable on every platform, so checking both is harmless elsewhere.
+	wsaEAddrInUse syscall.Errno = 10048
 )
 
 type listenConfig struct {
@@ -93,7 +98,7 @@ func listenConfigured(cfg listenConfig) (listenResult, error) {
 }
 
 func isAddrInUse(err error) bool {
-	return errors.Is(err, syscall.EADDRINUSE)
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, wsaEAddrInUse)
 }
 
 func listenerPort(ln net.Listener) int {

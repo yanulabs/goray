@@ -108,7 +108,9 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: level}))
 	formats := render.NewRegistry()
 
-	dbPath, summaryDBPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, tags)
+	dbPath, summaryDBPath, err := cache.ResolvePathsWithOptions(root, opts.dbPath, cache.PathOptions{
+		Tags: tags, Workspace: opts.workspace,
+	})
 	if err != nil {
 		return err
 	}
