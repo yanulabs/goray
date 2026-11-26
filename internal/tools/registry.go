@@ -54,6 +54,7 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 		t.apiSurface(),
 		t.references(),
 		t.callGraph(),
+		t.findCallPath(),
 		t.implementations(),
 		t.impactAnalysis(),
 		t.deadCode(),

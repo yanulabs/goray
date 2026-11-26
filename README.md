@@ -392,6 +392,7 @@ Every tool advertises MCP `annotations`: read-only queries set `readOnlyHint: tr
 | `get_api_surface` | Paginated exported symbols with generated-symbol collapsing, kind filter, and cached summary metadata |
 | `get_references` | Paginated type-checked references with enclosing caller and `file:line`; `offset`, `include_tests`, `module`, and `package` filters plus `next_offset` |
 | `get_call_graph` | BFS callers/callees with typed `direct` and in-module `interface_dispatch` edges |
+| `find_call_path` | Deterministic shortest call chains between two functions/methods with per-hop `file:line`, `edge_kind` (`direct`/`interface_dispatch`/`func_value`), and reverse-path hints |
 | `find_implementations` | `go/types.Implements` interface-to-type matrix, including test mocks |
 | `get_impact_analysis` | Kind-aware blast radius: implementations, test mocks, direct refs, composite literals, transitive callers, and test packages |
 | `get_dead_code` | Unreferenced functions/methods with closed-world, interface, generated, module, and grouped filters |
