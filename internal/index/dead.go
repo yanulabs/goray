@@ -23,13 +23,16 @@ func (opts DeadCodeOptions) excludes(module string) bool {
 	return false
 }
 
-// isClosedWorld reports packages whose exported symbols are still internal to
+// IsClosedWorld reports packages whose exported symbols are still internal to
 // the module. internal/ and cmd/ cannot be imported externally, so exported
-// functions there are audited even when include_exported is false.
-func isClosedWorld(pkgRel string) bool {
+// definitions there are audited by dead-code checks and ignored by breaking-API
+// gates.
+func IsClosedWorld(pkgRel string) bool {
 	return pkgRel == "internal" || strings.HasPrefix(pkgRel, "internal/") ||
 		pkgRel == "cmd" || strings.HasPrefix(pkgRel, "cmd/")
 }
+
+func isClosedWorld(pkgRel string) bool { return IsClosedWorld(pkgRel) }
 
 // DeadCode returns functions and methods with no recorded references, after
 // suppressing interface-satisfaction and runtime-hook false positives.

@@ -87,14 +87,22 @@ func compareHotspots(base, head *index.Index) diffHotspots {
 			out.New = append(out.New, after)
 			continue
 		}
-		if after.AfterCC != before.AfterCC || after.AfterLOC != before.AfterLOC {
-			delta := after
-			delta.BeforeCC = before.AfterCC
-			delta.BeforeLOC = before.AfterLOC
-			delta.DeltaCC = after.AfterCC - before.AfterCC
-			delta.DeltaLOC = after.AfterLOC - before.AfterLOC
-			out.TopDelta = append(out.TopDelta, delta)
+		deltaCC := after.AfterCC - before.AfterCC
+		deltaLOC := after.AfterLOC - before.AfterLOC
+		// Improvements (lower CC/LOC with tests still present) must pass the
+		// gate. Regressions and newly lost test coverage must not.
+		regressed := deltaCC > 0 || deltaLOC > 0
+		coverageLost := before.TestCovered && !head.TestCovered[id]
+		if !regressed && !coverageLost {
+			continue
 		}
+		delta := after
+		delta.BeforeCC = before.AfterCC
+		delta.BeforeLOC = before.AfterLOC
+		delta.DeltaCC = deltaCC
+		delta.DeltaLOC = deltaLOC
+		delta.CoverageLost = coverageLost
+		out.TopDelta = append(out.TopDelta, delta)
 	}
 	sort.Slice(out.New, func(i, j int) bool {
 		if out.New[i].AfterCC != out.New[j].AfterCC {
@@ -103,6 +111,9 @@ func compareHotspots(base, head *index.Index) diffHotspots {
 		return out.New[i].ID < out.New[j].ID
 	})
 	sort.Slice(out.TopDelta, func(i, j int) bool {
+		if out.TopDelta[i].CoverageLost != out.TopDelta[j].CoverageLost {
+			return out.TopDelta[i].CoverageLost
+		}
 		left := out.TopDelta[i].DeltaCC*1000 + out.TopDelta[i].DeltaLOC
 		right := out.TopDelta[j].DeltaCC*1000 + out.TopDelta[j].DeltaLOC
 		if left != right {
@@ -147,20 +158,32 @@ func cycleSet(idx *index.Index) map[string]bool {
 func exportedAPI(idx *index.Index) map[string]diffAPIChange {
 	out := map[string]diffAPIChange{}
 	for id, sym := range idx.Symbols {
-		if sym.IsTest || !sym.Exported {
+		if sym.IsTest || !sym.Exported || index.IsClosedWorld(sym.PkgRel) {
 			continue
 		}
 		switch sym.Kind {
-		case "func", "method", "type", "interface", "struct", "var", "const":
+		case "func", "method", "type", "interface", "struct", "var", "const", "field":
 		default:
 			continue
+		}
+		if sym.Kind == "field" {
+			// An exported field of an unexported type is not externally
+			// reachable, so it is not part of the breaking API.
+			owner, ok := idx.Symbols[sym.PkgPath+"."+sym.RecvType]
+			if !ok || !owner.Exported {
+				continue
+			}
 		}
 		canonical := sym.CanonicalID()
 		if canonical == "" {
 			canonical = id
 		}
+		name := sym.Name
+		if sym.Kind == "field" && sym.RecvType != "" {
+			name = sym.RecvType + "." + sym.Name
+		}
 		out[canonical] = diffAPIChange{
-			ID: canonical, Name: sym.Name, Kind: sym.Kind, File: sym.File, Line: sym.Line,
+			ID: canonical, Name: name, Kind: sym.Kind, File: sym.File, Line: sym.Line,
 			Before: sym.Signature,
 		}
 	}
