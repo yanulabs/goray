@@ -2,57 +2,49 @@ package index
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
 
+// addTestFileSummaries indexes test files from syntax already parsed by the
+// package loader. Reading and re-parsing *_test.go from disk duplicated work
+// and ignored active build tags.
 func (b *builder) addTestFileSummaries(
 	p *packages.Package,
 	pkgRec *summaryPackage,
+	testFiles []testSyntaxFile,
 	data *SummaryData,
 	files map[string]*summaryFile,
 	decls map[string]*summaryDecl,
 	forced map[string]bool,
 ) {
 	pkg := b.idx.Packages[p.PkgPath]
-	if pkg == nil || pkg.Dir == "" {
+	if pkg == nil || len(testFiles) == 0 {
 		return
 	}
-	entries, err := os.ReadDir(pkg.Dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+	for _, testFile := range testFiles {
+		file, fset := testFile.file, testFile.fset
+		if file == nil || fset == nil {
 			continue
 		}
-		path := filepath.Join(pkg.Dir, entry.Name())
-		src, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
-		if err != nil {
-			continue
-		}
-		filePath := relFile(b.absRoot, path)
+		absPath := fset.Position(file.Pos()).Filename
+		filePath := relFile(b.absRoot, absPath)
 		fileID := "file:" + filePath
 		if files[fileID] != nil {
 			continue
 		}
-		loc := countLines(src)
+		facts, err := b.factsFor(absPath)
+		if err != nil {
+			continue
+		}
+		loc := facts.loc
 		dirs := directiveLines(file.Comments)
 		fileSym := &SummarySymbol{
 			ID: fileID, ParentID: pkgRec.sym.ID, Kind: "file",
 			ModuleName: pkgRec.sym.ModuleName, PkgPath: p.PkgPath,
 			FilePath: filePath, StartLine: 1, EndLine: loc, LOC: loc,
-			IsTest: true, IsGenerated: isGenerated(filepath.Base(path), src),
+			IsTest: true, IsGenerated: facts.generated,
 			SelfHash:   hashText(strings.Join(dirs, "\n")),
 			Directives: dirs,
 		}

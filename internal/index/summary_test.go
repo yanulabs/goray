@@ -489,3 +489,24 @@ func TestEligibilityPolicyFilesPackagesModules(t *testing.T) {
 		t.Fatal("test-only module should not be eligible")
 	}
 }
+
+func TestSummaryTestFilesReuseLoadedSyntaxAndHonorBuildTags(t *testing.T) {
+	idx, _ := buildTestModule(t, map[string]string{
+		"a/a.go":             "package a\n\nfunc Value() int { return 1 }\n",
+		"a/active_test.go":   "package a\n\nimport \"testing\"\n\nfunc TestActive(t *testing.T) { _ = Value() }\n",
+		"a/tagged_test.go":   "//go:build integration\n\npackage a\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {}\n",
+		"a/external_test.go": "package a_test\n\nimport \"testing\"\n\nfunc TestExternal(t *testing.T) {}\n",
+	})
+	if sym := idx.Summary.Get("sym:example.com/sig/a.TestActive"); sym == nil {
+		t.Fatal("active test function summary missing")
+	}
+	if sym := idx.Summary.Get("sym:example.com/sig/a.TestTagged"); sym != nil {
+		t.Fatalf("tagged-out test function was summarized: %+v", sym)
+	}
+	if sym := idx.Summary.Get("file:a/tagged_test.go"); sym != nil {
+		t.Fatalf("tagged-out test file was summarized: %+v", sym)
+	}
+	if sym := idx.Summary.Get("sym:example.com/sig/a.TestExternal"); sym == nil {
+		t.Fatal("external test function summary missing")
+	}
+}

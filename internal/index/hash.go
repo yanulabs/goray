@@ -107,6 +107,16 @@ func (w canonicalHashWriter) Write(p []byte) (int, error) {
 	return w.h.Write(p)
 }
 
+// canonicalTypeState is the per-build memo for one in-module named or alias
+// type. Acyclic definitions are represented by a digest so shared sub-DAGs are
+// expanded exactly once. Cyclic definitions fall back to structural expansion
+// with cycle markers, which keeps recursive types finite and deterministic.
+type canonicalTypeState struct {
+	digest    string
+	computing bool
+	cyclic    bool
+}
+
 func writeCanonicalString(w io.Writer, text string) {
 	_, _ = io.WriteString(w, text)
 }
@@ -133,7 +143,16 @@ func (b *builder) writeCanonicalType(sb io.Writer, t types.Type, active map[type
 		writeCanonicalString(sb, "<nil>")
 		return
 	}
+	switch typ := t.(type) {
+	case *types.Named:
+		b.writeNamedTypeRef(sb, typ, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
+		return
+	case *types.Alias:
+		b.writeNamedTypeRef(sb, typ, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
+		return
+	}
 	if depth, ok := active[t]; ok {
+		b.canonicalCycles++
 		_, _ = fmt.Fprintf(sb, "cycle(%d)", depth)
 		return
 	}
@@ -144,10 +163,6 @@ func (b *builder) writeCanonicalType(sb io.Writer, t types.Type, active map[type
 	switch typ := t.(type) {
 	case *types.Basic:
 		writeCanonicalString(sb, typ.Name())
-	case *types.Named:
-		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
-	case *types.Alias:
-		b.writeNamedType(sb, typ.Obj(), typ.TypeArgs(), typ.Underlying(), active)
 	case *types.Pointer:
 		writeCanonicalString(sb, "*")
 		b.writeCanonicalType(sb, typ.Elem(), active)
@@ -188,15 +203,111 @@ func (b *builder) writeCanonicalComposite(sb io.Writer, t types.Type, active map
 	}
 }
 
-func (b *builder) writeNamedType(sb io.Writer, obj *types.TypeName, args *types.TypeList, underlying types.Type, active map[types.Type]int) {
-	writeCanonicalString(sb, typeObjectName(obj))
-	b.writeTypeArgs(sb, args, active)
+func (b *builder) writeNamedTypeRef(sb io.Writer, t types.Type, obj *types.TypeName, args *types.TypeList, underlying types.Type, active map[types.Type]int) {
 	if obj == nil || obj.Pkg() == nil || !b.inModule(obj.Pkg().Path()) {
+		writeCanonicalString(sb, typeObjectName(obj))
+		b.writeTypeArgs(sb, args, active)
 		return
 	}
+	state := b.canonicalTypeState(t)
+	if state.computing {
+		b.markCanonicalCycle(t)
+		// Only digest renderings can observe a computing type; the caller
+		// discards this buffer once the cycle is marked.
+		b.canonicalCycles++
+		writeCanonicalString(sb, "<cycle>")
+		return
+	}
+	if depth, ok := active[t]; ok {
+		b.canonicalCycles++
+		_, _ = fmt.Fprintf(sb, "cycle(%d)", depth)
+		return
+	}
+	if state.digest != "" {
+		b.writeNamedTypeDigest(sb, obj, args, state.digest, active)
+		return
+	}
+	if state.cyclic {
+		b.writeNamedTypeStructural(sb, t, obj, args, underlying, active)
+		return
+	}
+	digest, cyclic := b.computeCanonicalNamedType(t, obj, args, underlying)
+	if cyclic {
+		b.writeNamedTypeStructural(sb, t, obj, args, underlying, active)
+		return
+	}
+	b.writeNamedTypeDigest(sb, obj, args, digest, active)
+}
+
+func (b *builder) writeNamedTypeDigest(sb io.Writer, obj *types.TypeName, args *types.TypeList, digest string, active map[types.Type]int) {
+	writeCanonicalString(sb, typeObjectName(obj))
+	b.writeTypeArgs(sb, args, active)
+	writeCanonicalString(sb, "{")
+	writeCanonicalString(sb, digest)
+	writeCanonicalString(sb, "}")
+}
+
+func (b *builder) writeNamedTypeStructural(sb io.Writer, t types.Type, obj *types.TypeName, args *types.TypeList, underlying types.Type, active map[types.Type]int) {
+	depth := len(active)
+	active[t] = depth
+	defer delete(active, t)
+	writeCanonicalString(sb, typeObjectName(obj))
+	b.writeTypeArgs(sb, args, active)
 	writeCanonicalString(sb, "{")
 	b.writeCanonicalType(sb, underlying, active)
 	writeCanonicalString(sb, "}")
+}
+
+func (b *builder) computeCanonicalNamedType(t types.Type, obj *types.TypeName, args *types.TypeList, underlying types.Type) (string, bool) {
+	state := b.canonicalTypeState(t)
+	state.computing = true
+	b.canonicalStack = append(b.canonicalStack, t)
+	defer func() {
+		b.canonicalStack = b.canonicalStack[:len(b.canonicalStack)-1]
+		state.computing = false
+	}()
+
+	var buf strings.Builder
+	writeCanonicalString(&buf, typeObjectName(obj))
+	b.writeTypeArgs(&buf, args, map[types.Type]int{})
+	writeCanonicalString(&buf, "{")
+	cycles := b.canonicalCycles
+	b.writeCanonicalType(&buf, underlying, map[types.Type]int{})
+	writeCanonicalString(&buf, "}")
+	if state.cyclic || b.canonicalCycles != cycles {
+		state.cyclic = true
+		return "", true
+	}
+	state.digest = hashText(buf.String())
+	return state.digest, false
+}
+
+func (b *builder) canonicalTypeState(t types.Type) *canonicalTypeState {
+	if b.canonicalTypes == nil {
+		b.canonicalTypes = map[types.Type]*canonicalTypeState{}
+	}
+	state := b.canonicalTypes[t]
+	if state == nil {
+		state = &canonicalTypeState{}
+		b.canonicalTypes[t] = state
+	}
+	return state
+}
+
+func (b *builder) markCanonicalCycle(t types.Type) {
+	start := -1
+	for i, item := range b.canonicalStack {
+		if item == t {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return
+	}
+	for _, item := range b.canonicalStack[start:] {
+		b.canonicalTypeState(item).cyclic = true
+	}
 }
 
 func (b *builder) writeChanType(sb io.Writer, typ *types.Chan, active map[types.Type]int) {

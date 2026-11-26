@@ -35,7 +35,7 @@ func (c *Cache) Enrich(ctx context.Context, id string) (json.RawMessage, SyncSta
 
 func (c *Cache) staleReason(ctx context.Context, sym *WorkingSymbol, state SyncState) (string, bool) {
 	var lastSelf, lastDep string
-	err := c.db.QueryRowContext(ctx,
+	err := c.queryRowContext(ctx,
 		"SELECT last_self_hash, last_dep_hash FROM "+c.summaryTable("symbol_history")+" WHERE symbol_id = ? AND prompt_version = ?",
 		sym.ID, PromptVersion).Scan(&lastSelf, &lastDep)
 	if err != nil {
@@ -66,7 +66,7 @@ func (c *Cache) dependencies(ctx context.Context, sym *WorkingSymbol, idx *index
 			"sym:" + sym.PkgPath + ".(" + name + ").",
 			"sym:" + sym.PkgPath + ".(*" + name + ").",
 		}
-		rows, err := c.db.QueryContext(ctx,
+		rows, err := c.queryContext(ctx,
 			"SELECT id FROM working_symbols WHERE kind = 'method' AND (instr(id, ?) = 1 OR instr(id, ?) = 1) ORDER BY id",
 			prefixes[0], prefixes[1])
 		if err != nil {
@@ -86,7 +86,7 @@ func (c *Cache) dependencies(ctx context.Context, sym *WorkingSymbol, idx *index
 		}
 		_ = rows.Close()
 	} else {
-		rows, err := c.db.QueryContext(ctx,
+		rows, err := c.queryContext(ctx,
 			"SELECT dst_id FROM working_edges WHERE src_id = ? AND kind = 'calls' ORDER BY dst_id", sym.ID)
 		if err != nil {
 			return nil, err
@@ -109,7 +109,7 @@ func (c *Cache) dependencies(ctx context.Context, sym *WorkingSymbol, idx *index
 }
 
 func (c *Cache) children(ctx context.Context, sym *WorkingSymbol, idx *index.Index, needSummaries bool) ([]Dependency, error) {
-	rows, err := c.db.QueryContext(ctx,
+	rows, err := c.queryContext(ctx,
 		"SELECT id FROM working_symbols WHERE parent_id = ? ORDER BY kind, id", sym.ID)
 	if err != nil {
 		return nil, err
@@ -167,7 +167,7 @@ func (c *Cache) loadDependencies(ctx context.Context, ids []string, idx *index.I
 func (c *Cache) workingSymbol(ctx context.Context, id string) (*WorkingSymbol, error) {
 	var sym WorkingSymbol
 	var exported, dead, eligible int
-	err := c.db.QueryRowContext(ctx, `
+	err := c.queryRowContext(ctx, `
 SELECT id, parent_id, kind, module_name, pkg_path, file_path, start_line, end_line,
        loc, complexity, fan_in, is_exported, is_dead, is_eligible,
        sig_hash, self_hash, dep_hash, content_hash
@@ -189,7 +189,7 @@ func (c *Cache) classify(ctx context.Context, sym *WorkingSymbol) SyncState {
 		return StateNotEligible
 	}
 	var state string
-	err := c.db.QueryRowContext(ctx, "SELECT "+c.stateExpr()+" FROM working_symbols w WHERE w.id = ?",
+	err := c.queryRowContext(ctx, "SELECT "+c.stateExpr()+" FROM working_symbols w WHERE w.id = ?",
 		PromptVersion, PromptVersion, PromptVersion, PromptVersion, sym.ID).Scan(&state)
 	if err != nil {
 		return StateMissing
@@ -234,7 +234,7 @@ func (c *Cache) cachedForState(ctx context.Context, sym *WorkingSymbol, state Sy
 
 func (c *Cache) querySummary(ctx context.Context, where string, args ...any) (json.RawMessage, string, error) {
 	var hash, raw string
-	err := c.db.QueryRowContext(ctx,
+	err := c.queryRowContext(ctx,
 		"SELECT content_hash, summary_json FROM "+c.summaryTable("summary_cache")+" "+where, args...).Scan(&hash, &raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", nil

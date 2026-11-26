@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	// PromptVersion identifies the summary contract used for cache keys.
-	PromptVersion = "v1"
+	// PromptVersion identifies the summary contract used for cache keys. It was
+	// bumped to v2 when canonical signature hashes switched from full nested
+	// named-type expansion to per-type structural digests.
+	PromptVersion = "v2"
 	touchInterval = 30 * time.Second
 	gcInterval    = time.Hour
 	gcTTL         = 30 * 24 * time.Hour
@@ -43,6 +45,7 @@ type Cache struct {
 	lastGC time.Time
 
 	generation atomic.Uint64
+	sqlQueries atomic.Uint64
 }
 
 // Generation increments whenever stored summaries or working rows change.

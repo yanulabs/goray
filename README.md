@@ -194,7 +194,7 @@ machine-readable `GORAY_REPORT_URL=` line stays on stderr so stdout remains a cl
 JSON-RPC channel. All candidate ports busy in non-strict mode is an error listing the tried
 range; non-`EADDRINUSE` bind failures propagate unchanged.
 
-The report reflects the current index snapshot and summary cache. The live page reads `GET /api/report` every five seconds and updates in place, preserving the active view, filters, selection, and graph zoom. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
+The report reflects the current index snapshot and summary cache. The live page reads `GET /api/report` every five seconds and updates in place, preserving the active view, filters, selection, and graph zoom. Polls send `If-None-Match`; unchanged snapshots return `304 Not Modified` with a stable `generated_at`, so idle pages do not re-encode or re-render the report. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
 
 ### `export`
 

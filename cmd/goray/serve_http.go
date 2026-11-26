@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -162,12 +164,16 @@ type reportSnapshot struct {
 	generation uint64
 	built      bool
 	data       render.HTMLReport
+	etag       string
 }
 
-func (c *reportSnapshot) get(ctx context.Context, store *index.Store, summaries *cache.Cache) (render.HTMLReport, error) {
+// get returns the assembled report plus an ETag keyed by the immutable index
+// snapshot and the summary-cache generation. Unchanged snapshots keep their
+// original GeneratedAt so clients can detect a true no-op poll.
+func (c *reportSnapshot) get(ctx context.Context, store *index.Store, summaries *cache.Cache) (render.HTMLReport, string, error) {
 	idx, err := store.Wait(ctx)
 	if err != nil {
-		return render.HTMLReport{}, fmt.Errorf("index is not ready: %w", err)
+		return render.HTMLReport{}, "", fmt.Errorf("index is not ready: %w", err)
 	}
 	var generation uint64
 	if summaries != nil {
@@ -177,22 +183,36 @@ func (c *reportSnapshot) get(ctx context.Context, store *index.Store, summaries 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.built && c.idx == idx && c.generation == generation {
-		data := c.data
-		data.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
-		return data, nil
+		return c.data, c.etag, nil
 	}
 	data, err := report.BuildFromCache(ctx, idx, summaries)
 	if err != nil {
-		return render.HTMLReport{}, err
+		return render.HTMLReport{}, "", err
 	}
 	c.idx, c.generation, c.data, c.built = idx, generation, data, true
-	return data, nil
+	c.etag = reportETag(idx, generation)
+	return data, c.etag, nil
+}
+
+func reportETag(idx *index.Index, generation uint64) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d", idx.RootDir, idx.BuiltAt.UnixNano(), generation)))
+	return `"` + hex.EncodeToString(sum[:16]) + `"`
+}
+
+func etagMatches(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	snapshot := &reportSnapshot{}
-	build := func(ctx context.Context) (render.HTMLReport, error) {
+	build := func(ctx context.Context) (render.HTMLReport, string, error) {
 		return snapshot.get(ctx, store, summaries)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +225,7 @@ func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logg
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		data, err := build(r.Context())
+		data, _, err := build(r.Context())
 		if err != nil {
 			logger.Warn("report request failed", "err", err)
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -236,7 +256,7 @@ func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logg
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		data, err := build(r.Context())
+		data, etag, err := build(r.Context())
 		if err != nil {
 			logger.Warn("report API request failed", "err", err)
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -245,6 +265,11 @@ func reportHandler(store *index.Store, summaries *cache.Cache, logger *slog.Logg
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("ETag", etag)
+		if etagMatches(r.Header.Get("If-None-Match"), etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusOK)
 			return
