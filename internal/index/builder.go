@@ -28,7 +28,13 @@ type builder struct {
 	fieldOwners     map[*ast.Ident]string
 	fieldVarOwner   map[*types.Var]string
 	pendingDispatch []dispatchCall
+	symbolIDs       map[types.Object]string
 	facts           map[string]fileFacts
+	testFiles       map[string]map[string]struct{}
+	testFilesLoaded bool
+	canonicalTypes  map[types.Type]*canonicalTypeState
+	canonicalStack  []types.Type
+	canonicalCycles int
 }
 
 func newBuilder(idx *Index, absRoot string) *builder {
@@ -46,9 +52,20 @@ func newBuilder(idx *Index, absRoot string) *builder {
 		ifaceMethod:   map[string][]string{},
 		fieldOwners:   map[*ast.Ident]string{},
 		fieldVarOwner: map[*types.Var]string{},
+		symbolIDs:     map[types.Object]string{},
 		facts:         map[string]fileFacts{},
 		idx:           idx,
 	}
+}
+
+// symbolIDFor returns the stable ID assigned to an object. Most objects use
+// symbolID directly; repeated init functions carry a deterministic suffix so
+// they do not overwrite each other.
+func (b *builder) symbolIDFor(obj types.Object) string {
+	if id, ok := b.symbolIDs[obj]; ok {
+		return id
+	}
+	return symbolID(obj)
 }
 
 func (b *builder) inModule(pkgPath string) bool {

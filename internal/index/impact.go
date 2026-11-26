@@ -139,18 +139,36 @@ func (idx *Index) collectInterfaceImpact(sym *Symbol, acc *impactAccumulator) (i
 			implementations = append(implementations, entry)
 		}
 		acc.addSymbol(impl)
-		// Calls through the interface reach concrete methods.
-		for _, method := range idx.Symbols {
-			if method.PkgPath != impl.PkgPath || method.RecvType != impl.Name || method.Kind != "method" {
-				continue
-			}
-			roots = append(roots, method.ID)
-			for _, caller := range idx.Callers[method.ID] {
+		// Calls through the interface reach exactly the concrete methods that
+		// satisfy it. Promoted methods resolve to their declaring embedded type,
+		// and unrelated methods on the implementing type stay out of the blast
+		// radius.
+		methodIDs := sortedKeys(match.MethodIDs)
+		if len(methodIDs) == 0 {
+			methodIDs = idx.methodsOfType(impl)
+		}
+		for _, methodID := range methodIDs {
+			roots = append(roots, methodID)
+			for _, caller := range idx.Callers[methodID] {
 				acc.addCaller(caller, idx)
 			}
 		}
 	}
 	return implementations, mocks, roots
+}
+
+// methodsOfType is the pre-method-map fallback used by manually constructed
+// indexes. Generated indexes always carry ImplMatch.MethodIDs.
+func (idx *Index) methodsOfType(impl *Symbol) []string {
+	ids := make([]string, 0)
+	for _, method := range idx.Symbols {
+		if method.PkgPath != impl.PkgPath || method.RecvType != impl.Name || method.Kind != "method" {
+			continue
+		}
+		ids = append(ids, method.ID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (idx *Index) collectCompositeImpact(sym *Symbol, acc *impactAccumulator) (literals, unkeyed []CompositeSite) {
@@ -171,13 +189,18 @@ func (idx *Index) collectCompositeImpact(sym *Symbol, acc *impactAccumulator) (l
 	return literals, unkeyed
 }
 
-func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, depth int, acc *impactAccumulator) {
+func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, rootDepth, depth int, acc *impactAccumulator) {
 	seen := map[string]int{sym.ID: 0}
-	queue := append([]string{sym.ID}, roots...)
+	queue := []string{sym.ID}
 	for _, root := range roots {
-		if _, ok := seen[root]; !ok {
-			seen[root] = 0
+		if root == "" {
+			continue
 		}
+		if d, ok := seen[root]; ok && d <= rootDepth {
+			continue
+		}
+		seen[root] = rootDepth
+		queue = append(queue, root)
 	}
 	for len(queue) > 0 {
 		cur := queue[0]
@@ -196,6 +219,12 @@ func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, depth int, acc 
 	}
 }
 
+// isCallableTarget reports whether the target itself participates in the call
+// graph. Non-function targets first reach the functions that reference them.
+func isCallableTarget(sym *Symbol) bool {
+	return sym.Kind == "func" || sym.Kind == "method" || sym.Kind == "interface"
+}
+
 // ImpactBySymbol follows references and transitive callers, expanding
 // interface implementations, struct composite literals, fields, and vars.
 func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
@@ -209,16 +238,24 @@ func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
 		idx.collectTypeTargetRefs(sym, acc)
 	}
 
+	literals, unkeyed := idx.collectCompositeImpact(sym, acc)
+
 	var implementations, mocks []ImpactSymbol
 	roots := []string{sym.ID}
+	rootDepth := 0
 	if sym.Kind == "interface" {
 		var interfaceRoots []string
 		implementations, mocks, interfaceRoots = idx.collectInterfaceImpact(sym, acc)
 		roots = append(roots, interfaceRoots...)
+	} else if !isCallableTarget(sym) {
+		// Structs, types, fields, vars, and consts have no call-graph entry of
+		// their own. Seed the functions that directly reference them at depth 1
+		// so their transitive callers are still discovered.
+		roots = sortedKeys(acc.callers)
+		rootDepth = 1
 	}
 
-	literals, unkeyed := idx.collectCompositeImpact(sym, acc)
-	idx.walkImpactCallers(sym, roots, depth, acc)
+	idx.walkImpactCallers(sym, roots, rootDepth, depth, acc)
 
 	result := idx.impact(acc.pkgs, acc.files, acc.mods, acc.callers)
 	result.DirectReferences = dedupeRefs(acc.direct)

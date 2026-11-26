@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/yanulabs/goray/internal/cache"
 	"github.com/yanulabs/goray/internal/index"
@@ -86,6 +88,27 @@ func TestListenConfiguredFallbackStrictAndErrors(t *testing.T) {
 	if _, err := listenConfigured(listenConfig{port: 0, portRange: 10, host: "invalid host name"}); err == nil ||
 		isAddrInUse(err) {
 		t.Fatalf("invalid host error = %v", err)
+	}
+}
+
+func TestIsAddrInUseRecognizesWindowsWinsock(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "posix eaddrinuse", err: syscall.EADDRINUSE, want: true},
+		{name: "winsock wsaeaddrinuse", err: syscall.Errno(10048), want: true},
+		{name: "wrapped winsock", err: fmt.Errorf("listen: %w", syscall.Errno(10048)), want: true},
+		{name: "other winsock error", err: syscall.Errno(10049), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAddrInUse(tc.err); got != tc.want {
+				t.Fatalf("isAddrInUse(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -202,6 +225,42 @@ func TestConcurrentServeContextUsesDistinctPorts(t *testing.T) {
 	}
 }
 
+// TestServeContextWatcherShutdown is a regression test for the permanent
+// shutdown deadlock: serveContext must cancel its context when Serve returns on
+// its own, before the deferred WaitForAuto runs. With the old defer order this
+// test times out because AutoRebuild only exits when ctx is canceled.
+func TestServeContextWatcherShutdown(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "mcp shutdown", input: `{"jsonrpc":"2.0","id":1,"method":"shutdown"}` + "\n"},
+		{name: "stdin eof", input: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _, _ := newTestModule(t)
+			var stdout, stderr bytes.Buffer
+			opts := serveOptions{
+				path: root, dbPath: ":memory:", logLevel: "off",
+				port: 0, noWatch: false,
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- serveContext(context.Background(), opts, strings.NewReader(tc.input), &stdout, &stderr, nil)
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("serveContext = %v\nstderr:\n%s", err, stderr.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("serveContext did not exit after %s; stderr:\n%s", tc.name, stderr.String())
+			}
+		})
+	}
+}
+
 func listenerPortString(url string) string {
 	trimmed := strings.TrimSuffix(strings.TrimPrefix(url, "http://"), "/")
 	if i := strings.LastIndex(trimmed, ":"); i >= 0 {
@@ -227,22 +286,29 @@ func TestReportSnapshotInvalidatesOnCacheGeneration(t *testing.T) {
 
 	snapshot := &reportSnapshot{}
 	ctx := context.Background()
-	if _, err := snapshot.get(ctx, store, summaries); err != nil {
+	_, firstETag, err := snapshot.get(ctx, store, summaries)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if firstETag == "" {
+		t.Fatal("first report has no ETag")
 	}
 	snapshot.mu.Lock()
 	snapshot.data.Repo = "cached"
 	snapshot.data.GeneratedAt = "old"
 	snapshot.mu.Unlock()
-	second, err := snapshot.get(ctx, store, summaries)
+	second, secondETag, err := snapshot.get(ctx, store, summaries)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.Repo != "cached" {
 		t.Fatalf("unchanged snapshot rebuilt: repo = %q", second.Repo)
 	}
-	if second.GeneratedAt == "old" {
-		t.Fatal("cached report kept a stale generated_at timestamp")
+	if second.GeneratedAt != "old" {
+		t.Fatalf("cached report changed generated_at: %q", second.GeneratedAt)
+	}
+	if secondETag != firstETag {
+		t.Fatalf("unchanged snapshot changed ETag: %q != %q", secondETag, firstETag)
 	}
 
 	idx, err := store.Wait(ctx)
@@ -252,12 +318,15 @@ func TestReportSnapshotInvalidatesOnCacheGeneration(t *testing.T) {
 	if err := summaries.Sync(ctx, idx); err != nil {
 		t.Fatal(err)
 	}
-	third, err := snapshot.get(ctx, store, summaries)
+	third, thirdETag, err := snapshot.get(ctx, store, summaries)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if third.Repo == "cached" {
 		t.Fatal("cache generation change did not invalidate the report")
+	}
+	if thirdETag == firstETag {
+		t.Fatal("cache generation change did not change the ETag")
 	}
 }
 
@@ -355,5 +424,91 @@ func TestServeContextPrintsURLAndOpens(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "Local:") || strings.Contains(stdout.String(), "➜") {
 		t.Fatalf("banner leaked to stdout:\n%s", stdout.String())
+	}
+}
+
+func TestReportAPIETagAndStableGeneratedAt(t *testing.T) {
+	root, _, _ := newTestModule(t)
+	summaries, err := cache.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = summaries.Close() }()
+	logger := slog.New(slog.DiscardHandler)
+	store := index.NewStore(root, logger)
+	store.SetBuildHook(func(idx *index.Index) error {
+		return summaries.Sync(context.Background(), idx)
+	})
+	store.Start()
+	defer store.WaitForBuild()
+	handler := reportHandler(store, summaries, logger)
+
+	get := func(headers map[string]string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/api/report", nil)
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	first := get(nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first GET = %d", first.Code)
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing ETag")
+	}
+	var payload render.HTMLReport
+	if err := json.Unmarshal(first.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	notModified := get(map[string]string{"If-None-Match": etag})
+	if notModified.Code != http.StatusNotModified {
+		t.Fatalf("conditional GET = %d, want 304", notModified.Code)
+	}
+	if notModified.Body.Len() != 0 {
+		t.Fatalf("304 body = %q, want empty", notModified.Body.String())
+	}
+	if notModified.Header().Get("ETag") != etag {
+		t.Fatalf("304 ETag = %q", notModified.Header().Get("ETag"))
+	}
+
+	second := get(nil)
+	if second.Code != http.StatusOK || second.Body.String() != first.Body.String() {
+		t.Fatalf("unchanged poll re-encoded the report: %d", second.Code)
+	}
+
+	head := httptest.NewRequest(http.MethodHead, "/api/report", nil)
+	head.Header.Set("If-None-Match", etag)
+	headRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(headRecorder, head)
+	if headRecorder.Code != http.StatusNotModified || headRecorder.Body.Len() != 0 {
+		t.Fatalf("HEAD conditional = %d %q", headRecorder.Code, headRecorder.Body.String())
+	}
+
+	idx, err := store.Wait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := summaries.Sync(context.Background(), idx); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := get(map[string]string{"If-None-Match": etag})
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("changed generation = %d, want 200", refreshed.Code)
+	}
+	if refreshed.Header().Get("ETag") == etag {
+		t.Fatal("changed generation reused the old ETag")
+	}
+	var refreshedPayload render.HTMLReport
+	if err := json.Unmarshal(refreshed.Body.Bytes(), &refreshedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if refreshedPayload.GeneratedAt == "" {
+		t.Fatal("refreshed report missing generated_at")
 	}
 }

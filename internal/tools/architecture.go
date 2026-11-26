@@ -14,6 +14,7 @@ import (
 func (t *toolset) codebaseMap() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_codebase_map",
+		Annotations: readOnlyAnnotations(),
 		Description: "High-level architecture map: module scorecard (explicit modules or standard layout groups), cross-module dependency edges, symbol coupling, and bloated files. Compact by default; set detail=\"full\" for the legacy full projection.",
 		InputSchema: object(map[string]any{
 			"format":       propEnum("Output format (default: markdown)", t.formats.CodebaseMapFormats()...),
@@ -29,7 +30,7 @@ func (t *toolset) codebaseMap() mcp.Tool {
 				idx = idx.TrackedView()
 			}
 			if strArg(args, "detail", "compact") == "compact" {
-				return t.compactCodebaseMap(idx, args)
+				return t.compactCodebaseMap(ctx, idx, args)
 			}
 			if detail := strArg(args, "detail", "compact"); detail != "full" {
 				return "invalid detail: " + detail, true
@@ -92,6 +93,7 @@ type cachedModule struct {
 func (t *toolset) moduleOverview() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_module_overview",
+		Annotations: readOnlyAnnotations(),
 		Description: "Deep dive on one module: package rollups, incoming/outgoing dependency edges, .Ports() calls, large files, and top hotspots. Compact by default; generated content is excluded unless include_generated=true.",
 		InputSchema: object(map[string]any{
 			"module":            propString("Module name (e.g. payments, internal/index) or canonical mod: ID"),
@@ -112,7 +114,7 @@ func (t *toolset) moduleOverview() mcp.Tool {
 			detail := strArg(args, "detail", "compact")
 			switch detail {
 			case "compact":
-				return t.compactModuleOverview(idx, summary, args)
+				return t.compactModuleOverview(ctx, idx, summary, args)
 			case "full":
 			default:
 				return "invalid detail: " + detail, true
@@ -169,6 +171,7 @@ func (t *toolset) moduleOverview() mcp.Tool {
 func (t *toolset) dependencyGraph() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_dependency_graph",
+		Annotations: readOnlyAnnotations(),
 		Description: "Package dependency graph with optional BFS subgraph. Without a package, ranks packages by fan-in/fan-out.",
 		InputSchema: object(map[string]any{
 			"package":   propString("Optional package path or module name"),

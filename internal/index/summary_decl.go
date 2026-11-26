@@ -19,7 +19,7 @@ func (b *builder) summaryFunc(
 	if !ok || fn.Pkg() == nil {
 		return
 	}
-	existingID := symbolID(fn)
+	existingID := b.symbolIDFor(fn)
 	sym := b.idx.Symbols[existingID]
 	if sym == nil {
 		return
@@ -30,8 +30,10 @@ func (b *builder) summaryFunc(
 	}
 
 	doc := ""
+	docStart := 0
 	if d.Doc != nil {
 		doc = d.Doc.Text()
+		docStart = p.Fset.Position(d.Doc.Pos()).Line
 	}
 	directives := nodeDirectives(file, d, d.Doc)
 	body := ""
@@ -54,7 +56,7 @@ func (b *builder) summaryFunc(
 		StartLine: sym.Line, EndLine: sym.EndLine, LOC: sym.LOC, Complexity: sym.Cyclomatic,
 		Exported: sym.Exported, SigHash: sigHash, SelfHash: selfHash,
 		IsTest: fileRec.sym.IsTest, IsGenerated: fileRec.sym.IsGenerated,
-		Doc: doc, Signature: sym.Signature, Directives: directives,
+		Doc: doc, Signature: sym.Signature, Directives: directives, DocStartLine: docStart,
 	}
 	decls[canonical] = &summaryDecl{
 		sym: ss, existingID: existingID,
@@ -87,11 +89,16 @@ func (b *builder) summaryType(
 	}
 
 	docs := make([]string, 0, 2)
+	docStart := 0
 	if gen.Doc != nil {
 		docs = append(docs, gen.Doc.Text())
+		docStart = p.Fset.Position(gen.Doc.Pos()).Line
 	}
 	if spec.Doc != nil {
 		docs = append(docs, spec.Doc.Text())
+		if line := p.Fset.Position(spec.Doc.Pos()).Line; docStart == 0 || line < docStart {
+			docStart = line
+		}
 	}
 	doc := normalizeDoc(strings.Join(docs, "\n"))
 	directives := nodeDirectives(file, spec, gen.Doc, spec.Doc)
@@ -125,7 +132,7 @@ func (b *builder) summaryType(
 		StartLine: sym.Line, EndLine: sym.EndLine, LOC: sym.LOC,
 		Exported: sym.Exported, SigHash: sigHash, SelfHash: selfHash,
 		IsTest: fileRec.sym.IsTest, IsGenerated: fileRec.sym.IsGenerated,
-		Doc: doc, Signature: sym.Signature, Directives: directives,
+		Doc: doc, Signature: sym.Signature, Directives: directives, DocStartLine: docStart,
 	}
 	decl := &summaryDecl{
 		sym: ss, existingID: existingID, isType: true,

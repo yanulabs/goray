@@ -73,14 +73,15 @@ type Store struct {
 	log  *slog.Logger
 	opts BuildOptions
 
-	mu         sync.RWMutex
-	idx        *Index
-	err        error
-	loadErrors []string
-	indexing   bool
-	state      State
-	changeSeq  uint64
-	stateCh    chan struct{}
+	mu          sync.RWMutex
+	idx         *Index
+	err         error
+	loadErrors  []string
+	diagnostics []Diagnostic
+	indexing    bool
+	state       State
+	changeSeq   uint64
+	stateCh     chan struct{}
 
 	ready     chan struct{}
 	readyOnce sync.Once
@@ -93,6 +94,7 @@ type Store struct {
 	lastMode       string
 	lastAffected   int
 	pendingChanges []string
+	forceFull      bool
 }
 
 // NewStore creates a store using the default build options.
@@ -147,17 +149,48 @@ func (s *Store) State() State {
 
 // MarkDirty signals that source files changed. Passing paths enables
 // package-level incremental rebuilds; calling with no paths forces a full
-// rebuild.
+// rebuild, even when path-scoped events were queued earlier in the debounce
+// window.
 func (s *Store) MarkDirty(paths ...string) {
 	s.mu.Lock()
 	s.changeSeq++
-	s.pendingChanges = append(s.pendingChanges, paths...)
+	if len(paths) == 0 {
+		s.forceFull = true
+	} else {
+		s.pendingChanges = appendUniquePaths(s.pendingChanges, paths...)
+	}
 	s.setStateLocked(StateDirty)
 	s.mu.Unlock()
 	select {
 	case s.dirtyCh <- struct{}{}:
 	default:
 	}
+}
+
+func appendUniquePaths(existing []string, paths ...string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(paths))
+	out := make([]string, 0, len(existing)+len(paths))
+	for _, path := range existing {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 // StartAutoRebuild runs the debounced rebuild loop in a tracked goroutine.
@@ -236,7 +269,9 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	hook := s.hook
 	prev := s.idx
 	changed := append([]string{}, s.pendingChanges...)
+	forceFull := s.forceFull
 	s.pendingChanges = nil
+	s.forceFull = false
 	s.mu.Unlock()
 
 	start := time.Now()
@@ -249,15 +284,17 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	var idx *Index
 	var err error
 	affected := 0
-	if incremental && prev != nil && len(changed) > 0 {
+	if incremental && !forceFull && prev != nil && len(changed) > 0 {
 		var usedIncremental bool
-		idx, usedIncremental, err = BuildIncrementalContext(ctx, s.root, s.opts, prev, changed)
+		idx, usedIncremental, affected, err = BuildIncrementalContext(ctx, s.root, s.opts, prev, changed)
 		if usedIncremental {
 			mode = "incremental"
-			affected = incrementalAffectedCount(prev, idx)
 		}
 	} else {
 		idx, err = BuildWithOptionsContext(ctx, s.root, s.opts)
+		if err == nil {
+			affected = len(idx.Packages)
+		}
 	}
 	if err == nil && hook != nil {
 		err = hook(idx)
@@ -275,16 +312,22 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	if err != nil {
 		s.err = err
 		s.loadErrors = loadErrorMessages(err)
+		s.diagnostics = diagnosticsFromError(err)
+		// A failed build must not lose files that were already dirty. Otherwise
+		// a transient error in one package permanently drops valid edits from
+		// other packages once the broken package is fixed.
+		s.pendingChanges = appendUniquePaths(changed, s.pendingChanges...)
+		if forceFull {
+			s.forceFull = true
+		}
 		s.setStateLocked(StateError)
 	} else {
 		s.idx = idx
 		s.err = nil
 		s.loadErrors = nil
+		s.diagnostics = nil
 		s.lastMode = mode
 		s.lastAffected = affected
-		if affected == 0 {
-			s.lastAffected = len(idx.Packages)
-		}
 		if s.changeSeq != startSeq {
 			s.setStateLocked(StateDirty)
 		} else {
@@ -300,21 +343,6 @@ func (s *Store) rebuild(ctx context.Context, incremental bool) error {
 	}
 	s.readyOnce.Do(func() { close(s.ready) })
 	return err
-}
-
-// incrementalAffectedCount reports how many packages changed between snapshots.
-func incrementalAffectedCount(prev, next *Index) int {
-	if prev == nil || next == nil {
-		return 0
-	}
-	count := 0
-	for pkg, info := range next.Packages {
-		old := prev.Packages[pkg]
-		if old == nil || old.ProdLOC != info.ProdLOC || old.TestLOC != info.TestLOC || old.ProdFiles != info.ProdFiles || old.TestFiles != info.TestFiles {
-			count++
-		}
-	}
-	return count
 }
 
 // Wait returns the latest snapshot, waiting up to indexWaitGrace for the
@@ -378,6 +406,22 @@ func loadErrorMessages(err error) []string {
 		return append([]string{}, loadErr.Errors...)
 	}
 	return []string{err.Error()}
+}
+
+// Diagnostics returns structured load errors without discarding the last
+// healthy snapshot. After a failed rebuild the production diagnostics describe
+// the current tree; after a successful build only test-only diagnostics remain
+// (they are captured on the Index).
+func (s *Store) Diagnostics() []Diagnostic {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.diagnostics) > 0 {
+		return append([]Diagnostic{}, s.diagnostics...)
+	}
+	if s.idx != nil {
+		return append([]Diagnostic{}, s.idx.Diagnostics...)
+	}
+	return nil
 }
 
 func (s *Store) setStateLocked(state State) {

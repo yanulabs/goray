@@ -41,24 +41,40 @@ func loadPackages(ctx context.Context, absRoot string, opts BuildOptions) ([]*pa
 		if err != nil {
 			return nil, nil, err
 		}
-		patterns = dirs
+		patterns = workspacePatterns(absRoot, dirs)
 	}
 
+	// One loader call from the workspace root keeps a single go/types universe
+	// across modules. Loading each module in its own call produces disjoint
+	// type objects from export data and breaks field ownership, interface
+	// satisfaction, and method-set lookups that cross module boundaries.
 	loaded := newPackageSet()
-	for _, pattern := range patterns {
-		cfg := *config
-		if opts.Workspace {
-			cfg.Dir = pattern
-			pattern = "./..."
-		}
-		pkgs, err := packages.Load(&cfg, pattern)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load packages: %w", err)
-		}
-		loaded.add(pkgs)
+	pkgs, err := packages.Load(config, patterns...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load packages: %w", err)
 	}
+	loaded.add(pkgs)
 	production, tests := loaded.sorted()
 	return production, tests, nil
+}
+
+// workspacePatterns converts absolute module directories into single-load
+// patterns relative to the workspace root, including modules outside it.
+func workspacePatterns(root string, dirs []string) []string {
+	patterns := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil {
+			patterns = append(patterns, filepath.ToSlash(dir)+"/...")
+			continue
+		}
+		if rel == "." {
+			patterns = append(patterns, "./...")
+			continue
+		}
+		patterns = append(patterns, "./"+filepath.ToSlash(rel)+"/...")
+	}
+	return patterns
 }
 
 type packageSet struct {
@@ -106,25 +122,42 @@ func isTestBinary(p *packages.Package) bool {
 	return p != nil && p.Name == "main" && strings.HasSuffix(p.PkgPath, ".test")
 }
 
+// WorkspaceModuleDirs parses the go.work at root and returns its module
+// directories. It is used by the watcher to follow modules outside the
+// workspace root.
+func WorkspaceModuleDirs(root string) ([]string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	return workspaceModules(absRoot)
+}
+
 // workspaceModules parses the active go.work and returns the absolute module
-// directories. Relative use paths are resolved against the workspace root.
+// directories. Relative use paths are resolved against the workspace file's
+// directory, which honors GOWORK files with custom names.
 func workspaceModules(root string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(root, "go.work"))
+	workFile, ok := ActiveGoWorkFile(root)
+	if !ok {
+		return nil, fmt.Errorf("read go.work: no workspace file found for %s", root)
+	}
+	data, err := os.ReadFile(workFile)
 	if err != nil {
 		return nil, fmt.Errorf("read go.work: %w", err)
 	}
-	work, err := modfile.ParseWork(filepath.Join(root, "go.work"), data, nil)
+	work, err := modfile.ParseWork(workFile, data, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse go.work: %w", err)
 	}
 	if len(work.Use) == 0 {
-		return nil, fmt.Errorf("go.work in %s has no use directives", root)
+		return nil, fmt.Errorf("go.work in %s has no use directives", filepath.Dir(workFile))
 	}
+	baseDir := filepath.Dir(workFile)
 	dirs := make([]string, 0, len(work.Use))
 	for _, use := range work.Use {
 		dir := use.Path
 		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(root, dir)
+			dir = filepath.Join(baseDir, dir)
 		}
 		dirs = append(dirs, filepath.Clean(dir))
 	}
@@ -132,36 +165,49 @@ func workspaceModules(root string) ([]string, error) {
 	return dirs, nil
 }
 
-// LoadError reports package parse/type errors that must not replace a healthy snapshot.
+// LoadError reports package parse/type errors that must not replace a healthy
+// snapshot. Errors keeps the historical flat string form used by project_info;
+// Diagnostics carries the same failures in structured form for get_diagnostics.
 type LoadError struct {
-	Errors []string
+	Errors      []string
+	Diagnostics []Diagnostic
 }
 
 func (e *LoadError) Error() string {
 	return "package load errors:\n" + strings.Join(e.Errors, "\n")
 }
 
-func packageLoadErrors(pkgs []*packages.Package) error {
+func packageLoadErrors(root string, pkgs []*packages.Package) error {
 	var messages []string
+	var diagnostics []Diagnostic
 	for _, p := range pkgs {
 		for _, loadErr := range p.Errors {
 			messages = append(messages, p.PkgPath+": "+loadErr.Error())
+			diagnostics = append(diagnostics, newDiagnostic(root, p.PkgPath, false, loadErr))
 		}
 		if len(p.GoFiles) == 0 {
 			continue
 		}
 		if p.Types == nil || p.TypesInfo == nil || p.Fset == nil || len(p.Syntax) == 0 {
-			messages = append(messages, p.PkgPath+": incomplete syntax or type information")
+			message := "incomplete syntax or type information"
+			messages = append(messages, p.PkgPath+": "+message)
+			diagnostics = append(diagnostics, Diagnostic{
+				Package: p.PkgPath, Kind: DiagnosticKindType, Message: message,
+			})
 			continue
 		}
 		if p.IllTyped || !p.Types.Complete() {
-			messages = append(messages, p.PkgPath+": type checking incomplete")
+			message := "type checking incomplete"
+			messages = append(messages, p.PkgPath+": "+message)
+			diagnostics = append(diagnostics, Diagnostic{
+				Package: p.PkgPath, Kind: DiagnosticKindType, Message: message,
+			})
 		}
 	}
 	if len(messages) == 0 {
 		return nil
 	}
-	return &LoadError{Errors: messages}
+	return &LoadError{Errors: messages, Diagnostics: uniqueDiagnostics(diagnostics)}
 }
 
 func hasTestFiles(packagesByPath map[string]*PkgInfo) bool {
@@ -188,6 +234,29 @@ func collectTestLoadErrors(pkgs []*packages.Package) []string {
 		out = append(out, message)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// collectTestDiagnostics mirrors collectTestLoadErrors for the structured tool
+// payload. Test variants may include production files, so only packages that
+// actually belong to a test variant contribute entries.
+func collectTestDiagnostics(root string, pkgs []*packages.Package) []Diagnostic {
+	var out []Diagnostic
+	seen := map[Diagnostic]struct{}{}
+	for _, p := range pkgs {
+		if p.ForTest == "" {
+			continue
+		}
+		for _, loadErr := range p.Errors {
+			diagnostic := newDiagnostic(root, p.PkgPath, true, loadErr)
+			if _, ok := seen[diagnostic]; ok {
+				continue
+			}
+			seen[diagnostic] = struct{}{}
+			out = append(out, diagnostic)
+		}
+	}
+	sortDiagnostics(out)
 	return out
 }
 

@@ -12,6 +12,10 @@ type DeadCodeOptions struct {
 	ExcludeModules   []string
 	IncludeExported  bool
 	IncludeGenerated bool
+	// IgnoreTestRefs removes references from *_test.go files from the
+	// liveness check, reporting production functions that only legacy tests
+	// still touch. The default preserves the historical behavior.
+	IgnoreTestRefs bool
 }
 
 func (opts DeadCodeOptions) excludes(module string) bool {
@@ -23,13 +27,16 @@ func (opts DeadCodeOptions) excludes(module string) bool {
 	return false
 }
 
-// isClosedWorld reports packages whose exported symbols are still internal to
+// IsClosedWorld reports packages whose exported symbols are still internal to
 // the module. internal/ and cmd/ cannot be imported externally, so exported
-// functions there are audited even when include_exported is false.
-func isClosedWorld(pkgRel string) bool {
+// definitions there are audited by dead-code checks and ignored by breaking-API
+// gates.
+func IsClosedWorld(pkgRel string) bool {
 	return pkgRel == "internal" || strings.HasPrefix(pkgRel, "internal/") ||
 		pkgRel == "cmd" || strings.HasPrefix(pkgRel, "cmd/")
 }
+
+func isClosedWorld(pkgRel string) bool { return IsClosedWorld(pkgRel) }
 
 // DeadCode returns functions and methods with no recorded references, after
 // suppressing interface-satisfaction and runtime-hook false positives.
@@ -42,7 +49,10 @@ func (idx *Index) DeadCode(opts DeadCodeOptions) []*Symbol {
 		if sym.IsTest {
 			continue
 		}
-		if sym.IsHook || idx.IfaceMethods[sym.ID] || len(idx.XRefs[sym.ID]) > 0 {
+		if sym.IsHook || idx.IfaceMethods[sym.ID] {
+			continue
+		}
+		if refs := idx.XRefs[sym.ID]; len(refs) > 0 && (!opts.IgnoreTestRefs || hasNonTestRef(refs)) {
 			continue
 		}
 		if !opts.IncludeGenerated && sym.Generated {
@@ -64,6 +74,15 @@ func (idx *Index) DeadCode(opts DeadCodeOptions) []*Symbol {
 	}
 	sortSymbols(out)
 	return out
+}
+
+func hasNonTestRef(refs []XRef) bool {
+	for _, ref := range refs {
+		if !ref.Test {
+			return true
+		}
+	}
+	return false
 }
 
 // DeadFunctions is the legacy entry point. It preserves the old behavior of

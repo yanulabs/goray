@@ -100,8 +100,10 @@ Antigravity App/IDE never reads Gemini CLI's `~/.gemini/settings.json`; it reads
 workspace. Antigravity also spawns MCP servers with cwd `/`, so the installer
 writes `args: ["serve", "${workspaceFolder}"]` for `goray`. If your Antigravity
 build passes `${workspaceFolder}` through literally, pin the repo with
-`MCP_CWD=/absolute/path/to/repo`; that writes a `cwd` entry. Restart Antigravity
-or use **Customizations → Installed → MCP Servers → Restart** after installing.
+`MCP_CWD=/absolute/path/to/repo`; that writes a `cwd` entry and omits the
+positional `${workspaceFolder}` argument so the literal value cannot override
+it. Restart Antigravity or use **Customizations → Installed → MCP Servers →
+Restart** after installing.
 
 The installer edits JSON/TOML files with `python3` and follows symlinked config
 files. It refuses to rewrite JSONC files; use the client's own command for those.
@@ -194,7 +196,7 @@ machine-readable `GORAY_REPORT_URL=` line stays on stderr so stdout remains a cl
 JSON-RPC channel. All candidate ports busy in non-strict mode is an error listing the tried
 range; non-`EADDRINUSE` bind failures propagate unchanged.
 
-The report reflects the current index snapshot and summary cache. The live page reads `GET /api/report` every five seconds and updates in place, preserving the active view, filters, selection, and graph zoom. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
+The report reflects the current index snapshot and summary cache. The live page reads `GET /api/report` every five seconds and updates in place, preserving the active view, filters, selection, and graph zoom. Polls send `If-None-Match`; unchanged snapshots return `304 Not Modified` with a stable `generated_at`, so idle pages do not re-encode or re-render the report. The initial index builds in the background. File edits trigger debounced rebuilds; incoming queries wait briefly for an in-flight rebuild or serve the last healthy snapshot while reporting `index_state`. Parse or type errors in production code never overwrite the last good snapshot; test-only compile errors are surfaced as warnings.
 
 ### `export`
 
@@ -370,15 +372,19 @@ all tables live in that one database and no shared summary file is created.
 
 ## MCP tools
 
+Every tool advertises MCP `annotations`: read-only queries set `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: false` so clients can auto-approve them. `upsert_summaries` and `reindex` are idempotent writers; `run_tests` and `run_lint` execute local commands.
+
 ### Architecture and dependencies
 
 | Tool | Purpose |
 | --- | --- |
 | `project_info` | Index state, module path, working and summary DB paths, symbol counts, load errors |
-| `get_codebase_map` | Compact module scorecard with generated symbol/LOC rollups, cross-module edge counts, cycles, large files, top hotspots, pagination metadata; `detail`, `summary_only`, `top_modules`, `sort_by`, `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
-| `get_module_overview` | Compact package rollups, dependency edges, large files, and top hotspots with `include_generated`; `detail=full` for the legacy projection (`md`/`json`) |
+| `get_diagnostics` | Structured `package`/`file`/`line`/`col`/`kind`/`message` compile diagnostics with `include_tests` and `package` filters; production errors keep the last healthy snapshot |
+| `get_codebase_map` | Compact module scorecard with generated and untracked rollups, cached module summaries, cross-module edge counts, cycles, large files, top hotspots, pagination metadata; `detail`, `summary_only`, `top_modules`, `sort_by`, `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
+| `get_module_overview` | Compact package rollups, dependency edges, large files, top hotspots, and the cached module summary with `include_generated`; `detail=full` for the legacy projection (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
 | `explain_dependency` | Exact imports, `file:line` symbol usages, blank/dot imports, enclosing callers, and counters behind a module/package edge |
+| `get_architecture_diff` | Deterministic architecture diff against `base_ref` (default `HEAD`) with optional `fail_on` gates; reuses the live working-tree snapshot and returns CLI-identical JSON |
 
 ### Symbols, calls, and impact
 
@@ -386,13 +392,14 @@ all tables live in that one database and no shared summary file is created.
 | --- | --- |
 | `lookup_symbol` | Canonical ID/full Go path/repo-relative/fuzzy symbol lookup with cached or enclosing summary metadata |
 | `get_api_surface` | Paginated exported symbols with generated-symbol collapsing, kind filter, and cached summary metadata |
-| `get_references` | Type-checked references with enclosing caller and `file:line` |
+| `get_references` | Paginated type-checked references with enclosing caller and `file:line`; `offset`, `include_tests`, `module`, and `package` filters plus `next_offset` |
 | `get_call_graph` | BFS callers/callees with typed `direct` and in-module `interface_dispatch` edges |
+| `find_call_path` | Deterministic shortest call chains between two functions/methods with per-hop `file:line`, `edge_kind` (`direct`/`interface_dispatch`/`func_value`), and reverse-path hints |
 | `find_implementations` | `go/types.Implements` interface-to-type matrix, including test mocks |
 | `get_impact_analysis` | Kind-aware blast radius: implementations, test mocks, direct refs, composite literals, transitive callers, and test packages |
 | `get_dead_code` | Unreferenced functions/methods with closed-world, interface, generated, module, and grouped filters |
 | `get_hotspots` | Rank funcs/files/types by risk, complexity, LOC, or fan-in; static test reachability and module/generated/untracked filters |
-| `get_function_body` | Source body, LOC, and cyclomatic complexity |
+| `get_function_body` | Source body, LOC, and cyclomatic complexity for funcs, methods, and type declarations; batched `symbol_ids` (max 10) and optional doc comments |
 
 ### Summary cache
 
@@ -407,7 +414,7 @@ all tables live in that one database and no shared summary file is created.
 
 | Tool | Purpose |
 | --- | --- |
-| `run_tests` | Run `go test -race -count=1` |
+| `run_tests` | Run `go test -race -count=1` on string or array package patterns, forwarding server build tags |
 | `run_lint` | Run `golangci-lint run`, falling back to `go vet` |
 | `reindex` | Force a full index rebuild and working-state sync |
 
@@ -416,6 +423,7 @@ all tables live in that one database and no shared summary file is created.
 ```text
 cmd/goray                CLI entrypoint, subcommand routing, versioning
 internal/index           go/packages + go/types indexer, hashing, eligibility
+internal/diff            architecture diff comparison and git worktree loading
 internal/cache           SQLite schema, working state, summary store, GC
 internal/watch           fsnotify watcher with debounced rebuilds
 internal/mcp             JSON-RPC 2.0 stdio transport

@@ -17,7 +17,8 @@ func (indexingIndexer) Wait(context.Context) (*index.Index, error) {
 func (indexingIndexer) Status() index.Status {
 	return index.Status{IndexState: index.StateInitializing}
 }
-func (indexingIndexer) Root() string { return "." }
+func (indexingIndexer) Diagnostics() []index.Diagnostic { return nil }
+func (indexingIndexer) Root() string                    { return "." }
 func (indexingIndexer) RebuildContext(context.Context) error {
 	return nil
 }
@@ -25,8 +26,8 @@ func (indexingIndexer) RebuildContext(context.Context) error {
 func TestToolsReturnStructuredIndexingState(t *testing.T) {
 	localOnly := map[string]bool{
 		"project_info": true, "run_tests": true, "run_lint": true, "reindex": true,
-		"list_stale_summaries": true, "get_summary_context": true,
-		"upsert_summaries": true, "get_summary_coverage": true,
+		"list_stale_summaries": true,
+		"upsert_summaries":     true, "get_summary_coverage": true,
 	}
 	for _, tool := range New(indexingIndexer{}, nil, fakeSummaries{}) {
 		if localOnly[tool.Name] {

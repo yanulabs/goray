@@ -98,6 +98,27 @@ func makeDBPair(t *testing.T, root string) (string, string) {
 	return working, summary
 }
 
+func TestDBFileURL(t *testing.T) {
+	cases := []struct {
+		name  string
+		path  string
+		query string
+		want  string
+	}{
+		{name: "posix absolute", path: "/tmp/goray/cache.db", query: "mode=ro", want: "file:///tmp/goray/cache.db?mode=ro"},
+		{name: "windows drive", path: "C:/Users/goray/cache.db", query: "mode=rw", want: "file:///C:/Users/goray/cache.db?mode=rw"},
+		{name: "windows lowercase drive", path: "c:/tmp/cache.db", want: "file:///c:/tmp/cache.db"},
+		{name: "spaces escaped", path: "/tmp/goray cache.db", want: "file:///tmp/goray%20cache.db"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dbFileURL(tc.path, tc.query); got != tc.want {
+				t.Fatalf("dbFileURL(%q, %q) = %q, want %q", tc.path, tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCanonicalRootPersisted(t *testing.T) {
 	root := t.TempDir()
 	working, _ := makeDBPair(t, root)

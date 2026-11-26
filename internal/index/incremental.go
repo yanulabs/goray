@@ -12,27 +12,31 @@ import (
 )
 
 // BuildIncremental reloads only packages affected by changed files. The second
-// return value reports whether an incremental path was used. Any unsafe or
-// ambiguous condition falls back to a full rebuild.
-func BuildIncremental(rootDir string, opts BuildOptions, prev *Index, changed []string) (*Index, bool, error) {
+// return value reports whether an incremental path was used; the third is the
+// number of production packages actually reloaded (or indexed by a full
+// fallback).
+func BuildIncremental(rootDir string, opts BuildOptions, prev *Index, changed []string) (*Index, bool, int, error) {
 	return BuildIncrementalContext(context.Background(), rootDir, opts, prev, changed)
 }
 
 // BuildIncrementalContext is BuildIncremental with cancellation.
-func BuildIncrementalContext(ctx context.Context, rootDir string, opts BuildOptions, prev *Index, changed []string) (*Index, bool, error) {
+func BuildIncrementalContext(ctx context.Context, rootDir string, opts BuildOptions, prev *Index, changed []string) (*Index, bool, int, error) {
 	start := time.Now()
 	absRoot, err := filepath.Abs(rootDir)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
 	opts.Tags = NormalizeTags(opts.Tags)
 	if !opts.Workspace {
 		opts.Workspace = workspaceRootAt(absRoot)
 	}
 
-	full := func() (*Index, bool, error) {
+	full := func() (*Index, bool, int, error) {
 		idx, err := BuildWithOptionsContext(ctx, absRoot, opts)
-		return idx, false, err
+		if err != nil {
+			return nil, false, 0, err
+		}
+		return idx, false, len(idx.Packages), nil
 	}
 	if prev == nil || prev.RootDir != absRoot || len(prev.pkgs) == 0 {
 		return full()
@@ -81,19 +85,19 @@ func BuildIncrementalContext(ctx context.Context, rootDir string, opts BuildOpti
 	if !ok {
 		return full()
 	}
-	if loadErr := packageLoadErrors(pkgs); loadErr != nil {
+	if loadErr := packageLoadErrors(absRoot, pkgs); loadErr != nil {
 		// Snapshot safety: surface the error and keep the previous healthy
 		// snapshot at the Store level.
-		return nil, true, loadErr
+		return nil, true, len(pkgs), loadErr
 	}
 
 	merged := mergePackages(prev.pkgs, pkgs)
 	mergedTests := mergeTestPackages(prev.testPkgs, testPkgs, affected)
 	idx, err := buildFromPackages(ctx, absRoot, opts, merged, mergedTests, start)
 	if err != nil {
-		return nil, true, err
+		return nil, true, len(pkgs), err
 	}
-	return idx, true, nil
+	return idx, true, len(pkgs), nil
 }
 
 func sameStrings(a, b []string) bool {
@@ -121,6 +125,22 @@ func packageForFile(idx *Index, absPath string) (string, bool) {
 }
 
 func reverseImportClosure(idx *Index, dirty map[string]bool) map[string]bool {
+	// Production reverse imports describe type dependencies. Test variants add
+	// their own imports (including external _test packages) that never appear
+	// in RevImports; without them a test package that only imports a changed
+	// package is not reloaded and keeps stale XRefs, coverage, and load errors.
+	testImporters := map[string]map[string]struct{}{}
+	for _, site := range idx.ImportSites {
+		if !site.Test || site.FromPkg == "" || site.ToPkg == "" {
+			continue
+		}
+		from := strings.TrimSuffix(site.FromPkg, "_test")
+		if testImporters[site.ToPkg] == nil {
+			testImporters[site.ToPkg] = map[string]struct{}{}
+		}
+		testImporters[site.ToPkg][from] = struct{}{}
+	}
+
 	affected := map[string]bool{}
 	queue := make([]string, 0, len(dirty))
 	for pkg := range dirty {
@@ -131,6 +151,13 @@ func reverseImportClosure(idx *Index, dirty map[string]bool) map[string]bool {
 		cur := queue[0]
 		queue = queue[1:]
 		for _, importer := range idx.RevImports[cur] {
+			if affected[importer] {
+				continue
+			}
+			affected[importer] = true
+			queue = append(queue, importer)
+		}
+		for importer := range testImporters[cur] {
 			if affected[importer] {
 				continue
 			}

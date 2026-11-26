@@ -2,6 +2,10 @@ package report
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yanulabs/goray/internal/cache"
@@ -63,5 +67,53 @@ func TestBuildFromCachePropagatesCacheReadFailures(t *testing.T) {
 				t.Fatal("expected cache read failure")
 			}
 		})
+	}
+}
+
+func TestBuildFromCacheUsesBulkSummaryLookup(t *testing.T) {
+	dir := t.TempDir()
+	var source strings.Builder
+	source.WriteString("package big\n\n")
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&source, "func F%d() int { return %d }\n", i, i)
+	}
+	for name, body := range map[string]string{
+		"go.mod":     "module example.com/big\n\ngo 1.26\n",
+		"big/big.go": source.String(),
+	} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idx, err := index.Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := cache.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Sync(context.Background(), idx); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.Summary.Symbols) < 40 {
+		t.Fatalf("summary symbols = %d", len(idx.Summary.Symbols))
+	}
+
+	before := store.QueryCount()
+	report, err := BuildFromCache(context.Background(), idx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta := store.QueryCount() - before; delta > 1 {
+		t.Fatalf("report build issued %d summary queries for %d symbols, want 1", delta, len(idx.Summary.Symbols))
+	}
+	if report.ModulePath != "example.com/big" {
+		t.Fatalf("report module = %q", report.ModulePath)
 	}
 }

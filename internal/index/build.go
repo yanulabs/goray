@@ -52,7 +52,7 @@ func BuildWithOptionsContext(ctx context.Context, rootDir string, opts BuildOpti
 // artifacts. Incremental rebuilds merge preloaded unaffected packages with
 // freshly loaded affected packages and reuse this exact path.
 func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, pkgs, testPkgs []*packages.Package, start time.Time) (*Index, error) {
-	if loadErr := packageLoadErrors(pkgs); loadErr != nil {
+	if loadErr := packageLoadErrors(absRoot, pkgs); loadErr != nil {
 		return nil, loadErr
 	}
 	modulePaths := findModulePaths(pkgs)
@@ -72,6 +72,7 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	idx.Workspace = opts.Workspace
 
 	b := newBuilder(idx, absRoot)
+	b.registerTestPackages(testPkgs)
 	b.indexPackages(pkgs)
 	b.indexTestDefinitions(testPkgs)
 	b.indexReferences(pkgs, false)
@@ -81,9 +82,12 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	b.collectImportedInterfaces(pkgs)
 	b.matchInterfaces()
 	b.applyDispatchEdges()
+	b.collectConstructors(pkgs)
+	b.enrichTypeDetailXRefs()
 	b.finish()
 	b.computeTestCoverage()
-	b.buildSummary(pkgs)
+	b.buildSummary(pkgs, testPkgs)
+	b.idx.Diagnostics = collectTestDiagnostics(absRoot, testPkgs)
 	if hasTestFiles(b.idx.Packages) {
 		b.idx.TestLoadErrors = collectTestLoadErrors(testPkgs)
 	}
@@ -119,6 +123,7 @@ func newIndex(absRoot, modPath string, modulePaths []string, untracked map[strin
 		TypeImpls:         map[string][]ImplMatch{},
 		IfaceMethods:      map[string]bool{},
 		Modules:           map[string]*ModSummary{},
+		TypeDetails:       map[string]TypeDetail{},
 		TestCovered:       map[string]bool{},
 		UntrackedFiles:    untracked,
 	}

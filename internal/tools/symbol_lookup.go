@@ -13,6 +13,7 @@ import (
 func (t *toolset) lookupSymbol() mcp.Tool {
 	return mcp.Tool{
 		Name:        "lookup_symbol",
+		Annotations: readOnlyAnnotations(),
 		Description: "Find symbols by canonical ID, full Go identifier, repository-relative shorthand, exact name, or fuzzy substring. Returns IDs for downstream tools and inline cached summaries when available.",
 		InputSchema: object(map[string]any{
 			"symbol_id": propString("Symbol ID, full Go identifier, repository-relative shorthand, name, or substring"),
@@ -67,8 +68,12 @@ func (t *toolset) enclosingSummary(ctx context.Context, sym *index.Symbol) (stri
 	if sym.ModuleArea != "" {
 		candidates = append(candidates, "mod:"+sym.ModuleArea)
 	}
-	for _, id := range candidates {
+	firstState := ""
+	for i, id := range candidates {
 		summary, state, _, err := t.summaries.Enrich(ctx, id)
+		if i == 0 {
+			firstState = string(state)
+		}
 		if err != nil {
 			continue
 		}
@@ -77,8 +82,7 @@ func (t *toolset) enclosingSummary(ctx context.Context, sym *index.Symbol) (stri
 		}
 	}
 	if len(candidates) > 0 {
-		_, state, _, _ := t.summaries.Enrich(ctx, candidates[0])
-		return candidates[0], nil, string(state)
+		return candidates[0], nil, firstState
 	}
 	return "", nil, ""
 }

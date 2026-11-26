@@ -1,6 +1,10 @@
 package tools
 
-import "github.com/yanulabs/goray/internal/index"
+import (
+	"encoding/json"
+
+	"github.com/yanulabs/goray/internal/index"
+)
 
 type generatedOmitted struct {
 	Files   int `json:"files"`
@@ -25,6 +29,10 @@ type compactModule struct {
 	Goroutines       int    `json:"goroutines"`
 	FanIn            int    `json:"fan_in"`
 	FanOut           int    `json:"fan_out"`
+
+	Summary     json.RawMessage `json:"summary,omitempty"`
+	SyncState   string          `json:"sync_state,omitempty"`
+	DepsChanged bool            `json:"deps_changed,omitempty"`
 }
 
 type compactEdge struct {
@@ -108,4 +116,8 @@ type compactModuleOverview struct {
 	ReturnedCount    int                `json:"returned_count"`
 	Hint             string             `json:"hint,omitempty"`
 	IndexState       index.State        `json:"index_state"`
+
+	Summary     json.RawMessage `json:"summary,omitempty"`
+	SyncState   string          `json:"sync_state,omitempty"`
+	DepsChanged bool            `json:"deps_changed,omitempty"`
 }

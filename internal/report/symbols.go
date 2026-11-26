@@ -47,16 +47,17 @@ func canonicalSymbols(idx *index.Index) (map[string]*index.Symbol, map[string]st
 }
 
 func loadCachedSummaries(ctx context.Context, idx *index.Index, store *cache.Cache) (map[string]cache.Cached, error) {
-	cached := map[string]cache.Cached{}
 	if store == nil {
-		return cached, nil
+		return map[string]cache.Cached{}, nil
+	}
+	cached, err := store.LookupAll(ctx)
+	if err != nil {
+		return nil, err
 	}
 	for _, sym := range idx.Summary.Symbols {
-		item, err := store.Lookup(ctx, sym.ID)
-		if err != nil {
-			return nil, err
+		if _, ok := cached[sym.ID]; !ok {
+			cached[sym.ID] = cache.Cached{State: cache.StateMissing}
 		}
-		cached[sym.ID] = item
 	}
 	return cached, nil
 }

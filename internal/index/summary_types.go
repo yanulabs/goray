@@ -43,6 +43,9 @@ type SummarySymbol struct {
 	Doc        string
 	Signature  string
 	Directives []string
+	// DocStartLine is the first line of the attached doc comment, or zero when
+	// the declaration has no doc. get_function_body uses it to include docs.
+	DocStartLine int
 }
 
 // SummaryEdge is one dependency edge in the summary graph.
@@ -62,6 +65,9 @@ func (d *SummaryData) Get(id string) *SummarySymbol {
 
 // CanonicalID is a line-independent ID used by the summary cache.
 func (s *Symbol) CanonicalID() string {
+	if s.canonicalID != "" {
+		return s.canonicalID
+	}
 	switch s.Kind {
 	case "func":
 		return "sym:" + s.PkgPath + "." + s.Name

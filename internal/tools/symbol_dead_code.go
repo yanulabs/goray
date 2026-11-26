@@ -42,11 +42,13 @@ func newDeadEntry(sym *index.Symbol) deadEntry {
 func (t *toolset) deadCode() mcp.Tool {
 	return mcp.Tool{
 		Name:        "get_dead_code",
+		Annotations: readOnlyAnnotations(),
 		Description: "Zero-reference functions/methods with closed-world and interface-satisfaction filtering. Supports generated/exported/module filters and grouped summaries.",
 		InputSchema: object(map[string]any{
 			"package_prefix":    propString("Optional relative package prefix"),
 			"include_exported":  propBool("Include exported symbols in public packages (default: false; internal/ and cmd/ always audited)"),
 			"include_generated": propBool("Include symbols from generated files (default: false)"),
+			"ignore_test_refs":  propBool("Ignore references from *_test.go files so production helpers used only by tests are reported (default: false)"),
 			"module":            propString("Restrict results to one module group"),
 			"exclude_modules":   map[string]any{"type": "array", "items": propString("Module group to exclude"), "description": "Module groups to exclude"},
 			"group_by":          propEnum("Group results: none, module, or package (default: none)", "none", "module", "package"),
@@ -65,6 +67,7 @@ func (t *toolset) deadCode() mcp.Tool {
 				ExcludeModules:   strListArg(args, "exclude_modules"),
 				IncludeExported:  boolArg(args, "include_exported", false),
 				IncludeGenerated: boolArg(args, "include_generated", false),
+				IgnoreTestRefs:   boolArg(args, "ignore_test_refs", false),
 			})
 			total := len(dead)
 			limit := intArg(args, "limit", 100)

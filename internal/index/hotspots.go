@@ -122,7 +122,7 @@ func (idx *Index) fileHotspots(opts HotspotOptions) []Hotspot {
 		// Filters that depend on file-level aggregates (min_complexity,
 		// min_loc) are applied after aggregation so a large file is not
 		// discarded because its individual symbols are small.
-		if !opts.selected(sym.ModuleArea, sym.Generated, sym.Untracked) {
+		if sym.IsTest || !opts.selected(sym.ModuleArea, sym.Generated, sym.Untracked) {
 			continue
 		}
 		agg := aggregates[sym.File]
@@ -175,7 +175,7 @@ func (idx *Index) fileHotspots(opts HotspotOptions) []Hotspot {
 func (idx *Index) typeHotspots(opts HotspotOptions) []Hotspot {
 	methodCounts := map[string]int{}
 	for _, sym := range idx.Symbols {
-		if sym.Kind == "method" && sym.RecvType != "" {
+		if sym.Kind == "method" && sym.RecvType != "" && !sym.IsTest {
 			methodCounts[sym.PkgPath+"."+sym.RecvType]++
 		}
 	}
@@ -184,7 +184,7 @@ func (idx *Index) typeHotspots(opts HotspotOptions) []Hotspot {
 		if sym.Kind != "struct" && sym.Kind != "type" {
 			continue
 		}
-		if !opts.selected(sym.ModuleArea, sym.Generated, sym.Untracked) {
+		if sym.IsTest || !opts.selected(sym.ModuleArea, sym.Generated, sym.Untracked) {
 			continue
 		}
 		fanIn := len(idx.Callers[sym.ID]) + len(idx.XRefs[sym.ID])

@@ -326,6 +326,56 @@ func TestIndexWorkspaceCLI(t *testing.T) {
 	}
 }
 
+func TestIndexWorkspaceAndModuleUseDistinctCaches(t *testing.T) {
+	isolateCLIEnv(t)
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	writeTestModule(t, root, "example.com/root")
+	writeTestFile(t, filepath.Join(root, "root.go"), "package root\n\nfunc Root() int { return 1 }\n")
+	child := filepath.Join(root, "child")
+	writeTestModule(t, child, "example.com/root/child")
+	writeTestFile(t, filepath.Join(child, "child.go"), "package child\n\nfunc Child() int { return 2 }\n")
+	writeTestFile(t, filepath.Join(root, "go.work"), "go 1.23\n\nuse (\n\t.\n\t./child\n)\n")
+
+	single := indexJSON(t, "index", "--json", root)
+	workspace := indexJSON(t, "index", "--workspace", "--json", root)
+	if single.Workspace || !workspace.Workspace {
+		t.Fatalf("workspace flags = single:%v workspace:%v", single.Workspace, workspace.Workspace)
+	}
+	if single.DBPath == workspace.DBPath {
+		t.Fatalf("single-module and workspace indexes share DB %q", single.DBPath)
+	}
+	if single.SummaryDBPath == workspace.SummaryDBPath {
+		t.Fatalf("single-module and workspace indexes share summary DB %q", single.SummaryDBPath)
+	}
+}
+
+func TestIndexWorkspaceHonorsCustomGOWORK(t *testing.T) {
+	isolateCLIEnv(t)
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	alpha := filepath.Join(root, "alpha")
+	beta := filepath.Join(root, "beta")
+	writeTestModule(t, alpha, "example.com/alpha")
+	writeTestModule(t, beta, "example.com/beta")
+	writeTestFile(t, filepath.Join(alpha, "a.go"), "package alpha\n\nfunc A() int { return 1 }\n")
+	writeTestFile(t, filepath.Join(beta, "b.go"), "package beta\n\nfunc B() int { return 2 }\n")
+
+	workDir := t.TempDir()
+	custom := filepath.Join(workDir, "custom.work")
+	body := "go 1.23\n\nuse (\n\t" + filepath.ToSlash(alpha) + "\n\t" + filepath.ToSlash(beta) + "\n)\n"
+	writeTestFile(t, custom, body)
+	t.Setenv("GOWORK", custom)
+
+	result := indexJSON(t, "index", "--workspace", "--json", root)
+	if !result.Workspace || len(result.ModulePaths) != 2 {
+		t.Fatalf("custom GOWORK result = %+v", result)
+	}
+	if canonicalCLIPath(t, result.Root) != canonicalCLIPath(t, workDir) {
+		t.Fatalf("root = %q, want workspace file directory %q", result.Root, workDir)
+	}
+}
+
 func TestIndexHelp(t *testing.T) {
 	for _, args := range [][]string{{"index", "-h"}, {"index", "--help"}, {"help", "index"}} {
 		code, stdout, stderr := runDirect(t, args...)

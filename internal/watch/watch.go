@@ -14,7 +14,8 @@ import (
 // Watcher debounces nothing itself; it emits a plain change notification.
 type Watcher struct {
 	w         *fsnotify.Watcher
-	root      string
+	roots     []string
+	watched   map[string]bool
 	log       *slog.Logger
 	onChange  func([]string)
 	done      chan struct{}
@@ -26,21 +27,45 @@ type Watcher struct {
 // New recursively watches root and invokes onChange with the absolute paths of
 // relevant changes. Callers may debounce and deduplicate the batches.
 func New(root string, logger *slog.Logger, onChange func([]string)) (*Watcher, error) {
+	return NewWithRoots([]string{root}, logger, onChange)
+}
+
+// NewWithRoots watches multiple roots. Workspace mode uses this to include
+// go.work modules outside the workspace directory.
+func NewWithRoots(roots []string, logger *slog.Logger, onChange func([]string)) (*Watcher, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return nil, err
+	absRoots := make([]string, 0, len(roots))
+	seen := map[string]bool{}
+	for _, root := range roots {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return nil, err
+		}
+		absRoot = filepath.Clean(absRoot)
+		if seen[absRoot] {
+			continue
+		}
+		seen[absRoot] = true
+		absRoots = append(absRoots, absRoot)
+	}
+	if len(absRoots) == 0 {
+		return nil, os.ErrInvalid
 	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
-	watcher := &Watcher{w: w, root: absRoot, log: logger, onChange: onChange, done: make(chan struct{})}
-	if err := watcher.addTree(absRoot); err != nil {
-		_ = w.Close()
-		return nil, err
+	watcher := &Watcher{
+		w: w, roots: absRoots, watched: map[string]bool{},
+		log: logger, onChange: onChange, done: make(chan struct{}),
+	}
+	for _, root := range absRoots {
+		if err := watcher.addTree(root); err != nil {
+			_ = w.Close()
+			return nil, err
+		}
 	}
 	watcher.wg.Add(1)
 	go watcher.loop()
@@ -88,14 +113,27 @@ func (w *Watcher) addTree(root string) error {
 		if !entry.IsDir() {
 			return nil
 		}
-		if path != w.root && ignoredDir(entry.Name()) {
+		if !w.isRoot(path) && ignoredDir(entry.Name()) {
 			return filepath.SkipDir
+		}
+		if w.watched[path] {
+			return nil
 		}
 		if err := w.w.Add(path); err != nil {
 			return err
 		}
+		w.watched[path] = true
 		return nil
 	})
+}
+
+func (w *Watcher) isRoot(path string) bool {
+	for _, root := range w.roots {
+		if path == root {
+			return true
+		}
+	}
+	return false
 }
 
 // Close stops watching and waits for the event loop.
@@ -116,7 +154,7 @@ func relevant(event fsnotify.Event) bool {
 		return false
 	}
 	base := filepath.Base(event.Name)
-	return base == "go.mod" || base == "go.sum" || strings.HasSuffix(base, ".go")
+	return base == "go.mod" || base == "go.sum" || base == "go.work" || base == "go.work.sum" || strings.HasSuffix(base, ".go")
 }
 
 func ignoredDir(name string) bool {

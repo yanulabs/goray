@@ -1,6 +1,7 @@
-package main
+package diff
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -9,9 +10,55 @@ import (
 
 const maxDiffHotspotDeltas = 10
 
-func compareIndexes(base, head *index.Index) diffReport {
-	report := diffReport{
-		Summary: diffCounters{
+// Gate names accepted by --fail-on and get_architecture_diff.
+const (
+	GateCycles           = "cycles"
+	GateDeadCode         = "dead_code"
+	GateBreakingAPI      = "breaking_api"
+	GateUntestedHotspots = "untested_hotspots"
+)
+
+// GateNames lists every supported gate in canonical order.
+var GateNames = []string{GateCycles, GateDeadCode, GateBreakingAPI, GateUntestedHotspots}
+
+// ValidGate reports whether gate is a supported fail-on gate.
+func ValidGate(gate string) bool {
+	for _, name := range GateNames {
+		if gate == name {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeGates accepts strings and arrays, splitting comma- or
+// whitespace-separated values, and validates every gate. Duplicates are
+// collapsed so repeated inputs do not duplicate failed_gates.
+func NormalizeGates(values []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		for _, gate := range strings.FieldsFunc(value, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n'
+		}) {
+			if gate == "" || seen[gate] {
+				continue
+			}
+			if !ValidGate(gate) {
+				return nil, fmt.Errorf("unknown fail_on gate %q (use %s)", gate, strings.Join(GateNames, ", "))
+			}
+			seen[gate] = true
+			out = append(out, gate)
+		}
+	}
+	return out, nil
+}
+
+// Compare computes every architectural delta between base and head. The
+// returned Report has no ref metadata; BuildContext fills it in.
+func Compare(base, head *index.Index) Report {
+	return Report{
+		Summary: Counters{
 			Packages: len(head.Packages), PackagesBase: len(base.Packages),
 			Files: indexFileCount(head), FilesBase: indexFileCount(base),
 			LOC: indexLOC(head), LOCBase: indexLOC(base),
@@ -24,11 +71,10 @@ func compareIndexes(base, head *index.Index) diffReport {
 		Hotspots: compareHotspots(base, head),
 		Dead:     compareDeadCode(base, head),
 	}
-	return report
 }
 
-func compareCycles(base, head *index.Index) diffCycles {
-	var out diffCycles
+func compareCycles(base, head *index.Index) Cycles {
+	var out Cycles
 	baseCycles := cycleSet(base)
 	headCycles := cycleSet(head)
 	for cycle := range headCycles {
@@ -46,8 +92,8 @@ func compareCycles(base, head *index.Index) diffCycles {
 	return out
 }
 
-func compareAPI(base, head *index.Index) diffAPI {
-	var out diffAPI
+func compareAPI(base, head *index.Index) API {
+	var out API
 	baseAPI := exportedAPI(base)
 	headAPI := exportedAPI(head)
 	for id, after := range headAPI {
@@ -74,8 +120,8 @@ func compareAPI(base, head *index.Index) diffAPI {
 	return out
 }
 
-func compareHotspots(base, head *index.Index) diffHotspots {
-	var out diffHotspots
+func compareHotspots(base, head *index.Index) Hotspots {
+	var out Hotspots
 	headHotspots := complexFunctions(head)
 	baseHotspots := complexFunctions(base)
 	for id, after := range headHotspots {
@@ -87,14 +133,22 @@ func compareHotspots(base, head *index.Index) diffHotspots {
 			out.New = append(out.New, after)
 			continue
 		}
-		if after.AfterCC != before.AfterCC || after.AfterLOC != before.AfterLOC {
-			delta := after
-			delta.BeforeCC = before.AfterCC
-			delta.BeforeLOC = before.AfterLOC
-			delta.DeltaCC = after.AfterCC - before.AfterCC
-			delta.DeltaLOC = after.AfterLOC - before.AfterLOC
-			out.TopDelta = append(out.TopDelta, delta)
+		deltaCC := after.AfterCC - before.AfterCC
+		deltaLOC := after.AfterLOC - before.AfterLOC
+		// Improvements (lower CC/LOC with tests still present) must pass the
+		// gate. Regressions and newly lost test coverage must not.
+		regressed := deltaCC > 0 || deltaLOC > 0
+		coverageLost := before.TestCovered && !head.TestCovered[id]
+		if !regressed && !coverageLost {
+			continue
 		}
+		delta := after
+		delta.BeforeCC = before.AfterCC
+		delta.BeforeLOC = before.AfterLOC
+		delta.DeltaCC = deltaCC
+		delta.DeltaLOC = deltaLOC
+		delta.CoverageLost = coverageLost
+		out.TopDelta = append(out.TopDelta, delta)
 	}
 	sort.Slice(out.New, func(i, j int) bool {
 		if out.New[i].AfterCC != out.New[j].AfterCC {
@@ -103,6 +157,9 @@ func compareHotspots(base, head *index.Index) diffHotspots {
 		return out.New[i].ID < out.New[j].ID
 	})
 	sort.Slice(out.TopDelta, func(i, j int) bool {
+		if out.TopDelta[i].CoverageLost != out.TopDelta[j].CoverageLost {
+			return out.TopDelta[i].CoverageLost
+		}
 		left := out.TopDelta[i].DeltaCC*1000 + out.TopDelta[i].DeltaLOC
 		right := out.TopDelta[j].DeltaCC*1000 + out.TopDelta[j].DeltaLOC
 		if left != right {
@@ -116,8 +173,8 @@ func compareHotspots(base, head *index.Index) diffHotspots {
 	return out
 }
 
-func compareDeadCode(base, head *index.Index) diffDeadCode {
-	var out diffDeadCode
+func compareDeadCode(base, head *index.Index) DeadCode {
+	var out DeadCode
 	deadOpts := index.DeadCodeOptions{}
 	baseDead := deadSet(base.DeadCode(deadOpts))
 	headDead := deadSet(head.DeadCode(deadOpts))
@@ -144,36 +201,48 @@ func cycleSet(idx *index.Index) map[string]bool {
 	return out
 }
 
-func exportedAPI(idx *index.Index) map[string]diffAPIChange {
-	out := map[string]diffAPIChange{}
+func exportedAPI(idx *index.Index) map[string]APIChange {
+	out := map[string]APIChange{}
 	for id, sym := range idx.Symbols {
-		if sym.IsTest || !sym.Exported {
+		if sym.IsTest || !sym.Exported || index.IsClosedWorld(sym.PkgRel) {
 			continue
 		}
 		switch sym.Kind {
-		case "func", "method", "type", "interface", "struct", "var", "const":
+		case "func", "method", "type", "interface", "struct", "var", "const", "field":
 		default:
 			continue
+		}
+		if sym.Kind == "field" {
+			// An exported field of an unexported type is not externally
+			// reachable, so it is not part of the breaking API.
+			owner, ok := idx.Symbols[sym.PkgPath+"."+sym.RecvType]
+			if !ok || !owner.Exported {
+				continue
+			}
 		}
 		canonical := sym.CanonicalID()
 		if canonical == "" {
 			canonical = id
 		}
-		out[canonical] = diffAPIChange{
-			ID: canonical, Name: sym.Name, Kind: sym.Kind, File: sym.File, Line: sym.Line,
+		name := sym.Name
+		if sym.Kind == "field" && sym.RecvType != "" {
+			name = sym.RecvType + "." + sym.Name
+		}
+		out[canonical] = APIChange{
+			ID: canonical, Name: name, Kind: sym.Kind, File: sym.File, Line: sym.Line,
 			Before: sym.Signature,
 		}
 	}
 	return out
 }
 
-func complexFunctions(idx *index.Index) map[string]diffHotspot {
-	out := map[string]diffHotspot{}
+func complexFunctions(idx *index.Index) map[string]Hotspot {
+	out := map[string]Hotspot{}
 	for id, sym := range idx.Symbols {
 		if sym.IsTest || (sym.Kind != "func" && sym.Kind != "method") || sym.Cyclomatic < 10 {
 			continue
 		}
-		out[id] = diffHotspot{
+		out[id] = Hotspot{
 			ID: id, Name: sym.Name, File: sym.File, Line: sym.Line, Module: sym.ModuleArea,
 			AfterCC: sym.Cyclomatic, AfterLOC: sym.LOC, TestCovered: idx.TestCovered[id],
 		}
@@ -194,10 +263,10 @@ func untestedHotspotCount(idx *index.Index) int {
 	return count
 }
 
-func deadSet(items []*index.Symbol) map[string]diffDeadItem {
-	out := map[string]diffDeadItem{}
+func deadSet(items []*index.Symbol) map[string]DeadItem {
+	out := map[string]DeadItem{}
 	for _, sym := range items {
-		out[sym.ID] = diffDeadItem{
+		out[sym.ID] = DeadItem{
 			ID: sym.ID, Name: sym.Name, Kind: sym.Kind, Module: sym.ModuleArea,
 			File: sym.File, Line: sym.Line,
 		}
@@ -229,24 +298,36 @@ func moduleEdgeCount(idx *index.Index) int {
 	return n
 }
 
-func sortAPIChanges(items []diffAPIChange) {
+func sortAPIChanges(items []APIChange) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 
-func sortDeadItems(items []diffDeadItem) {
+func sortDeadItems(items []DeadItem) {
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 }
 
-func gateTriggered(report diffReport, gate string) bool {
+// GateTriggered reports whether a gate should fail for the given report.
+func GateTriggered(report Report, gate string) bool {
 	switch gate {
-	case "cycles":
+	case GateCycles:
 		return len(report.Cycles.New) > 0
-	case "dead_code":
+	case GateDeadCode:
 		return len(report.Dead.New) > 0
-	case "breaking_api":
+	case GateBreakingAPI:
 		return len(report.API.Removed) > 0 || len(report.API.Modified) > 0
-	case "untested_hotspots":
+	case GateUntestedHotspots:
 		return len(report.Hotspots.New) > 0 || len(report.Hotspots.TopDelta) > 0
 	}
 	return false
+}
+
+// FailedGates evaluates gates in order and returns the triggered ones.
+func FailedGates(report Report, gates []string) []string {
+	var failed []string
+	for _, gate := range gates {
+		if GateTriggered(report, gate) {
+			failed = append(failed, gate)
+		}
+	}
+	return failed
 }
