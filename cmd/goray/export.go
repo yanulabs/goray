@@ -113,9 +113,10 @@ func renderExport(root string, opts exportOptions) (string, error) {
 		return "", err
 	}
 	formats := render.NewRegistry()
+	pathOpts := cache.PathOptions{Tags: tags, Workspace: opts.workspace}
 	switch opts.format {
 	case "html":
-		workingPath, summaryPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, tags)
+		workingPath, summaryPath, err := cache.ResolvePathsWithOptions(root, opts.dbPath, pathOpts)
 		if err != nil {
 			return "", err
 		}
@@ -125,7 +126,7 @@ func renderExport(root string, opts exportOptions) (string, error) {
 		if !ok {
 			return "", errors.New("markdown renderer is not registered")
 		}
-		summaries, err := markdownSummaries(root, idx, opts.dbPath, tags)
+		summaries, err := markdownSummaries(root, idx, opts.dbPath, pathOpts)
 		if err != nil {
 			return "", err
 		}
@@ -140,8 +141,8 @@ func renderExport(root string, opts exportOptions) (string, error) {
 	return "", usagef("unknown export format %q (use html, md, or dot)", opts.format)
 }
 
-func markdownSummaries(root string, idx *index.Index, dbFlag string, tags []string) (string, error) {
-	workingPath, summaryPath, err := cache.ResolvePathsWithTags(root, dbFlag, tags)
+func markdownSummaries(root string, idx *index.Index, dbFlag string, pathOpts cache.PathOptions) (string, error) {
+	workingPath, summaryPath, err := cache.ResolvePathsWithOptions(root, dbFlag, pathOpts)
 	if err != nil {
 		return "", err
 	}

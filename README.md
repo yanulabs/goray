@@ -100,8 +100,10 @@ Antigravity App/IDE never reads Gemini CLI's `~/.gemini/settings.json`; it reads
 workspace. Antigravity also spawns MCP servers with cwd `/`, so the installer
 writes `args: ["serve", "${workspaceFolder}"]` for `goray`. If your Antigravity
 build passes `${workspaceFolder}` through literally, pin the repo with
-`MCP_CWD=/absolute/path/to/repo`; that writes a `cwd` entry. Restart Antigravity
-or use **Customizations → Installed → MCP Servers → Restart** after installing.
+`MCP_CWD=/absolute/path/to/repo`; that writes a `cwd` entry and omits the
+positional `${workspaceFolder}` argument so the literal value cannot override
+it. Restart Antigravity or use **Customizations → Installed → MCP Servers →
+Restart** after installing.
 
 The installer edits JSON/TOML files with `python3` and follows symlinked config
 files. It refuses to rewrite JSONC files; use the client's own command for those.

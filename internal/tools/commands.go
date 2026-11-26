@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -85,8 +86,14 @@ func runCommand(ctx context.Context, dir, bin string, args ...string) (string, b
 	cmd.Dir = dir
 	// Kill descendants that keep stdout open after the parent is canceled.
 	cmd.WaitDelay = 5 * time.Second
-	out, err := cmd.CombinedOutput()
-	out = truncateCommandOutput(out, maxCommandOutput)
+	// Cap retained output while the process runs. CombinedOutput would buffer
+	// arbitrarily large stdout/stderr before truncation, which can exhaust
+	// memory for a runaway test or linter.
+	output := &boundedOutput{limit: maxCommandOutput}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err := cmd.Run()
+	out := output.Bytes()
 	if err != nil {
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
@@ -100,6 +107,49 @@ func runCommand(ctx context.Context, dir, bin string, args ...string) (string, b
 	return "OK:\n" + string(out), false
 }
 
+// boundedOutput retains at most limit bytes plus the few bytes needed to avoid
+// splitting a UTF-8 rune. Further writes are counted but discarded so a
+// subprocess cannot grow the buffer without bound.
+type boundedOutput struct {
+	mu        sync.Mutex
+	limit     int
+	buf       []byte
+	truncated bool
+}
+
+func (b *boundedOutput) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	capacity := b.limit + utf8.UTFMax - 1
+	if len(b.buf) < capacity {
+		remaining := capacity - len(b.buf)
+		if len(p) <= remaining {
+			b.buf = append(b.buf, p...)
+		} else {
+			b.buf = append(b.buf, p[:remaining]...)
+			b.truncated = true
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	if len(b.buf) > b.limit {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *boundedOutput) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.truncated {
+		return append([]byte(nil), b.buf...)
+	}
+	return truncateCommandOutput(b.buf, b.limit)
+}
+
+// truncateCommandOutput keeps the longest prefix within limit that ends on a
+// UTF-8 rune boundary and appends a marker.
 func truncateCommandOutput(out []byte, limit int) []byte {
 	if len(out) <= limit {
 		return out

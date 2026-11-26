@@ -445,7 +445,7 @@ define MANAGE_MCP
 			fi; \
 			python3 "$(MCP_HELPER)" install --format "$$fmt" --config "$$cfg" --name "$$name" --command "$$bin_path" || return 1; \
 			display_args="$${MCP_ARGS}"; \
-			if [ "$$fmt" = "antigravity" ] && [ "$$display_args" = "serve" ]; then \
+			if [ "$$fmt" = "antigravity" ] && [ "$$display_args" = "serve" ] && [ -z "$${MCP_CWD}" ]; then \
 				display_args='serve $${workspaceFolder}'; \
 			fi; \
 			if [ -n "$${MCP_CWD}" ]; then \
@@ -726,7 +726,7 @@ web-build: ## Typecheck and build the single-file report into internal/render/di
 	cd web && npm run typecheck && npm run build
 
 db-info: build ## Print populated cache statistics (ROOT=$(ROOT))
-	"$(BIN_DIR)/$(BINARY)" -db-info "$(ROOT)"
+	"$(BIN_DIR)/$(BINARY)" db info "$(ROOT)"
 
 clean: ## Remove build and release output
 	rm -rf "$(BIN_DIR)" dist

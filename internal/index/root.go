@@ -48,30 +48,68 @@ func ResolveModuleRoot(inputPath string) (string, error) {
 }
 
 // workspaceRootAt reports whether dir is a go.work workspace root without a
-// go.mod of its own.
+// go.mod of its own. An explicit GOWORK file outside dir does not make dir a
+// workspace root.
 func workspaceRootAt(dir string) bool {
-	if _, err := os.Stat(filepath.Join(dir, "go.work")); err != nil {
-		return false
-	}
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 		return false
 	}
-	return os.Getenv("GOWORK") != "off"
+	_, ok := workspaceFileAt(dir)
+	return ok
 }
 
-// FindGoWork locates the active go.work for inputPath. GOWORK=off disables
-// detection; GOWORK=<path> selects an explicit workspace file.
-func FindGoWork(inputPath string) (string, bool) {
-	switch env := strings.TrimSpace(os.Getenv("GOWORK")); env {
-	case "off":
+// workspaceFileAt returns the workspace file belonging to dir: the explicit
+// GOWORK file when it lives in dir, otherwise dir/go.work.
+func workspaceFileAt(dir string) (string, bool) {
+	if path, ok := explicitGoWorkFile(); ok {
+		if filepath.Clean(filepath.Dir(path)) == filepath.Clean(dir) {
+			return path, true
+		}
 		return "", false
-	case "":
-	default:
-		info, err := os.Stat(env)
-		if err != nil || info.IsDir() {
+	}
+	if goWorkDisabled() {
+		return "", false
+	}
+	candidate := filepath.Join(dir, "go.work")
+	if fileExists(candidate) {
+		return candidate, true
+	}
+	return "", false
+}
+
+func goWorkDisabled() bool {
+	return strings.TrimSpace(os.Getenv("GOWORK")) == "off"
+}
+
+func explicitGoWorkFile() (string, bool) {
+	env := strings.TrimSpace(os.Getenv("GOWORK"))
+	if env == "" || env == "off" {
+		return "", false
+	}
+	path := filepath.Clean(env)
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
 			return "", false
 		}
-		return filepath.Dir(env), true
+		path = abs
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return path, true
+}
+
+// FindGoWorkFile locates the active go.work file for inputPath and preserves
+// its exact filename. GOWORK=off disables detection; GOWORK=<path> selects an
+// explicit workspace file.
+func FindGoWorkFile(inputPath string) (string, bool) {
+	if path, ok := explicitGoWorkFile(); ok {
+		return path, true
+	}
+	if goWorkDisabled() {
+		return "", false
 	}
 	if inputPath == "" {
 		inputPath = "."
@@ -93,7 +131,7 @@ func FindGoWork(inputPath string) (string, bool) {
 	}
 	for {
 		if candidate := filepath.Join(dir, "go.work"); fileExists(candidate) {
-			return dir, true
+			return candidate, true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -102,6 +140,35 @@ func FindGoWork(inputPath string) (string, bool) {
 		dir = parent
 	}
 	return "", false
+}
+
+// ActiveGoWorkFile returns the workspace file that governs root without
+// walking parent directories. An explicit GOWORK file wins; otherwise
+// root/go.work is used. It returns the exact file path so custom workspace
+// filenames survive resolution.
+func ActiveGoWorkFile(root string) (string, bool) {
+	if path, ok := explicitGoWorkFile(); ok {
+		return path, true
+	}
+	if goWorkDisabled() {
+		return "", false
+	}
+	candidate := filepath.Join(root, "go.work")
+	if fileExists(candidate) {
+		return candidate, true
+	}
+	return "", false
+}
+
+// FindGoWork locates the directory containing the active go.work for
+// inputPath. GOWORK=off disables detection; GOWORK=<path> selects an explicit
+// workspace file.
+func FindGoWork(inputPath string) (string, bool) {
+	path, ok := FindGoWorkFile(inputPath)
+	if !ok {
+		return "", false
+	}
+	return filepath.Dir(path), true
 }
 
 // ResolveProjectRoot resolves a path to either a single module root or, when

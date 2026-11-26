@@ -86,7 +86,9 @@ func indexOnce(opts indexOptions, stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 
-	dbPath, summaryDBPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, tags)
+	dbPath, summaryDBPath, err := cache.ResolvePathsWithOptions(root, opts.dbPath, cache.PathOptions{
+		Tags: tags, Workspace: opts.workspace,
+	})
 	if err != nil {
 		return err
 	}

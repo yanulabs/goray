@@ -90,10 +90,11 @@ func runDB(args []string, stdout io.Writer) error {
 	}
 	if opts.command == "path" {
 		var dbPath string
+		pathOpts := cache.PathOptions{Tags: opts.tags, Workspace: opts.workspace}
 		if opts.summaries {
-			dbPath, err = cache.ResolveSummaryPath(root, opts.dbPath)
+			dbPath, err = cache.ResolveSummaryPathWithOptions(root, opts.dbPath, pathOpts)
 		} else {
-			dbPath, err = cache.ResolvePathWithTags(root, opts.dbPath, opts.tags)
+			dbPath, err = cache.ResolvePathWithOptions(root, opts.dbPath, pathOpts)
 		}
 		if err != nil {
 			return err
@@ -105,7 +106,9 @@ func runDB(args []string, stdout io.Writer) error {
 		return runDBRemove(opts, root, stdout)
 	}
 
-	workingPath, summaryPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, opts.tags)
+	workingPath, summaryPath, err := cache.ResolvePathsWithOptions(root, opts.dbPath, cache.PathOptions{
+		Tags: opts.tags, Workspace: opts.workspace,
+	})
 	if err != nil {
 		return err
 	}
@@ -155,7 +158,9 @@ func printRemoved(stdout io.Writer, result cache.RemoveResult, dryRun bool) {
 
 func runDBRemove(opts dbOptions, root string, stdout io.Writer) error {
 	removeFlags := removeOptions(opts)
-	working, summary, err := cache.ResolvePathsWithTags(root, "", opts.tags)
+	working, summary, err := cache.ResolvePathsWithOptions(root, "", cache.PathOptions{
+		Tags: opts.tags, Workspace: opts.workspace,
+	})
 	if err != nil {
 		return err
 	}

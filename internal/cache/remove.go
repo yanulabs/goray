@@ -42,7 +42,18 @@ func dbURL(path, query string) string {
 	if err == nil {
 		path = abs
 	}
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: query}).String()
+	return dbFileURL(path, query)
+}
+
+// dbFileURL formats an absolute path as an RFC 8089 file URI.
+func dbFileURL(path, query string) string {
+	slash := filepath.ToSlash(path)
+	// A Windows drive-letter path needs a leading slash: C:/cache.db becomes
+	// file:///C:/cache.db. POSIX absolute paths already start with one.
+	if !strings.HasPrefix(slash, "/") {
+		slash = "/" + slash
+	}
+	return (&url.URL{Scheme: "file", Path: slash, RawQuery: query}).String()
 }
 
 // ReadDBMeta reads one cache_meta value without creating or migrating the

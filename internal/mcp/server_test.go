@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestServe(t *testing.T) {
@@ -154,5 +158,155 @@ func TestNotificationIgnored(t *testing.T) {
 	}
 	if strings.TrimSpace(out.String()) != "" {
 		t.Fatalf("notification produced output: %s", out.String())
+	}
+}
+
+func TestCancelInFlightToolSuppressesReply(t *testing.T) {
+	cases := []struct {
+		name     string
+		id       string
+		cancelID string
+	}{
+		{name: "numeric", id: "7", cancelID: "7"},
+		{name: "string", id: `"req-7"`, cancelID: `"req-7"`},
+		{name: "escaped string", id: `"req-\u0037"`, cancelID: `"req-7"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, pw := io.Pipe()
+			var out bytes.Buffer
+			started := make(chan struct{})
+			finished := make(chan struct{})
+			srv := NewServer(pr, &out, []Tool{{
+				Name: "slow",
+				Run: func(ctx context.Context, _ map[string]any) (string, bool) {
+					close(started)
+					<-ctx.Done()
+					close(finished)
+					return "late result", false
+				},
+			}})
+			serveErr := make(chan error, 1)
+			go func() { serveErr <- srv.Serve(context.Background()) }()
+
+			if _, err := fmt.Fprintf(pw, `{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"slow","arguments":{}}}`+"\n", tc.id); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("tool did not start")
+			}
+			if _, err := fmt.Fprintf(pw, `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":%s}}`+"\n", tc.cancelID); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-finished:
+			case <-time.After(5 * time.Second):
+				t.Fatal("notifications/cancelled did not cancel the tool context")
+			}
+			if err := pw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-serveErr:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("server did not stop after stdin closed")
+			}
+			if strings.TrimSpace(out.String()) != "" {
+				t.Fatalf("canceled request emitted a response: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestQueuedToolCallHonorsCancellation(t *testing.T) {
+	cases := []struct {
+		name         string
+		cancelServer bool
+	}{
+		{name: "request cancellation"},
+		{name: "server cancellation", cancelServer: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var ran atomic.Bool
+			srv := NewServer(strings.NewReader(""), io.Discard, []Tool{{
+				Name: "queued",
+				Run: func(context.Context, map[string]any) (string, bool) {
+					ran.Store(true)
+					return "ran", false
+				},
+			}})
+			for i := 0; i < maxConcurrentReads; i++ {
+				srv.readSem <- struct{}{}
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var wg sync.WaitGroup
+			srv.callTool(ctx, Request{
+				ID:     json.RawMessage("42"),
+				Method: "tools/call",
+				Params: json.RawMessage(`{"name":"queued","arguments":{}}`),
+			}, false, &wg)
+
+			if tc.cancelServer {
+				cancel()
+			} else {
+				srv.handle(context.Background(), Request{
+					Method: "notifications/cancelled",
+					Params: json.RawMessage(`{"requestId":42}`),
+				}, &sync.WaitGroup{})
+			}
+
+			done := make(chan struct{})
+			go func() {
+				wg.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued tool call did not exit after cancellation")
+			}
+			if ran.Load() {
+				t.Fatal("queued tool ran after cancellation")
+			}
+		})
+	}
+}
+
+func TestCanonicalRequestID(t *testing.T) {
+	cases := map[string]string{
+		`1`:          `1`,
+		` 1 `:        `1`,
+		`"abc"`:      `"abc"`,
+		`"a\u0062c"`: `"abc"`,
+		`null`:       "",
+		``:           "",
+	}
+	for raw, want := range cases {
+		if got := canonicalRequestID(json.RawMessage(raw)); got != want {
+			t.Fatalf("canonicalRequestID(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestSendFallsBackToInternalError(t *testing.T) {
+	var out bytes.Buffer
+	srv := NewServer(strings.NewReader(""), &out, nil)
+	srv.send(Response{ID: json.RawMessage("9"), Result: make(chan int)})
+
+	responses := decodeResponses(t, out.String())
+	response, ok := responses["9"]
+	if !ok {
+		t.Fatalf("missing fallback response:\n%s", out.String())
+	}
+	if code := errorCode(t, response); code != -32603 {
+		t.Fatalf("fallback error code = %d, want -32603", code)
 	}
 }

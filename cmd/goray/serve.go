@@ -108,7 +108,9 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: level}))
 	formats := render.NewRegistry()
 
-	dbPath, summaryDBPath, err := cache.ResolvePathsWithTags(root, opts.dbPath, tags)
+	dbPath, summaryDBPath, err := cache.ResolvePathsWithOptions(root, opts.dbPath, cache.PathOptions{
+		Tags: tags, Workspace: opts.workspace,
+	})
 	if err != nil {
 		return err
 	}
@@ -160,7 +162,7 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 		ReleaseArtifacts: !opts.retainPackages,
 	})
 	store.SetBuildHook(func(idx *index.Index) error {
-		return summaries.Sync(context.Background(), idx)
+		return summaries.Sync(ctx, idx)
 	})
 	store.StartContext(ctx)
 	defer store.WaitForBuild()
@@ -185,7 +187,12 @@ func serveContext(ctx context.Context, opts serveOptions, stdin io.Reader, stdou
 
 	server := mcp.NewServer(stdin, stdout, tools.New(store, formats, summaries))
 	server.SetVersion(buildVersion())
-	return server.Serve(ctx)
+	err = server.Serve(ctx)
+	// Serve can return while ctx is still alive (stdin EOF or MCP shutdown).
+	// Cancel before the deferred waits run so AutoRebuild, in-flight builds, and
+	// the report server stop instead of blocking WaitForAuto/WaitForBuild.
+	cancel()
+	return err
 }
 
 // writePortFile publishes the chosen URL and PID so the Vite dev proxy and

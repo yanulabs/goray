@@ -107,24 +107,30 @@ func isTestBinary(p *packages.Package) bool {
 }
 
 // workspaceModules parses the active go.work and returns the absolute module
-// directories. Relative use paths are resolved against the workspace root.
+// directories. Relative use paths are resolved against the workspace file's
+// directory, which honors GOWORK files with custom names.
 func workspaceModules(root string) ([]string, error) {
-	data, err := os.ReadFile(filepath.Join(root, "go.work"))
+	workFile, ok := ActiveGoWorkFile(root)
+	if !ok {
+		return nil, fmt.Errorf("read go.work: no workspace file found for %s", root)
+	}
+	data, err := os.ReadFile(workFile)
 	if err != nil {
 		return nil, fmt.Errorf("read go.work: %w", err)
 	}
-	work, err := modfile.ParseWork(filepath.Join(root, "go.work"), data, nil)
+	work, err := modfile.ParseWork(workFile, data, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse go.work: %w", err)
 	}
 	if len(work.Use) == 0 {
-		return nil, fmt.Errorf("go.work in %s has no use directives", root)
+		return nil, fmt.Errorf("go.work in %s has no use directives", filepath.Dir(workFile))
 	}
+	baseDir := filepath.Dir(workFile)
 	dirs := make([]string, 0, len(work.Use))
 	for _, use := range work.Use {
 		dir := use.Path
 		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(root, dir)
+			dir = filepath.Join(baseDir, dir)
 		}
 		dirs = append(dirs, filepath.Clean(dir))
 	}
