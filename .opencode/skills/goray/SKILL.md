@@ -22,9 +22,9 @@ When working in a Go repository alongside semantic/vector search:
 Anti-patterns:
 
 - **WRONG:** `cocoindex-code.search(query="HTMLGraph module graph")`
-  **RIGHT:** `lookup_symbol(query="HTMLGraph")` + `get_references(symbol="HTMLGraph")`
+  **RIGHT:** `lookup_symbol(symbol_id="HTMLGraph")` + `get_references(symbol_id="HTMLGraph")`
 - **WRONG:** `cocoindex-code.search(query="CheckoutPort implementations")` or `rg "CheckoutPort"`
-  **RIGHT:** `find_implementations(symbol="CheckoutPort")` + `get_impact_analysis(symbol="CheckoutPort")`
+  **RIGHT:** `find_implementations(symbol_id="CheckoutPort")` + `get_impact_analysis(symbol_id="CheckoutPort")`
 - **WRONG:** `search(query="goray project info codebase map")`
   **RIGHT:** Call `project_info`, `get_codebase_map`, and `get_dependency_graph` directly in parallel.
 
