@@ -38,10 +38,64 @@ func (b *builder) indexPackageReferences(p *packages.Package, pi *PkgInfo, testO
 			case *ast.FuncDecl:
 				b.indexFuncBody(p, pi, d, recordUse)
 			case *ast.GenDecl:
-				inspectIdents(d, func(id *ast.Ident) { recordUse(id, "") })
+				b.indexGenDecl(p, d, recordUse)
 			}
 		}
 	}
+}
+
+// indexGenDecl records package-level type and var/const initializer uses.
+// Initializer calls, composite literals, and function values are attributed to
+// the declared variable (or the package init ID when the declaration is blank)
+// so call graphs and impact analysis see package initialization work.
+func (b *builder) indexGenDecl(p *packages.Package, decl *ast.GenDecl, recordUse func(*ast.Ident, string)) {
+	for _, spec := range decl.Specs {
+		switch s := spec.(type) {
+		case *ast.TypeSpec:
+			inspectIdents(s, func(id *ast.Ident) { recordUse(id, "") })
+		case *ast.ValueSpec:
+			if s.Type != nil {
+				inspectIdents(s.Type, func(id *ast.Ident) { recordUse(id, "") })
+			}
+			callerID := b.valueSpecOwner(p, s)
+			for _, value := range s.Values {
+				b.indexPackageValue(p, callerID, value, recordUse)
+			}
+		default:
+			inspectIdents(spec, func(id *ast.Ident) { recordUse(id, "") })
+		}
+	}
+}
+
+func (b *builder) valueSpecOwner(p *packages.Package, spec *ast.ValueSpec) string {
+	for _, name := range spec.Names {
+		obj := p.TypesInfo.Defs[name]
+		if obj == nil || obj.Pkg() == nil || obj.Parent() != p.Types.Scope() {
+			continue
+		}
+		if id := b.symbolIDFor(obj); id != "" && b.idx.Symbols[id] != nil {
+			return id
+		}
+	}
+	return p.PkgPath + ".init"
+}
+
+func (b *builder) indexPackageValue(p *packages.Package, callerID string, value ast.Expr, recordUse func(*ast.Ident, string)) {
+	if value == nil {
+		return
+	}
+	ast.Inspect(value, func(node ast.Node) bool {
+		switch x := node.(type) {
+		case *ast.Ident:
+			recordUse(x, callerID)
+			b.recordFuncValue(p, callerID, x)
+		case *ast.CompositeLit:
+			b.recordComposite(p, callerID, x)
+		case *ast.CallExpr:
+			b.recordCall(p, callerID, x)
+		}
+		return true
+	})
 }
 
 func (b *builder) recordUse(p *packages.Package, srcMod string, id *ast.Ident, fromFunc string) {
@@ -205,7 +259,7 @@ func (b *builder) indexFuncBody(
 ) {
 	callerID := ""
 	if obj := p.TypesInfo.Defs[d.Name]; obj != nil {
-		callerID = symbolID(obj)
+		callerID = b.symbolIDFor(obj)
 	}
 	if d.Type != nil {
 		inspectIdents(d.Type, func(id *ast.Ident) { recordUse(id, callerID) })
@@ -224,6 +278,7 @@ func (b *builder) indexFuncBody(
 			}
 		case *ast.Ident:
 			recordUse(x, callerID)
+			b.recordFuncValue(p, callerID, x)
 		case *ast.CompositeLit:
 			b.recordComposite(p, callerID, x)
 		case *ast.CallExpr:
@@ -274,13 +329,34 @@ func (b *builder) recordCall(p *packages.Package, callerID string, call *ast.Cal
 	if !ok || fn.Pkg() == nil || !b.inModule(fn.Pkg().Path()) {
 		return
 	}
-	calleeID := symbolID(fn)
+	calleeID := b.symbolIDFor(fn)
 	if b.idx.Symbols[calleeID] == nil {
 		return
 	}
 	addPair(b.callees, callerID, calleeID)
 	addPair(b.callers, calleeID, callerID)
 	b.setEdgeKind(callerID, calleeID, CallEdge{Kind: "direct"})
+}
+
+// recordFuncValue records a function or method referenced as a value rather
+// than called: callbacks, handler registrations, sort comparators, conversion
+// arguments, and dispatch-table entries. The func_value edge keeps call graphs
+// and static test reachability complete without inventing a call site.
+func (b *builder) recordFuncValue(p *packages.Package, callerID string, id *ast.Ident) {
+	if callerID == "" || p.TypesInfo == nil || id == nil {
+		return
+	}
+	fn, ok := p.TypesInfo.Uses[id].(*types.Func)
+	if !ok || fn == nil || fn.Pkg() == nil || !b.inModule(fn.Pkg().Path()) {
+		return
+	}
+	calleeID := b.symbolIDFor(fn)
+	if calleeID == "" || b.idx.Symbols[calleeID] == nil {
+		return
+	}
+	addPair(b.callees, callerID, calleeID)
+	addPair(b.callers, calleeID, callerID)
+	b.setEdgeKind(callerID, calleeID, CallEdge{Kind: "func_value"})
 }
 
 func (b *builder) setEdgeKind(from, to string, edge CallEdge) {

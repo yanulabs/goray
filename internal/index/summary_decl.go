@@ -19,7 +19,7 @@ func (b *builder) summaryFunc(
 	if !ok || fn.Pkg() == nil {
 		return
 	}
-	existingID := symbolID(fn)
+	existingID := b.symbolIDFor(fn)
 	sym := b.idx.Symbols[existingID]
 	if sym == nil {
 		return

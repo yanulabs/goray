@@ -35,6 +35,11 @@ type Symbol struct {
 	Untracked bool `json:"untracked,omitempty"`
 	IsTest    bool `json:"-"`
 	IsHook    bool `json:"-"`
+
+	// canonicalID overrides the computed canonical ID for declarations whose
+	// symbol ID needs a deterministic disambiguator, such as repeated init
+	// functions in one package.
+	canonicalID string
 }
 
 // XRef is one type-checked use of a symbol.
