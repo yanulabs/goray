@@ -2,7 +2,6 @@ package index
 
 import (
 	"bytes"
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -133,18 +132,30 @@ func qualifier(curPkg string) types.Qualifier {
 	}
 }
 
+// typeDesc returns the canonical descriptor stored on a type symbol. Function
+// and field signatures are type-checked separately; structs deliberately omit
+// their field count so adding or removing exported fields is reported once, by
+// the field symbols, rather than as a struct modification. Interface
+// descriptors include full method signatures and embedded type constraints so
+// breaking_api detects signature changes instead of only method-name changes.
 func typeDesc(tn *types.TypeName) string {
+	q := qualifier(tn.Pkg().Path())
 	switch u := tn.Type().Underlying().(type) {
 	case *types.Interface:
-		methods := make([]string, 0, u.NumMethods())
-		for i := 0; i < u.NumMethods(); i++ {
-			methods = append(methods, u.Method(i).Name())
+		u.Complete()
+		parts := make([]string, 0, u.NumMethods()+u.NumEmbeddeds())
+		for i := 0; i < u.NumEmbeddeds(); i++ {
+			parts = append(parts, types.TypeString(u.EmbeddedType(i), q))
 		}
-		return "interface { " + strings.Join(methods, "; ") + " }"
+		for i := 0; i < u.NumMethods(); i++ {
+			parts = append(parts, types.TypeString(u.Method(i).Type(), q))
+		}
+		sort.Strings(parts)
+		return "interface { " + strings.Join(parts, "; ") + " }"
 	case *types.Struct:
-		return fmt.Sprintf("struct (%d fields)", u.NumFields())
+		return "struct"
 	default:
-		return types.TypeString(u, qualifier(tn.Pkg().Path()))
+		return types.TypeString(u, q)
 	}
 }
 

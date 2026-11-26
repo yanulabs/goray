@@ -54,18 +54,19 @@ type diffHotspots struct {
 }
 
 type diffHotspot struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	File        string `json:"file"`
-	Line        int    `json:"line"`
-	Module      string `json:"module"`
-	BeforeLOC   int    `json:"before_loc,omitempty"`
-	AfterLOC    int    `json:"after_loc"`
-	BeforeCC    int    `json:"before_complexity,omitempty"`
-	AfterCC     int    `json:"after_complexity"`
-	DeltaLOC    int    `json:"delta_loc"`
-	DeltaCC     int    `json:"delta_complexity"`
-	TestCovered bool   `json:"test_covered"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	File         string `json:"file"`
+	Line         int    `json:"line"`
+	Module       string `json:"module"`
+	BeforeLOC    int    `json:"before_loc,omitempty"`
+	AfterLOC     int    `json:"after_loc"`
+	BeforeCC     int    `json:"before_complexity,omitempty"`
+	AfterCC      int    `json:"after_complexity"`
+	DeltaLOC     int    `json:"delta_loc"`
+	DeltaCC      int    `json:"delta_complexity"`
+	TestCovered  bool   `json:"test_covered"`
+	CoverageLost bool   `json:"coverage_lost,omitempty"`
 }
 
 type diffDeadCode struct {
