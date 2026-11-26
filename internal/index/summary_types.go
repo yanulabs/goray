@@ -62,6 +62,9 @@ func (d *SummaryData) Get(id string) *SummarySymbol {
 
 // CanonicalID is a line-independent ID used by the summary cache.
 func (s *Symbol) CanonicalID() string {
+	if s.canonicalID != "" {
+		return s.canonicalID
+	}
 	switch s.Kind {
 	case "func":
 		return "sym:" + s.PkgPath + "." + s.Name

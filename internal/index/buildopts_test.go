@@ -150,7 +150,7 @@ func TestValue(t *testing.T) { if Value() != 1 { t.Fatal("bad") } }
 	if err := os.WriteFile(file, []byte("package release\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	next, used, err := BuildIncremental(root, opts, prev, []string{file})
+	next, used, _, err := BuildIncremental(root, opts, prev, []string{file})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ use (
 	if err := os.WriteFile(bFile, []byte("package b\n\nfunc Value() int { return 2 }\n\nfunc Extra() int { return 3 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	next, used, err := BuildIncremental(root, BuildOptions{Workspace: true}, prev, []string{bFile})
+	next, used, _, err := BuildIncremental(root, BuildOptions{Workspace: true}, prev, []string{bFile})
 	if err != nil {
 		t.Fatal(err)
 	}

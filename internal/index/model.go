@@ -35,6 +35,11 @@ type Symbol struct {
 	Untracked bool `json:"untracked,omitempty"`
 	IsTest    bool `json:"-"`
 	IsHook    bool `json:"-"`
+
+	// canonicalID overrides the computed canonical ID for declarations whose
+	// symbol ID needs a deterministic disambiguator, such as repeated init
+	// functions in one package.
+	canonicalID string
 }
 
 // XRef is one type-checked use of a symbol.
@@ -79,15 +84,18 @@ type CompositeSite struct {
 	Test     bool   `json:"test,omitempty"`
 }
 
-// ImplMatch records an interface/type satisfaction edge.
+// ImplMatch records an interface/type satisfaction edge. MethodIDs maps each
+// required interface method name to the exact concrete method symbol that
+// satisfies it, including methods promoted from an embedded struct.
 type ImplMatch struct {
-	IfaceID   string `json:"iface_id"`
-	TypeID    string `json:"type_id"`
-	ViaPtr    bool   `json:"via_ptr"`
-	TypeFile  string `json:"type_file"`
-	TypeLine  int    `json:"type_line"`
-	IfaceFile string `json:"iface_file"`
-	IfaceLine int    `json:"iface_line"`
+	IfaceID   string            `json:"iface_id"`
+	TypeID    string            `json:"type_id"`
+	ViaPtr    bool              `json:"via_ptr"`
+	TypeFile  string            `json:"type_file"`
+	TypeLine  int               `json:"type_line"`
+	IfaceFile string            `json:"iface_file"`
+	IfaceLine int               `json:"iface_line"`
+	MethodIDs map[string]string `json:"method_ids,omitempty"`
 }
 
 // FileMetric is one file's size and generated/untracked classification.

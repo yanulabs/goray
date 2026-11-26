@@ -95,17 +95,23 @@ func safeImplements(t types.Type, iface *types.Interface) (ok bool) {
 }
 
 // markInterfaceMethod records the concrete method that satisfies an interface
-// method. Interface methods may be declared in another package, so lookup by
-// name only (pkg == nil).
-func markInterfaceMethod(methods *types.MethodSet, iface *types.Interface, idx *Index) {
+// method and returns the exact method symbol IDs keyed by required method name.
+// Interface methods may be declared in another package, so lookup by name only
+// (pkg == nil). Promoted methods on embedded structs resolve to the declaring
+// embedded type, which is what call graphs and impact analysis must follow.
+func markInterfaceMethod(methods *types.MethodSet, iface *types.Interface, idx *Index) map[string]string {
+	resolved := make(map[string]string, iface.NumMethods())
 	for i := 0; i < iface.NumMethods(); i++ {
 		want := iface.Method(i)
 		if sel := methods.Lookup(nil, want.Name()); sel != nil {
 			if fn, ok := sel.Obj().(*types.Func); ok {
-				idx.IfaceMethods[symbolID(fn)] = true
+				id := symbolID(fn)
+				idx.IfaceMethods[id] = true
+				resolved[want.Name()] = id
 			}
 		}
 	}
+	return resolved
 }
 
 // matchInterfaces builds the exact go/types implementation matrix for
@@ -136,14 +142,13 @@ func (b *builder) matchInterfaces() {
 				IfaceFile: iface.sym.File,
 				IfaceLine: iface.sym.Line,
 			}
-			b.idx.IfaceImpls[iface.id] = append(b.idx.IfaceImpls[iface.id], match)
-			b.idx.TypeImpls[typ.id] = append(b.idx.TypeImpls[typ.id], match)
-
 			methods := typ.value
 			if viaPtr {
 				methods = typ.ptr
 			}
-			markInterfaceMethod(methods, iface.iface, b.idx)
+			match.MethodIDs = markInterfaceMethod(methods, iface.iface, b.idx)
+			b.idx.IfaceImpls[iface.id] = append(b.idx.IfaceImpls[iface.id], match)
+			b.idx.TypeImpls[typ.id] = append(b.idx.TypeImpls[typ.id], match)
 		}
 	}
 

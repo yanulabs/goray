@@ -12,6 +12,10 @@ type DeadCodeOptions struct {
 	ExcludeModules   []string
 	IncludeExported  bool
 	IncludeGenerated bool
+	// IgnoreTestRefs removes references from *_test.go files from the
+	// liveness check, reporting production functions that only legacy tests
+	// still touch. The default preserves the historical behavior.
+	IgnoreTestRefs bool
 }
 
 func (opts DeadCodeOptions) excludes(module string) bool {
@@ -42,7 +46,10 @@ func (idx *Index) DeadCode(opts DeadCodeOptions) []*Symbol {
 		if sym.IsTest {
 			continue
 		}
-		if sym.IsHook || idx.IfaceMethods[sym.ID] || len(idx.XRefs[sym.ID]) > 0 {
+		if sym.IsHook || idx.IfaceMethods[sym.ID] {
+			continue
+		}
+		if refs := idx.XRefs[sym.ID]; len(refs) > 0 && (!opts.IgnoreTestRefs || hasNonTestRef(refs)) {
 			continue
 		}
 		if !opts.IncludeGenerated && sym.Generated {
@@ -64,6 +71,15 @@ func (idx *Index) DeadCode(opts DeadCodeOptions) []*Symbol {
 	}
 	sortSymbols(out)
 	return out
+}
+
+func hasNonTestRef(refs []XRef) bool {
+	for _, ref := range refs {
+		if !ref.Test {
+			return true
+		}
+	}
+	return false
 }
 
 // DeadFunctions is the legacy entry point. It preserves the old behavior of

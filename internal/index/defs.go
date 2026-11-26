@@ -1,10 +1,12 @@
 package index
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -42,7 +44,7 @@ func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo, testOnly bo
 	if p.Types == nil || p.TypesInfo == nil || p.Fset == nil {
 		return
 	}
-	for _, file := range p.Syntax {
+	for _, file := range sortedSyntaxFiles(p, p.Syntax) {
 		if file == nil {
 			continue
 		}
@@ -85,12 +87,33 @@ func (b *builder) fileMetaFor(p *packages.Package, file *ast.File) fileMeta {
 	return meta
 }
 
+// sortedSyntaxFiles orders syntax by file position so disambiguated IDs are
+// stable regardless of loader order.
+func sortedSyntaxFiles(p *packages.Package, files []*ast.File) []*ast.File {
+	out := append([]*ast.File{}, files...)
+	if p.Fset == nil {
+		return out
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i] == nil || out[j] == nil {
+			return out[j] != nil
+		}
+		pi := p.Fset.Position(out[i].Pos())
+		pj := p.Fset.Position(out[j].Pos())
+		if pi.Filename != pj.Filename {
+			return pi.Filename < pj.Filename
+		}
+		return pi.Line < pj.Line
+	})
+	return out
+}
+
 func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl, meta fileMeta) {
 	fn, ok := p.TypesInfo.Defs[d.Name].(*types.Func)
 	if !ok || fn.Pkg() == nil {
 		return
 	}
-	id := symbolID(fn)
+	id := b.allocateFuncID(fn)
 	if id == "" {
 		return
 	}
@@ -105,7 +128,7 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl, m
 	pos := p.Fset.Position(d.Pos())
 	end := p.Fset.Position(d.End())
 	name := fn.Name()
-	b.addSymbol(&Symbol{
+	sym := &Symbol{
 		ID:         id,
 		Name:       name,
 		Kind:       kind,
@@ -125,7 +148,32 @@ func (b *builder) indexFunc(p *packages.Package, pi *PkgInfo, d *ast.FuncDecl, m
 		Untracked:  meta.untracked,
 		IsTest:     meta.isTest,
 		IsHook:     isHookName(name, meta.isTest) || hasHookDirective(d.Doc),
-	}, pi)
+	}
+	if base := symbolID(fn); id != base {
+		sym.canonicalID = "sym:" + id
+	}
+	b.addSymbol(sym, pi)
+}
+
+// allocateFuncID assigns each function declaration one ID. Repeated init
+// functions in a package are ordered by file and line, keeping the historical
+// pkg.init ID for the first and appending #2, #3, ... for the rest.
+func (b *builder) allocateFuncID(fn *types.Func) string {
+	if id, ok := b.symbolIDs[fn]; ok {
+		return id
+	}
+	base := symbolID(fn)
+	if base == "" {
+		return ""
+	}
+	id := base
+	if fn.Name() == "init" {
+		for n := 2; b.idx.Symbols[id] != nil; n++ {
+			id = fmt.Sprintf("%s#%d", base, n)
+		}
+	}
+	b.symbolIDs[fn] = id
+	return id
 }
 
 func isHookName(name string, inTest bool) bool {
@@ -213,8 +261,9 @@ func (b *builder) indexFields(p *packages.Package, pi *PkgInfo, tn *types.TypeNa
 			continue
 		}
 		pos := p.Fset.Position(field.Pos())
-		if _, owned := b.fieldVarOwner[field]; !owned {
-			b.fieldVarOwner[field] = typeID
+		origin := field.Origin()
+		if _, owned := b.fieldVarOwner[origin]; !owned {
+			b.fieldVarOwner[origin] = typeID
 		}
 		b.addSymbol(&Symbol{
 			ID:         typeID + "." + field.Name(),

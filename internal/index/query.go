@@ -229,11 +229,7 @@ func (idx *Index) SingleSymbol(query string) (*Symbol, error) {
 	}
 	switch len(matches) {
 	case 0:
-		suggestions := make([]string, 0, 5)
-		for _, sym := range idx.Resolve(query, "", 5) {
-			suggestions = append(suggestions, displaySymbolID(sym))
-		}
-		return nil, &SymbolNotFoundError{Query: query, Suggestions: suggestions}
+		return nil, &SymbolNotFoundError{Query: query, Suggestions: idx.nearestSymbols(query, 5)}
 	case 1:
 		return matches[0], nil
 	default:
@@ -243,6 +239,116 @@ func (idx *Index) SingleSymbol(query string) (*Symbol, error) {
 		}
 		return nil, &AmbiguousSymbolError{Query: query, IDs: ids}
 	}
+}
+
+// nearestSymbols ranks indexed symbols by edit distance to their name, leaf,
+// package-relative shorthand, and full ID. It replaces the previous Resolve
+// fallback, which repeated the same zero-result query.
+func (idx *Index) nearestSymbols(query string, limit int) []string {
+	if limit <= 0 {
+		limit = 5
+	}
+	q := normalizeSuggestionQuery(query)
+	if q == "" {
+		return nil
+	}
+	type candidate struct {
+		sym   *Symbol
+		score int
+	}
+	candidates := make([]candidate, 0, len(idx.Symbols))
+	for _, sym := range idx.Symbols {
+		candidates = append(candidates, candidate{sym: sym, score: symbolEditDistance(q, sym)})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score < candidates[j].score
+		}
+		xi, xj := len(idx.XRefs[candidates[i].sym.ID]), len(idx.XRefs[candidates[j].sym.ID])
+		if xi != xj {
+			return xi > xj
+		}
+		return candidates[i].sym.ID < candidates[j].sym.ID
+	})
+	seen := map[string]bool{}
+	out := make([]string, 0, limit)
+	for _, item := range candidates {
+		id := displaySymbolID(item.sym)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeSuggestionQuery(query string) string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	q = strings.TrimPrefix(q, "sym:")
+	return q
+}
+
+func symbolEditDistance(query string, sym *Symbol) int {
+	if sym == nil {
+		return len(query)
+	}
+	leaf := strings.ToLower(symbolLeaf(sym))
+	candidates := []string{
+		strings.ToLower(sym.Name),
+		leaf,
+		strings.ToLower(sym.PkgRel + "." + symbolLeaf(sym)),
+		strings.ToLower(sym.ID),
+	}
+	best := levenshtein(query, candidates[0])
+	for _, candidate := range candidates[1:] {
+		if distance := levenshtein(query, candidate); distance < best {
+			best = distance
+		}
+	}
+	return best
+}
+
+func levenshtein(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := 0; j <= len(b); j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = minInt(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
+}
+
+func minInt(values ...int) int {
+	best := values[0]
+	for _, value := range values[1:] {
+		if value < best {
+			best = value
+		}
+	}
+	return best
 }
 
 func displaySymbolID(sym *Symbol) string {

@@ -151,6 +151,17 @@ func (b *builder) collectProductionFileMetrics(path string, pi *PkgInfo, mod *Mo
 }
 
 func (b *builder) collectTestFileMetrics(pi *PkgInfo) {
+	if b.testFilesLoaded {
+		for _, path := range sortedKeys(b.testFiles[pi.PkgPath]) {
+			pi.TestFiles++
+			if facts, err := b.factsFor(path); err == nil {
+				pi.TestLOC += facts.loc
+			}
+		}
+		return
+	}
+	// Isolated builder tests exercise file metrics without a loaded test
+	// package set. Real builds always take the build-tag-aware path above.
 	if pi.Dir == "" {
 		return
 	}
@@ -165,6 +176,38 @@ func (b *builder) collectTestFileMetrics(pi *PkgInfo) {
 		pi.TestFiles++
 		if facts, err := b.factsFor(filepath.Join(pi.Dir, entry.Name())); err == nil {
 			pi.TestLOC += facts.loc
+		}
+	}
+}
+
+// registerTestPackages records the test files that the Go toolchain actually
+// selected. Reading the directory would count files excluded by build tags and
+// falsely classify packages as TestOnly.
+func (b *builder) registerTestPackages(pkgs []*packages.Package) {
+	b.testFiles = map[string]map[string]struct{}{}
+	b.testFilesLoaded = true
+	for _, p := range pkgs {
+		if p == nil || p.Fset == nil {
+			continue
+		}
+		owners := []string{p.ForTest, p.PkgPath, strings.TrimSuffix(p.PkgPath, "_test")}
+		for _, file := range p.Syntax {
+			if file == nil {
+				continue
+			}
+			path := p.Fset.Position(file.Pos()).Filename
+			if !strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			for _, owner := range owners {
+				if owner == "" {
+					continue
+				}
+				if b.testFiles[owner] == nil {
+					b.testFiles[owner] = map[string]struct{}{}
+				}
+				b.testFiles[owner][path] = struct{}{}
+			}
 		}
 	}
 }
