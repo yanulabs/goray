@@ -18,16 +18,17 @@ type fakeIndexer struct{}
 
 func (fakeIndexer) Wait(context.Context) (*index.Index, error) { return nil, errors.New("not ready") }
 func (fakeIndexer) Status() index.Status                       { return index.Status{RootDir: "."} }
+func (fakeIndexer) Diagnostics() []index.Diagnostic            { return nil }
 func (fakeIndexer) Root() string                               { return "." }
 func (fakeIndexer) RebuildContext(context.Context) error       { return nil }
 
 func TestRegistry(t *testing.T) {
 	list := New(fakeIndexer{}, render.NewRegistry(), nil)
-	if len(list) != 23 {
-		t.Fatalf("tools = %d, want 23", len(list))
+	if len(list) != 25 {
+		t.Fatalf("tools = %d, want 25", len(list))
 	}
 
-	// 19 of the 23 registered tools are strictly read-only queries.
+	// 21 of the 25 registered tools are strictly read-only queries.
 	// upsert_summaries, run_tests, run_lint, and reindex mutate state or
 	// execute local commands; reindex writes derived cache state.
 	readOnly := map[string]bool{
@@ -39,6 +40,7 @@ func TestRegistry(t *testing.T) {
 		"find_implementations": true, "get_impact_analysis": true, "get_dead_code": true,
 		"get_hotspots": true, "get_function_body": true, "list_stale_summaries": true,
 		"get_summary_context": true, "get_summary_coverage": true,
+		"get_diagnostics": true, "get_architecture_diff": true,
 	}
 	exec := map[string]bool{"run_tests": true, "run_lint": true}
 

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yanulabs/goray/internal/diff"
 )
 
 func gitRun(t *testing.T, dir string, args ...string) string {
@@ -145,7 +147,7 @@ func TestDiffJSONAndGates(t *testing.T) {
 	if err := runDiff([]string{"HEAD", root, "--format", "json"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runDiff: %v\nstderr=%s", err, stderr.String())
 	}
-	var report diffReport
+	var report diff.Report
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout.String())
 	}

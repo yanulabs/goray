@@ -17,7 +17,8 @@ func (batchIndexer) Wait(context.Context) (*index.Index, error) { return &index.
 func (batchIndexer) Status() index.Status {
 	return index.Status{IndexState: index.StateReady}
 }
-func (batchIndexer) Root() string { return "." }
+func (batchIndexer) Diagnostics() []index.Diagnostic { return nil }
+func (batchIndexer) Root() string                    { return "." }
 func (batchIndexer) RebuildContext(context.Context) error {
 	return nil
 }

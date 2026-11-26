@@ -165,36 +165,49 @@ func workspaceModules(root string) ([]string, error) {
 	return dirs, nil
 }
 
-// LoadError reports package parse/type errors that must not replace a healthy snapshot.
+// LoadError reports package parse/type errors that must not replace a healthy
+// snapshot. Errors keeps the historical flat string form used by project_info;
+// Diagnostics carries the same failures in structured form for get_diagnostics.
 type LoadError struct {
-	Errors []string
+	Errors      []string
+	Diagnostics []Diagnostic
 }
 
 func (e *LoadError) Error() string {
 	return "package load errors:\n" + strings.Join(e.Errors, "\n")
 }
 
-func packageLoadErrors(pkgs []*packages.Package) error {
+func packageLoadErrors(root string, pkgs []*packages.Package) error {
 	var messages []string
+	var diagnostics []Diagnostic
 	for _, p := range pkgs {
 		for _, loadErr := range p.Errors {
 			messages = append(messages, p.PkgPath+": "+loadErr.Error())
+			diagnostics = append(diagnostics, newDiagnostic(root, p.PkgPath, false, loadErr))
 		}
 		if len(p.GoFiles) == 0 {
 			continue
 		}
 		if p.Types == nil || p.TypesInfo == nil || p.Fset == nil || len(p.Syntax) == 0 {
-			messages = append(messages, p.PkgPath+": incomplete syntax or type information")
+			message := "incomplete syntax or type information"
+			messages = append(messages, p.PkgPath+": "+message)
+			diagnostics = append(diagnostics, Diagnostic{
+				Package: p.PkgPath, Kind: DiagnosticKindType, Message: message,
+			})
 			continue
 		}
 		if p.IllTyped || !p.Types.Complete() {
-			messages = append(messages, p.PkgPath+": type checking incomplete")
+			message := "type checking incomplete"
+			messages = append(messages, p.PkgPath+": "+message)
+			diagnostics = append(diagnostics, Diagnostic{
+				Package: p.PkgPath, Kind: DiagnosticKindType, Message: message,
+			})
 		}
 	}
 	if len(messages) == 0 {
 		return nil
 	}
-	return &LoadError{Errors: messages}
+	return &LoadError{Errors: messages, Diagnostics: uniqueDiagnostics(diagnostics)}
 }
 
 func hasTestFiles(packagesByPath map[string]*PkgInfo) bool {
@@ -221,6 +234,29 @@ func collectTestLoadErrors(pkgs []*packages.Package) []string {
 		out = append(out, message)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// collectTestDiagnostics mirrors collectTestLoadErrors for the structured tool
+// payload. Test variants may include production files, so only packages that
+// actually belong to a test variant contribute entries.
+func collectTestDiagnostics(root string, pkgs []*packages.Package) []Diagnostic {
+	var out []Diagnostic
+	seen := map[Diagnostic]struct{}{}
+	for _, p := range pkgs {
+		if p.ForTest == "" {
+			continue
+		}
+		for _, loadErr := range p.Errors {
+			diagnostic := newDiagnostic(root, p.PkgPath, true, loadErr)
+			if _, ok := seen[diagnostic]; ok {
+				continue
+			}
+			seen[diagnostic] = struct{}{}
+			out = append(out, diagnostic)
+		}
+	}
+	sortDiagnostics(out)
 	return out
 }
 

@@ -16,6 +16,7 @@ import (
 type Indexer interface {
 	Wait(context.Context) (*index.Index, error)
 	Status() index.Status
+	Diagnostics() []index.Diagnostic
 	Root() string
 	RebuildContext(context.Context) error
 }
@@ -65,6 +66,8 @@ func New(src Indexer, formats *render.Registry, summaries Summaries) []mcp.Tool 
 		t.getSummaryContext(),
 		t.upsertSummaries(),
 		t.getSummaryCoverage(),
+		t.diagnostics(),
+		t.architectureDiff(),
 		t.runTests(),
 		t.runLint(),
 		t.reindex(),

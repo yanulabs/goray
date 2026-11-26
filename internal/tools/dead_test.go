@@ -13,8 +13,9 @@ import (
 )
 
 type staticIndexer struct {
-	idx    *index.Index
-	status index.Status
+	idx         *index.Index
+	status      index.Status
+	diagnostics []index.Diagnostic
 }
 
 func (s staticIndexer) Wait(context.Context) (*index.Index, error) { return s.idx, nil }
@@ -23,6 +24,15 @@ func (s staticIndexer) Status() index.Status {
 		s.status.IndexState = index.StateReady
 	}
 	return s.status
+}
+func (s staticIndexer) Diagnostics() []index.Diagnostic {
+	if s.diagnostics != nil {
+		return s.diagnostics
+	}
+	if s.idx != nil {
+		return s.idx.Diagnostics
+	}
+	return nil
 }
 func (s staticIndexer) Root() string { return s.idx.RootDir }
 func (s staticIndexer) RebuildContext(context.Context) error {

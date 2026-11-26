@@ -379,10 +379,12 @@ Every tool advertises MCP `annotations`: read-only queries set `readOnlyHint: tr
 | Tool | Purpose |
 | --- | --- |
 | `project_info` | Index state, module path, working and summary DB paths, symbol counts, load errors |
+| `get_diagnostics` | Structured `package`/`file`/`line`/`col`/`kind`/`message` compile diagnostics with `include_tests` and `package` filters; production errors keep the last healthy snapshot |
 | `get_codebase_map` | Compact module scorecard with generated and untracked rollups, cached module summaries, cross-module edge counts, cycles, large files, top hotspots, pagination metadata; `detail`, `summary_only`, `top_modules`, `sort_by`, `tracked_only` (`md`/`json`/`dot`/`mermaid`) |
 | `get_module_overview` | Compact package rollups, dependency edges, large files, top hotspots, and the cached module summary with `include_generated`; `detail=full` for the legacy projection (`md`/`json`) |
 | `get_dependency_graph` | Package BFS dependency graph and fan-in/fan-out ranking (`json`/`mermaid`/`dot`) |
 | `explain_dependency` | Exact imports, `file:line` symbol usages, blank/dot imports, enclosing callers, and counters behind a module/package edge |
+| `get_architecture_diff` | Deterministic architecture diff against `base_ref` (default `HEAD`) with optional `fail_on` gates; reuses the live working-tree snapshot and returns CLI-identical JSON |
 
 ### Symbols, calls, and impact
 
@@ -421,6 +423,7 @@ Every tool advertises MCP `annotations`: read-only queries set `readOnlyHint: tr
 ```text
 cmd/goray                CLI entrypoint, subcommand routing, versioning
 internal/index           go/packages + go/types indexer, hashing, eligibility
+internal/diff            architecture diff comparison and git worktree loading
 internal/cache           SQLite schema, working state, summary store, GC
 internal/watch           fsnotify watcher with debounced rebuilds
 internal/mcp             JSON-RPC 2.0 stdio transport

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,7 +66,25 @@ func Use() int { return alpha.Normal() }
 	if err != nil {
 		t.Fatal(err)
 	}
+	initGitRepo(t, root)
 	return idx
+}
+
+// initGitRepo makes the projection fixture usable by tools that resolve git
+// revisions (get_architecture_diff) without changing its tracked file metrics.
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	commands := [][]string{
+		{"init", "-q"},
+		{"add", "."},
+		{"-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "base"},
+	}
+	for _, args := range commands {
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
 }
 
 func projectionTool(t *testing.T, idx *index.Index, name string, summaries Summaries) mcp.Tool {

@@ -36,7 +36,7 @@ func TestPackageSetDeduplicatesAndSortsVariants(t *testing.T) {
 }
 
 func TestPackageLoadErrorsReportsIncompletePackages(t *testing.T) {
-	err := packageLoadErrors([]*packages.Package{
+	err := packageLoadErrors("", []*packages.Package{
 		{PkgPath: "example.com/m/broken", GoFiles: []string{"broken.go"}, Errors: []packages.Error{{Msg: "syntax error"}}},
 		{PkgPath: "example.com/m/testonly"},
 	})
@@ -53,6 +53,15 @@ func TestPackageLoadErrorsReportsIncompletePackages(t *testing.T) {
 	}
 	if !strings.Contains(loadErr.Error(), strings.Join(want, "\n")) {
 		t.Fatalf("formatted error = %q", loadErr.Error())
+	}
+	if len(loadErr.Diagnostics) != 2 {
+		t.Fatalf("diagnostics = %+v", loadErr.Diagnostics)
+	}
+	if loadErr.Diagnostics[0].Package != "example.com/m/broken" || loadErr.Diagnostics[0].Kind != DiagnosticKindList || loadErr.Diagnostics[0].Message != "syntax error" || loadErr.Diagnostics[0].IsTest {
+		t.Fatalf("first diagnostic = %+v", loadErr.Diagnostics[0])
+	}
+	if loadErr.Diagnostics[1].Kind != DiagnosticKindType || loadErr.Diagnostics[1].Message != "incomplete syntax or type information" {
+		t.Fatalf("second diagnostic = %+v", loadErr.Diagnostics[1])
 	}
 }
 

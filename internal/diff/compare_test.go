@@ -1,8 +1,7 @@
-package main
+package diff
 
 import (
-	"bytes"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -33,10 +32,10 @@ func TestCompareAPIUsesCanonicalIDsAndStableOrdering(t *testing.T) {
 		"example.com/m.TestOnly": {ID: "example.com/m.TestOnly", Name: "TestOnly", Kind: "func", PkgPath: "example.com/m", Exported: true, IsTest: true},
 	}}
 
-	want := diffAPI{
-		Removed:  []diffAPIChange{{ID: "sym:example.com/m.Removed", Name: "Removed", Kind: "func", File: "api.go", Line: 1, Before: "func Removed()"}},
-		Modified: []diffAPIChange{{ID: "sym:example.com/m.Changed", Name: "Changed", Kind: "func", File: "api.go", Line: 1, Before: "func Changed(int)", After: "func Changed(string)"}},
-		Added:    []diffAPIChange{{ID: "sym:example.com/m.Added", Name: "Added", Kind: "func", File: "api.go", Line: 1, Before: "func Added()"}},
+	want := API{
+		Removed:  []APIChange{{ID: "sym:example.com/m.Removed", Name: "Removed", Kind: "func", File: "api.go", Line: 1, Before: "func Removed()"}},
+		Modified: []APIChange{{ID: "sym:example.com/m.Changed", Name: "Changed", Kind: "func", File: "api.go", Line: 1, Before: "func Changed(int)", After: "func Changed(string)"}},
+		Added:    []APIChange{{ID: "sym:example.com/m.Added", Name: "Added", Kind: "func", File: "api.go", Line: 1, Before: "func Added()"}},
 	}
 	for range 20 {
 		if got := compareAPI(base, head); !reflect.DeepEqual(got, want) {
@@ -70,7 +69,7 @@ func TestCompareHotspotsFiltersCoverageAndComputesDeltas(t *testing.T) {
 	if len(got.New) != 2 || got.New[0].ID != "new-high" || got.New[1].ID != "new-low" {
 		t.Fatalf("new hotspots = %+v", got.New)
 	}
-	wantDelta := []diffHotspot{{
+	wantDelta := []Hotspot{{
 		ID: "changed", Name: "changed", AfterCC: 12, AfterLOC: 15,
 		BeforeCC: 10, BeforeLOC: 10, DeltaCC: 2, DeltaLOC: 5,
 	}}
@@ -110,7 +109,7 @@ func TestCompareCyclesReportsNewAndResolved(t *testing.T) {
 		"c": {Name: "c", OutModules: map[string][]string{"d": nil}},
 		"d": {Name: "d", OutModules: map[string][]string{"c": nil}},
 	}}
-	want := diffCycles{New: []string{"c -> d -> c"}, Resolved: []string{"a -> b -> a"}}
+	want := Cycles{New: []string{"c -> d -> c"}, Resolved: []string{"a -> b -> a"}}
 	if got := compareCycles(base, head); !reflect.DeepEqual(got, want) {
 		t.Fatalf("compareCycles = %+v, want %+v", got, want)
 	}
@@ -119,55 +118,98 @@ func TestCompareCyclesReportsNewAndResolved(t *testing.T) {
 func TestGateTriggered(t *testing.T) {
 	cases := []struct {
 		name   string
-		report diffReport
+		report Report
 		gate   string
 		want   bool
 	}{
-		{name: "new cycle", gate: "cycles", report: diffReport{Cycles: diffCycles{New: []string{"a -> a"}}}, want: true},
-		{name: "resolved cycle", gate: "cycles", report: diffReport{Cycles: diffCycles{Resolved: []string{"a -> a"}}}},
-		{name: "new dead code", gate: "dead_code", report: diffReport{Dead: diffDeadCode{New: []diffDeadItem{{ID: "dead"}}}}, want: true},
-		{name: "removed API", gate: "breaking_api", report: diffReport{API: diffAPI{Removed: []diffAPIChange{{ID: "old"}}}}, want: true},
-		{name: "modified API", gate: "breaking_api", report: diffReport{API: diffAPI{Modified: []diffAPIChange{{ID: "changed"}}}}, want: true},
-		{name: "added API", gate: "breaking_api", report: diffReport{API: diffAPI{Added: []diffAPIChange{{ID: "new"}}}}},
-		{name: "hotspot delta", gate: "untested_hotspots", report: diffReport{Hotspots: diffHotspots{TopDelta: []diffHotspot{{ID: "changed"}}}}, want: true},
+		{name: "new cycle", gate: GateCycles, report: Report{Cycles: Cycles{New: []string{"a -> a"}}}, want: true},
+		{name: "resolved cycle", gate: GateCycles, report: Report{Cycles: Cycles{Resolved: []string{"a -> a"}}}},
+		{name: "new dead code", gate: GateDeadCode, report: Report{Dead: DeadCode{New: []DeadItem{{ID: "dead"}}}}, want: true},
+		{name: "removed API", gate: GateBreakingAPI, report: Report{API: API{Removed: []APIChange{{ID: "old"}}}}, want: true},
+		{name: "modified API", gate: GateBreakingAPI, report: Report{API: API{Modified: []APIChange{{ID: "changed"}}}}, want: true},
+		{name: "added API", gate: GateBreakingAPI, report: Report{API: API{Added: []APIChange{{ID: "new"}}}}},
+		{name: "hotspot delta", gate: GateUntestedHotspots, report: Report{Hotspots: Hotspots{TopDelta: []Hotspot{{ID: "changed"}}}}, want: true},
 		{name: "unknown gate", gate: "unknown"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			if got := gateTriggered(test.report, test.gate); got != test.want {
-				t.Fatalf("gateTriggered(%q) = %v, want %v", test.gate, got, test.want)
+			if got := GateTriggered(test.report, test.gate); got != test.want {
+				t.Fatalf("GateTriggered(%q) = %v, want %v", test.gate, got, test.want)
 			}
 		})
 	}
 }
 
-type failingDiffWriter struct{}
-
-func (failingDiffWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
-
-func TestPrintDiffMarkdownSectionsAndWriteErrors(t *testing.T) {
-	report := diffReport{
-		BaseRef: "main",
-		Summary: diffCounters{PackagesBase: 1, Packages: 2},
-		Cycles:  diffCycles{New: []string{"a -> b -> a"}},
-		API:     diffAPI{Modified: []diffAPIChange{{Name: "Changed", File: "api.go", Line: 3, Before: "int", After: "string"}}},
-		Hotspots: diffHotspots{
-			New:      []diffHotspot{{Name: "Complex", AfterCC: 12, AfterLOC: 20, File: "complex.go", Line: 4}},
-			TopDelta: []diffHotspot{{Name: "Changed", BeforeCC: 10, AfterCC: 11, BeforeLOC: 10, AfterLOC: 12, DeltaCC: 1, DeltaLOC: 2}},
-		},
-		Dead:   diffDeadCode{Removed: []diffDeadItem{{Name: "Gone", File: "dead.go", Line: 5}}},
-		Failed: []string{"cycles"},
+func TestFailedGatesPreservesOrder(t *testing.T) {
+	report := Report{
+		Cycles: Cycles{New: []string{"a -> a"}},
+		API:    API{Removed: []APIChange{{ID: "old"}}},
 	}
-	var out bytes.Buffer
-	if err := printDiffMarkdown(&out, report); err != nil {
+	got := FailedGates(report, []string{GateBreakingAPI, GateDeadCode, GateCycles})
+	want := []string{GateBreakingAPI, GateCycles}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FailedGates = %v, want %v", got, want)
+	}
+	if got := FailedGates(report, nil); got != nil {
+		t.Fatalf("empty gates = %v", got)
+	}
+}
+
+func TestNormalizeGatesAcceptsStringsAndArrays(t *testing.T) {
+	cases := []struct {
+		name    string
+		values  []string
+		want    []string
+		wantErr string
+	}{
+		{name: "comma string", values: []string{"cycles, breaking_api"}, want: []string{GateCycles, GateBreakingAPI}},
+		{name: "space string", values: []string{"dead_code untested_hotspots"}, want: []string{GateDeadCode, GateUntestedHotspots}},
+		{name: "array with duplicates", values: []string{"cycles", "cycles", "dead_code"}, want: []string{GateCycles, GateDeadCode}},
+		{name: "empty", values: nil},
+		{name: "unknown", values: []string{"cycles,nope"}, wantErr: "unknown fail_on gate"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := NormalizeGates(test.values)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("gates = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestReportJSONFieldNamesStayStable(t *testing.T) {
+	data, err := json.Marshal(Report{
+		BaseRef: "HEAD",
+		Summary: Counters{Packages: 2},
+		Cycles:  Cycles{New: []string{"a -> b -> a"}},
+		API:     API{Modified: []APIChange{{ID: "sym:x", Name: "X"}}},
+		Hotspots: Hotspots{
+			TopDelta: []Hotspot{{ID: "sym:y", DeltaCC: 1}},
+		},
+		Dead:   DeadCode{New: []DeadItem{{ID: "sym:z"}}},
+		Failed: []string{GateCycles},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"# goray diff: `main`", "## Cycles", "## Breaking API", "## Hotspots", "## Dead Code", "**Failed gates:** cycles", "ΔCC"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("markdown missing %q:\n%s", want, out.String())
+	text := string(data)
+	for _, want := range []string{
+		`"base_ref"`, `"base_commit"`, `"head_ref"`, `"head"`, `"summary"`,
+		`"breaking_api"`, `"hotspots"`, `"top_delta"`, `"after_complexity"`,
+		`"dead_code"`, `"failed_gates"`, `"packages_base"`, `"untested_hotspots"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("report JSON missing %s: %s", want, text)
 		}
-	}
-	if err := printDiffMarkdown(failingDiffWriter{}, report); err == nil || !strings.Contains(err.Error(), "write failed") {
-		t.Fatalf("write error = %v", err)
 	}
 }
