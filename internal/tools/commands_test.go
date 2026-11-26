@@ -74,4 +74,57 @@ func TestRunCommandTruncatesValidUTF8(t *testing.T) {
 	if !utf8.ValidString(text) {
 		t.Fatal("truncated output is not valid UTF-8")
 	}
+	if len(text) > maxCommandOutput+64 {
+		t.Fatalf("retained output = %d bytes, want at most %d plus marker", len(text), maxCommandOutput)
+	}
+}
+
+func TestBoundedOutput(t *testing.T) {
+	marker := "\n... [output truncated at 64 KiB]"
+	cases := []struct {
+		name   string
+		limit  int
+		writes [][]byte
+		want   string
+	}{
+		{name: "below limit", limit: 8, writes: [][]byte{[]byte("hello")}, want: "hello"},
+		{name: "exactly limit", limit: 4, writes: [][]byte{[]byte("éé")}, want: "éé"},
+		{name: "split rune", limit: 3, writes: [][]byte{{'a', 'b', 0xC3, 0xA9, 'c'}}, want: "ab" + marker},
+		{name: "across writes", limit: 8, writes: [][]byte{[]byte("12é"), []byte("34é"), []byte("x")}, want: "12é34é" + marker},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := &boundedOutput{limit: tc.limit}
+			for _, write := range tc.writes {
+				n, err := out.Write(write)
+				if err != nil || n != len(write) {
+					t.Fatalf("Write = %d, %v", n, err)
+				}
+			}
+			got := string(out.Bytes())
+			if got != tc.want {
+				t.Fatalf("output = %q, want %q", got, tc.want)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("output is not valid UTF-8: %q", got)
+			}
+		})
+	}
+}
+
+func TestBoundedOutputDiscardsLargeWrites(t *testing.T) {
+	out := &boundedOutput{limit: maxCommandOutput}
+	chunk := []byte(strings.Repeat("é", 32*1024))
+	for i := 0; i < 64; i++ {
+		if n, err := out.Write(chunk); err != nil || n != len(chunk) {
+			t.Fatalf("Write = %d, %v", n, err)
+		}
+	}
+	got := out.Bytes()
+	if !utf8.Valid(got) {
+		t.Fatal("bounded output is not valid UTF-8")
+	}
+	if len(got) > maxCommandOutput+len("\n... [output truncated at 64 KiB]") {
+		t.Fatalf("retained %d bytes for a %d-byte limit", len(got), maxCommandOutput)
+	}
 }
