@@ -72,6 +72,7 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	idx.Workspace = opts.Workspace
 
 	b := newBuilder(idx, absRoot)
+	b.registerTestPackages(testPkgs)
 	b.indexPackages(pkgs)
 	b.indexTestDefinitions(testPkgs)
 	b.indexReferences(pkgs, false)

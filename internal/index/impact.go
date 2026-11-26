@@ -189,13 +189,18 @@ func (idx *Index) collectCompositeImpact(sym *Symbol, acc *impactAccumulator) (l
 	return literals, unkeyed
 }
 
-func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, depth int, acc *impactAccumulator) {
+func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, rootDepth, depth int, acc *impactAccumulator) {
 	seen := map[string]int{sym.ID: 0}
-	queue := append([]string{sym.ID}, roots...)
+	queue := []string{sym.ID}
 	for _, root := range roots {
-		if _, ok := seen[root]; !ok {
-			seen[root] = 0
+		if root == "" {
+			continue
 		}
+		if d, ok := seen[root]; ok && d <= rootDepth {
+			continue
+		}
+		seen[root] = rootDepth
+		queue = append(queue, root)
 	}
 	for len(queue) > 0 {
 		cur := queue[0]
@@ -214,6 +219,12 @@ func (idx *Index) walkImpactCallers(sym *Symbol, roots []string, depth int, acc 
 	}
 }
 
+// isCallableTarget reports whether the target itself participates in the call
+// graph. Non-function targets first reach the functions that reference them.
+func isCallableTarget(sym *Symbol) bool {
+	return sym.Kind == "func" || sym.Kind == "method" || sym.Kind == "interface"
+}
+
 // ImpactBySymbol follows references and transitive callers, expanding
 // interface implementations, struct composite literals, fields, and vars.
 func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
@@ -227,16 +238,24 @@ func (idx *Index) ImpactBySymbol(sym *Symbol, depth int) Impact {
 		idx.collectTypeTargetRefs(sym, acc)
 	}
 
+	literals, unkeyed := idx.collectCompositeImpact(sym, acc)
+
 	var implementations, mocks []ImpactSymbol
 	roots := []string{sym.ID}
+	rootDepth := 0
 	if sym.Kind == "interface" {
 		var interfaceRoots []string
 		implementations, mocks, interfaceRoots = idx.collectInterfaceImpact(sym, acc)
 		roots = append(roots, interfaceRoots...)
+	} else if !isCallableTarget(sym) {
+		// Structs, types, fields, vars, and consts have no call-graph entry of
+		// their own. Seed the functions that directly reference them at depth 1
+		// so their transitive callers are still discovered.
+		roots = sortedKeys(acc.callers)
+		rootDepth = 1
 	}
 
-	literals, unkeyed := idx.collectCompositeImpact(sym, acc)
-	idx.walkImpactCallers(sym, roots, depth, acc)
+	idx.walkImpactCallers(sym, roots, rootDepth, depth, acc)
 
 	result := idx.impact(acc.pkgs, acc.files, acc.mods, acc.callers)
 	result.DirectReferences = dedupeRefs(acc.direct)

@@ -29,6 +29,8 @@ type builder struct {
 	fieldVarOwner   map[*types.Var]string
 	pendingDispatch []dispatchCall
 	facts           map[string]fileFacts
+	testFiles       map[string]map[string]struct{}
+	testFilesLoaded bool
 }
 
 func newBuilder(idx *Index, absRoot string) *builder {
