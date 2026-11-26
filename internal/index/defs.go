@@ -60,7 +60,7 @@ func (b *builder) indexDefinitions(p *packages.Package, pi *PkgInfo, testOnly bo
 				for _, spec := range d.Specs {
 					switch s := spec.(type) {
 					case *ast.TypeSpec:
-						b.indexType(p, pi, s, meta)
+						b.indexType(p, pi, d, s, meta)
 					case *ast.ValueSpec:
 						b.indexValues(p, pi, s, meta)
 					}
@@ -191,7 +191,7 @@ func isHookName(name string, inTest bool) bool {
 	return false
 }
 
-func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec, meta fileMeta) {
+func (b *builder) indexType(p *packages.Package, pi *PkgInfo, gen *ast.GenDecl, spec *ast.TypeSpec, meta fileMeta) {
 	tn, ok := p.TypesInfo.Defs[spec.Name].(*types.TypeName)
 	if !ok || tn.Pkg() == nil {
 		return
@@ -230,6 +230,7 @@ func (b *builder) indexType(p *packages.Package, pi *PkgInfo, spec *ast.TypeSpec
 		sym.Methods = iface.NumMethods()
 	}
 	b.addSymbol(sym, pi)
+	b.addTypeDetail(p, gen, spec, tn, sym)
 
 	if structType, ok := tn.Type().Underlying().(*types.Struct); ok {
 		// A type alias shares the original type's *types.Var field objects.

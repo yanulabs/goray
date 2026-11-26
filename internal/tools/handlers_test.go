@@ -95,6 +95,7 @@ func TestEveryRegisteredToolRuns(t *testing.T) {
 		{"get_dependency_graph", map[string]any{"package": alphaPkg, "direction": "both", "format": "json"}},
 		{"explain_dependency", map[string]any{"from": betaPkg, "to": alphaPkg}},
 		{"lookup_symbol", map[string]any{"symbol": "Normal"}},
+		{"inspect_type", map[string]any{"symbol_id": api}},
 		{"get_api_surface", map[string]any{"package": alphaPkg, "format": "json"}},
 		{"get_references", map[string]any{"symbol_id": normal}},
 		{"get_call_graph", map[string]any{"symbol_id": normal, "direction": "both"}},

@@ -82,6 +82,8 @@ func buildFromPackages(ctx context.Context, absRoot string, opts BuildOptions, p
 	b.collectImportedInterfaces(pkgs)
 	b.matchInterfaces()
 	b.applyDispatchEdges()
+	b.collectConstructors(pkgs)
+	b.enrichTypeDetailXRefs()
 	b.finish()
 	b.computeTestCoverage()
 	b.buildSummary(pkgs, testPkgs)
@@ -120,6 +122,7 @@ func newIndex(absRoot, modPath string, modulePaths []string, untracked map[strin
 		TypeImpls:         map[string][]ImplMatch{},
 		IfaceMethods:      map[string]bool{},
 		Modules:           map[string]*ModSummary{},
+		TypeDetails:       map[string]TypeDetail{},
 		TestCovered:       map[string]bool{},
 		UntrackedFiles:    untracked,
 	}

@@ -23,17 +23,17 @@ func (fakeIndexer) RebuildContext(context.Context) error       { return nil }
 
 func TestRegistry(t *testing.T) {
 	list := New(fakeIndexer{}, render.NewRegistry(), nil)
-	if len(list) != 21 {
-		t.Fatalf("tools = %d, want 21", len(list))
+	if len(list) != 22 {
+		t.Fatalf("tools = %d, want 22", len(list))
 	}
 
-	// 17 of the 21 registered tools are strictly read-only queries. reindex,
+	// 18 of the 22 registered tools are strictly read-only queries. reindex,
 	// upsert_summaries, run_tests, and run_lint mutate state or execute local
-	// commands. The issue prose says 18 read-only; the registry's actual split
-	// is 17/4 because reindex writes derived cache state.
+	// commands, including reindex because it writes derived cache state.
 	readOnly := map[string]bool{
 		"project_info": true, "get_codebase_map": true, "get_module_overview": true,
 		"get_dependency_graph": true, "explain_dependency": true, "lookup_symbol": true,
+		"inspect_type":    true,
 		"get_api_surface": true, "get_references": true, "get_call_graph": true,
 		"find_implementations": true, "get_impact_analysis": true, "get_dead_code": true,
 		"get_hotspots": true, "get_function_body": true, "list_stale_summaries": true,

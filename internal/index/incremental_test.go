@@ -93,6 +93,9 @@ func assertSnapshotsEqual(t *testing.T, want, got *Index) {
 	if !reflect.DeepEqual(want.IfaceImpls, got.IfaceImpls) || !reflect.DeepEqual(want.TypeImpls, got.TypeImpls) {
 		t.Fatalf("implementation matrix differs")
 	}
+	if !reflect.DeepEqual(want.TypeDetails, got.TypeDetails) {
+		t.Fatalf("type metadata differs")
+	}
 	if !reflect.DeepEqual(want.CompositeLiterals, got.CompositeLiterals) {
 		t.Fatalf("composite literals differ")
 	}
